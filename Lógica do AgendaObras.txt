@@ -1,0 +1,52 @@
+Lógica das reiterações: Ao final do prazo mínimo, disparar um e-mail. Cada tarefa tem apenas três reiterações, sendo a terceira a última e crítica. Cada reiteração deverá ser alertada (disparo de e-mail) a cada dois dias. Ao final da terceira reiteração, o e-mail deve enviar um alerta crítico. Caso a tarefa não seja concluída ao final da ultima reiteração, ela deverá ser tratada como "Atrasada" e o disparo de e-mails críticos deve ser diário até a conclusão da tarefa.
+As tarefas sem reiteração terão prazo fixo. Essas tarefas deverão ser tratadas como críticas no último dia de prazo, com o disparo de e-mail crítico. Caso a tarefa não seja concluída, ela deverá ser tratada como "Atrasada" e o disparo de e-mails críticos deve ser diário até a conclusão da tarefa.
+
+Campos para preenchimento:
+- CONTRATO (IC)
+- PREFIXO - AGÊNCIA
+- SERVIÇO -> Caixa de texto
+- INÍCIO DA OBRA
+- VALOR DO PARCEIRO
+- VALOR %
+- TOTAL DA OBRA
+- MÊS DE EXECUÇÃO
+- INÍCIO
+- DATA DE ASSINATURA DO CONTRATO (aparecer como blocked. só unblock quando finalizar a tarefa "CONTRATO ASSINADO")
+- DATA DA AIO (aparecer como blocked. só unblock quando finalizar a tarefa "SOLICITAR A DATA DA AIO")
+- DATA DE CONCLUSÃO
+- ANO
+
+
+
+Checklist e seus prazos
+- RETORNO PROJETO E ORÇAMENTO -> Prazo: 2 DIAS; 3 reiterações a cada 2 dias, sendo a ultima reiteração a crítica.
+- ANÁLISE -> Prazo: 3 DIAS, contados após a finalização da tarefa anterior ("RETORNO PROJETO E ORÇAMENTO"); sem reiteração - crítico no ultimo dia de prazo.
+- ANÁLISE - GESTOR -> Prazo: 5 DIAS após a finalização da tarefa anterior ("RETORNO PROJETO E ORÇAMENTO"); sem reiteração - crítico no ultimo dia de prazo.
+OBS.: As duas tarefas, Análise e Análise - Gestor, deverão ser realizadas em um prazo de 5 dias após a finalização da tarefa RETORNO PROJETO E ORÇAMENTO. Serão 3 dias para ANÁLISE, e, após isso, dois dias para ANÁLISE - GESTOR, totalizando 5 dias.
+- RETORNO DO QUESTIONAMENTO -> Prazo: 2 DIAS, contados após a finalização da tarefa anterior ("ANÁLISE - GESTOR"); 3 reiterações a cada 2 dias, sendo a ultima reiteração a crítica.
+- CONTRATO ASSINADO -> Prazo: 5 DIAS, contados após a finalização da tarefa anterior ("ANÁLISE - GESTOR"); sem reiteração - crítico no ultimo dia de prazo.
+-- DATA ASSINATURA DO CONTRATO -> Ao finalizar a tarefa "CONTRATO ASSINADO", abrir um campo de input, onde deverá ser inserida a data de assinatura
+- SOLICITAR A DATA DA AIO -> Prazo: 1 DIA, contado a partir da DATA ASSINATURA; 3 reiterações a cada 2 dias, sendo a ultima reiteração a crítica.
+-- DATA DA AIO -> Ao finalizar a tarefa "SOLICITAR A DATA DA AIO", abrir um campo de input, onde deverá ser inserida a data da AIO (vide Campos para Preenchimento)
+- CRONOGRAMA DE OBRA -> Prazo: prazo final é a data inserida no campo DATA DA AIO; sem reiteração - crítico no ultimo dia de prazo.
+- RELATÓRIO -> Prazo: 5 DIAS, contados a partir da data inserida no campo DATA DA AIO; sem reiteração - crítico no ultimo dia de prazo.
+- PEDIDO MATERIAL ABC -> Prazo: 8 DIAS, contados a partir da data inserida no campo DATA ASSINATURA DO CONTRATO; sem reiteração - crítico no ultimo dia de prazo.
+- ART -> Prazo: 5 DIAS, contados a partir da data inserida no campo DATA ASSINATURA DO CONTRATO; sem reiteração - crítico no ultimo dia de prazo.
+- SOLICITAÇÃO SEGUROS -> Prazo: 5 DIAS, contados a partir da data inserida no campo DATA ASSINATURA DO CONTRATO; sem reiteração - crítico no ultimo dia de prazo.
+- ACEITE SEGURO -> Prazo: 5 DIAS, contados a partir da data inserida no campo DATA ASSINATURA DO CONTRATO; sem reiteração - crítico no ultimo dia de prazo.
+- PAGAMENTO SEGURO -> Prazo: 5 DIAS, contados a partir da data inserida no campo DATA ASSINATURA DO CONTRATO; sem reiteração - crítico no ultimo dia de prazo.
+- ENVIO DO SEGURO + ART -> Prazo: 5 DIAS, contados a partir da data inserida no campo DATA ASSINATURA DO CONTRATO; sem reiteração - crítico no ultimo dia de prazo.
+OBS.: todo esse processo de ART, SOLICITAÇÃO SEGUROS, ACEITE DO SEGURO, PAGAMENTO DO SEGURO, ENVIO DO SEGURO + ART terão 5 dias contados a partir da data inserida no campo DATA ASSINATURA DO CONTRATO.
+- CONTRATAÇÃO DA EQUIPE -> Prazo: 15 DIAS antes da data inserida no campo INÍCIO DA OBRA; sem reiteração - crítico no ultimo dia de prazo (ou seja, na data de início da obra).
+- SOLICITAÇÃO DE ACESSO -> Prazo: 10 DIAS antes da data inserida no campo INÍCIO DA OBRA; sem reiteração - crítico no ultimo dia de prazo (ou seja, na data de início da obra).
+- MEDIÇÃO -> campo liberado após o INÍCIO DA OBRA; quando estiver nessa tarefa, enviar alerta todo dia 20  de cada mês. Enviar alerta crítico todo dia 30 de cada mês.
+
+Por fim, cada card, após o INÍCIO DA OBRA, deve ter uma CONFIRMAÇÃO DE MEDIÇÃO. Essa CONFIRMAÇÃO DE MEDIÇÃO será um alerta enviado a todo dia 10 de cada mês, sendo reiterado no dia 11, e 12, e enviado um alerta crítico no dia 13.
+
+
+
+
+
+
+
+
