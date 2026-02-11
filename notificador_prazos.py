@@ -25,9 +25,50 @@ class NotificadorPrazos:
             thread.start()
             print("🔔 Sistema de notificação de prazos iniciado!")
     
+    def verificar_agora(self, forcar: bool = False):
+        """Executa verificação manual de prazos
+        
+        Args:
+            forcar: Se True, ignora verificação de última execução e força o envio
+        """
+        if forcar:
+            print("🔄 Verificação manual FORÇADA de prazos...")
+            try:
+                self.gerador_recorrentes.gerar_tarefas_mensais()
+                alertas = self._verificar_prazos()
+                self._registrar_execucao(alertas, 'concluida')
+                print("✅ Verificação manual concluída!")
+                return True
+            except Exception as e:
+                print(f"❌ Erro na verificação manual: {e}")
+                self._registrar_execucao(0, 'erro', str(e))
+                return False
+        else:
+            if self._ja_executou_hoje():
+                print("ℹ️ Verificação já foi executada hoje. Use forcar=True para executar de qualquer forma.")
+                return False
+            else:
+                print("🔄 Executando verificação manual de prazos...")
+                try:
+                    self.gerador_recorrentes.gerar_tarefas_mensais()
+                    alertas = self._verificar_prazos()
+                    self._registrar_execucao(alertas, 'concluida')
+                    print("✅ Verificação manual concluída!")
+                    return True
+                except Exception as e:
+                    print(f"❌ Erro na verificação manual: {e}")
+                    self._registrar_execucao(0, 'erro', str(e))
+                    return False
+    
     def _verificar_loop(self):
         """Loop de verificação (executa a cada 24 horas)"""
         while self.executando:
+            # Verifica se já executou hoje
+            if self._ja_executou_hoje():
+                print("ℹ️  Verificação de prazos já executada hoje. Aguardando próximo ciclo...")
+                time.sleep(3600)  # Verifica a cada 1 hora se mudou o dia
+                continue
+            
             # Gera tarefas mensais recorrentes
             try:
                 self.gerador_recorrentes.gerar_tarefas_mensais()
@@ -36,14 +77,17 @@ class NotificadorPrazos:
             
             # Verifica prazos e envia alertas
             try:
-                self._verificar_prazos()
+                alertas = self._verificar_prazos()
+                # Registra que executou hoje
+                self._registrar_execucao(alertas, 'concluida')
             except Exception as e:
                 print(f"❌ Erro ao verificar prazos: {e}")
+                self._registrar_execucao(0, 'erro', str(e))
             
-            time.sleep(86400)  # 24 horas
+            time.sleep(3600)  # Verifica a cada 1 hora se mudou o dia
     
-    def _verificar_prazos(self):
-        """Verifica tarefas atrasadas e envia alertas conforme tipo"""
+    def _verificar_prazos(self) -> int:
+        """Verifica tarefas atrasadas e envia alertas conforme tipo. Retorna total de alertas enviados."""
         conn = None
         try:
             conn = self.database.get_connection()
@@ -83,6 +127,8 @@ class NotificadorPrazos:
             
             if alertas_enviados > 0:
                 print(f"\n📧 Total de alertas enviados: {alertas_enviados}\n")
+            
+            return alertas_enviados
         
         except sqlite3.OperationalError as e:
             if "locked" in str(e).lower():
@@ -93,6 +139,8 @@ class NotificadorPrazos:
         finally:
             if conn:
                 conn.close()
+        
+        return 0
     
     def _processar_tipo_a(self, cursor, tarefa: Dict, dias_diff: int) -> bool:
         """Processa notificação para tarefa Tipo A (com reiterações)"""
@@ -104,12 +152,16 @@ class NotificadorPrazos:
         if dias_diff < 0:
             return False
         
-        hoje_str = datetime.date.today().strftime('%Y-%m-%d')
+        hoje_str = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        hoje_data_str = datetime.date.today().strftime('%Y-%m-%d')
         hoje_obj = datetime.date.today()
         
-        # Verifica se já enviou hoje
-        if ultima_notif == hoje_str:
-            return False
+        # Verifica se já enviou hoje (compara apenas a data)
+        if ultima_notif:
+            # Extrai apenas a data do campo ultima_notificacao (pode ter hora ou não)
+            data_ultima_notif = ultima_notif.split(' ')[0] if ' ' in ultima_notif else ultima_notif
+            if data_ultima_notif == hoje_data_str:
+                return False
         
         deve_enviar = False
         tipo_alerta = None
@@ -189,11 +241,15 @@ class NotificadorPrazos:
     def _processar_tipo_b(self, cursor, tarefa: Dict, dias_diff: int) -> bool:
         """Processa notificação para tarefa Tipo B (prazo fixo)"""
         ultima_notif = tarefa['ultima_notificacao']
-        hoje_str = datetime.date.today().strftime('%Y-%m-%d')
+        hoje_str = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        hoje_data_str = datetime.date.today().strftime('%Y-%m-%d')
         
-        # Verifica se já enviou hoje
-        if ultima_notif == hoje_str:
-            return False
+        # Verifica se já enviou hoje (compara apenas a data)
+        if ultima_notif:
+            # Extrai apenas a data do campo ultima_notificacao (pode ter hora ou não)
+            data_ultima_notif = ultima_notif.split(' ')[0] if ' ' in ultima_notif else ultima_notif
+            if data_ultima_notif == hoje_data_str:
+                return False
         
         deve_enviar = False
         tipo_alerta = None
@@ -235,3 +291,56 @@ class NotificadorPrazos:
             return True
         
         return False
+    
+    def _ja_executou_hoje(self) -> bool:
+        """Verifica se a verificação de prazos já foi executada hoje"""
+        try:
+            conn = self.database.get_connection()
+            cursor = conn.cursor()
+            
+            hoje = datetime.date.today().strftime('%Y-%m-%d')
+            cursor.execute('''
+                SELECT COUNT(*) FROM verificacoes_prazos 
+                WHERE data_verificacao = ? AND status = 'concluida'
+            ''', (hoje,))
+            
+            count = cursor.fetchone()[0]
+            conn.close()
+            
+            return count > 0
+        except Exception as e:
+            print(f"⚠️ Erro ao verificar última execução: {e}")
+            return False
+    
+    def _registrar_execucao(self, alertas_enviados: int = 0, status: str = 'concluida', mensagem_erro: str = None):
+        """Registra que a verificação foi executada hoje"""
+        try:
+            conn = self.database.get_connection()
+            cursor = conn.cursor()
+            
+            hoje = datetime.date.today().strftime('%Y-%m-%d')
+            agora = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            
+            # Conta tarefas verificadas
+            cursor.execute('''
+                SELECT COUNT(*) FROM obra_checklist 
+                WHERE concluido = 0 AND bloqueado = 0 AND data_limite IS NOT NULL
+            ''')
+            tarefas_verificadas = cursor.fetchone()[0]
+            
+            # Insere ou atualiza registro
+            cursor.execute('''
+                INSERT OR REPLACE INTO verificacoes_prazos 
+                (data_verificacao, data_hora_inicio, data_hora_fim, tarefas_verificadas, alertas_enviados, status, mensagem_erro)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            ''', (hoje, agora, agora, tarefas_verificadas, alertas_enviados, status, mensagem_erro))
+            
+            conn.commit()
+            conn.close()
+            
+            if status == 'concluida':
+                print(f"✅ Verificação de prazos concluída e registrada para {hoje} ({tarefas_verificadas} tarefas verificadas, {alertas_enviados} alertas enviados)")
+            else:
+                print(f"⚠️ Verificação de prazos registrada com status '{status}' para {hoje}")
+        except Exception as e:
+            print(f"⚠️ Erro ao registrar execução: {e}")

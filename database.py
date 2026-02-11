@@ -182,14 +182,17 @@ class Database:
         data_assinatura = kwargs.get('data_assinatura', None) or None
         data_aio = kwargs.get('data_aio', None) or None
         
+        # Data de criação com horário local
+        data_criacao = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        
         cursor.execute('''
             INSERT INTO obras (nome_contrato, cliente, valor_contrato, data_inicio, status,
                              contrato_ic, prefixo_agencia, servico, valor_parceiro, valor_percentual,
-                             total_obra, mes_execucao, ano_execucao, data_conclusao, data_assinatura, data_aio)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                             total_obra, mes_execucao, ano_execucao, data_conclusao, data_assinatura, data_aio, data_criacao)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ''', (nome_contrato, cliente, valor_contrato, data_inicio, status,
               contrato_ic, prefixo_agencia, servico, valor_parceiro, valor_percentual,
-              total_obra, mes_execucao, ano_execucao, data_conclusao, data_assinatura, data_aio))
+              total_obra, mes_execucao, ano_execucao, data_conclusao, data_assinatura, data_aio, data_criacao))
         
         obra_id = cursor.lastrowid
         

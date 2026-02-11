@@ -51,6 +51,38 @@ class AgendaObras:
             # Ignora erro de contexto deletado
             pass
     
+    def formatar_info_reiteracao(self, item: Dict) -> str:
+        """Formata informações de reiteração para exibição"""
+        tentativas = item.get('tentativas_reiteracao', 0)
+        ultima_notif = item.get('ultima_notificacao')
+        
+        # Verifica se há dados de reiteração
+        if not tentativas or tentativas == 0 or not ultima_notif:
+            return ''
+        
+        try:
+            # Verifica se tem horário (formato: YYYY-MM-DD HH:MM:SS)
+            if ' ' in ultima_notif:
+                # Tem horário - formata data e hora
+                dt = datetime.datetime.strptime(ultima_notif, '%Y-%m-%d %H:%M:%S')
+                data_notif_formatada = dt.strftime('%d/%m/%Y às %H:%M')
+            else:
+                # Só tem data - formata apenas data
+                dt = datetime.datetime.strptime(ultima_notif, '%Y-%m-%d')
+                data_notif_formatada = dt.strftime('%d/%m/%Y')
+        except:
+            # Fallback se houver erro no parse
+            data_notif_formatada = ultima_notif
+        
+        # Monta mensagem baseada no número de tentativas
+        if tentativas == 1:
+            return f'📧 1ª reiteração enviada em {data_notif_formatada}'
+        elif tentativas == 2:
+            return f'📧 2ª reiteração enviada em {data_notif_formatada}'
+        else:
+            # A partir da 3ª tentativa = alertas críticos diários
+            return f'🆘 Alertas críticos diários (última em {data_notif_formatada})'
+    
     # ========== UI ========== #
     def header(self):
         """Cabeçalho da aplicação"""
@@ -251,6 +283,10 @@ class AgendaObras:
                                 data_formatada = datetime.datetime.strptime(item['data_limite'], '%Y-%m-%d').strftime('%d/%m/%Y')
                                 if dias_restantes < 0:
                                     tooltip_text = f"⚠️ Atrasada: {abs(dias_restantes)} dias - Prazo: {data_formatada}"
+                                    # Adiciona info de reiteração se houver
+                                    info_reiteracao = self.formatar_info_reiteracao(item)
+                                    if info_reiteracao:
+                                        tooltip_text += f"\n{info_reiteracao}"
                                 else:
                                     tooltip_text = f"📅 Prazo: {data_formatada} ({dias_restantes} dias restantes)"
                             else:
@@ -275,7 +311,15 @@ class AgendaObras:
                                     ui.label(item['descricao']).style('font-size: 11px; color: #ccc;')
                                 else:
                                     ui.icon('radio_button_unchecked').style('color: #ff9800; font-size: 14px;')
-                                    ui.label(item['descricao']).style('font-size: 11px; color: #666;')
+                                    with ui.column().classes('gap-0'):
+                                        ui.label(item['descricao']).style('font-size: 11px; color: #666;')
+                                        # Mostra info de reiteração se tarefa atrasada
+                                        if item.get('data_limite'):
+                                            dias_restantes = self.helper.calcular_dias_restantes(item['data_limite'])
+                                            if dias_restantes < 0:
+                                                info_reiteracao = self.formatar_info_reiteracao(item)
+                                                if info_reiteracao:
+                                                    ui.label(info_reiteracao).style('font-size: 9px; color: #ff5722; font-style: italic;')
     
     # ========== Dialogs ========== #
     def nova_entrada(self):
@@ -616,6 +660,12 @@ class AgendaObras:
                                 ui.label(f'✓ Concluída em {data_concl_fmt}').style('font-size: 10px; color: #999; font-style: italic;')
                             except:
                                 pass
+                        
+                        # Mostra informações de reiteração se tarefa atrasada
+                        if not item['concluido'] and not bloqueado and dias_restantes is not None and dias_restantes < 0:
+                            info_reiteracao = self.formatar_info_reiteracao(item)
+                            if info_reiteracao:
+                                ui.label(info_reiteracao).style('font-size: 10px; color: #ff5722; font-weight: bold;')
                 
                 # Data limite (se disponível)
                 if item['data_limite'] and not bloqueado:
@@ -706,6 +756,12 @@ class AgendaObras:
                                 ui.label(f'✓ Concluída em {data_concl_fmt}').style('font-size: 10px; color: #999; font-style: italic;')
                             except:
                                 pass
+                        
+                        # Mostra informações de reiteração se tarefa atrasada
+                        if not item['concluido'] and not bloqueado and dias_restantes is not None and dias_restantes < 0:
+                            info_reiteracao = self.formatar_info_reiteracao(item)
+                            if info_reiteracao:
+                                ui.label(info_reiteracao).style('font-size: 10px; color: #ff5722; font-weight: bold;')
                 
                 # Data limite (se disponível)
                 if item['data_limite'] and not bloqueado:

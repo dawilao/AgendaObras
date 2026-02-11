@@ -91,6 +91,14 @@ class MigrationManager:
             upgrade=self._migration_004_fix_bases_and_dependencies,
             downgrade=None
         ))
+        
+        # Migração 5: Criar tabela de controle de verificações de prazos
+        self.migrations.append(Migration(
+            version=5,
+            description="Criar tabela verificacoes_prazos para controle de execuções diárias",
+            upgrade=self._migration_005_create_verificacoes_prazos_table,
+            downgrade=None
+        ))
     
     def _migration_001_add_tipo_recorrencia(self, conn: sqlite3.Connection):
         """Adiciona coluna tipo_recorrencia à tabela checklist_templates"""
@@ -289,6 +297,43 @@ class MigrationManager:
         
         if dependencias_para_atualizar:
             print(f"    ✅ {len(dependencias_para_atualizar)} dependência(s) de 'ANÁLISE - GESTOR' corrigidas")
+        
+        conn.commit()
+    
+    def _migration_005_create_verificacoes_prazos_table(self, conn: sqlite3.Connection):
+        """Cria tabela para controle de verificações de prazos"""
+        cursor = conn.cursor()
+        
+        # Verifica se tabela já existe
+        cursor.execute("""
+            SELECT name FROM sqlite_master 
+            WHERE type='table' AND name='verificacoes_prazos'
+        """)
+        
+        if cursor.fetchone():
+            print("    ⏭️  Tabela verificacoes_prazos já existe, pulando...")
+        else:
+            # Cria tabela
+            cursor.execute('''
+                CREATE TABLE verificacoes_prazos (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    data_verificacao TEXT NOT NULL UNIQUE,
+                    data_hora_inicio TEXT NOT NULL,
+                    data_hora_fim TEXT,
+                    tarefas_verificadas INTEGER DEFAULT 0,
+                    alertas_enviados INTEGER DEFAULT 0,
+                    status TEXT DEFAULT 'concluida',
+                    mensagem_erro TEXT
+                )
+            ''')
+            print("    ✅ Tabela verificacoes_prazos criada com sucesso")
+            
+            # Índice para busca rápida por data
+            cursor.execute('''
+                CREATE INDEX idx_verificacoes_data 
+                ON verificacoes_prazos(data_verificacao)
+            ''')
+            print("    ✅ Índice idx_verificacoes_data criado")
         
         conn.commit()
     
