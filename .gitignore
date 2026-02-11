@@ -1,3 +1,10 @@
+# Configurações sensíveis do projeto
+email_config.env
+
+# Arquivos desnecessários
+commit.txt
+new.txt
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]

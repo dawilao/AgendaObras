@@ -8,7 +8,7 @@ import datetime
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from typing import Tuple, Dict
-from config import ConfigManager, TEMPLATE_EMAIL_ALERTA_A, TEMPLATE_EMAIL_ALERTA_B, TEMPLATE_EMAIL_CRITICO_ATRASADO
+from config import EmailConfig, TEMPLATE_EMAIL_ALERTA_A, TEMPLATE_EMAIL_ALERTA_B, TEMPLATE_EMAIL_CRITICO_ATRASADO
 
 
 class EmailService:
@@ -16,11 +16,11 @@ class EmailService:
     
     def __init__(self, database: 'Database'):
         self.database = database
-        self.config = ConfigManager.carregar_config_email()
+        self.config = EmailConfig.carregar()
     
     def recarregar_config(self):
         """Recarrega configuração de email"""
-        self.config = ConfigManager.carregar_config_email()
+        self.config = EmailConfig.carregar()
     
     def enviar_email(self, destinatario: str, assunto: str, corpo_html: str) -> Tuple[bool, str]:
         """Envia email via SMTP"""
