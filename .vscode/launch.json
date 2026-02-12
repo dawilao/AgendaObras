@@ -1,0 +1,22 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Debug NiceGUI",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${file}", // ou o caminho para seu main.py, ex: "${workspaceFolder}/main.py"
+            "console": "integratedTerminal",
+            "justMyCode": true,
+            "env": {
+                "PYTHONUNBUFFERED": "1"
+            },
+            // IMPORTANTE: Se o debug não parar nos breakpoints, 
+            // tente adicionar o argumento abaixo no ui.run(reload=False)
+            // ou use esta configuração para forçar o reload:
+            "args": [
+                "--reload"
+            ]
+        }
+    ]
+}

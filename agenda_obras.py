@@ -83,6 +83,64 @@ class AgendaObras:
             # A partir da 3ª tentativa = alertas críticos diários
             return f'🆘 Alertas críticos diários (última em {data_notif_formatada})'
     
+    def converter_data_para_iso(self, data_str: str) -> str:
+        """Converte data de dd/mm/aaaa para aaaa-mm-dd (formato ISO)
+        Retorna string vazia se data_str for vazio
+        Retorna a data original se já estiver no formato correto
+        """
+        if not data_str or not data_str.strip():
+            return ''
+        
+        data_str = data_str.strip()
+        
+        # Verifica se já está no formato ISO (aaaa-mm-dd)
+        if '-' in data_str:
+            try:
+                datetime.datetime.strptime(data_str, '%Y-%m-%d')
+                return data_str  # Já está correto
+            except ValueError:
+                pass
+        
+        # Tenta converter do formato brasileiro (dd/mm/aaaa)
+        if '/' in data_str:
+            try:
+                dt = datetime.datetime.strptime(data_str, '%d/%m/%Y')
+                return dt.strftime('%Y-%m-%d')
+            except ValueError:
+                pass
+        
+        # Se não conseguiu converter, retorna original
+        return data_str
+    
+    def formatar_data_exibicao(self, data_str: str) -> str:
+        """Converte data do banco (qualquer formato) para dd/mm/aaaa para exibição
+        Retorna string vazia se data_str for vazio
+        Aceita tanto formato ISO quanto brasileiro
+        """
+        if not data_str or not data_str.strip():
+            return ''
+        
+        data_str = data_str.strip()
+        
+        # Tenta formato ISO (aaaa-mm-dd)
+        if '-' in data_str:
+            try:
+                dt = datetime.datetime.strptime(data_str, '%Y-%m-%d')
+                return dt.strftime('%d/%m/%Y')
+            except ValueError:
+                pass
+        
+        # Tenta formato brasileiro (dd/mm/aaaa) - já está correto
+        if '/' in data_str:
+            try:
+                dt = datetime.datetime.strptime(data_str, '%d/%m/%Y')
+                return dt.strftime('%d/%m/%Y')  # Valida e retorna
+            except ValueError:
+                pass
+        
+        # Se não conseguiu converter, retorna original
+        return data_str
+    
     # ========== UI ========== #
     def header(self):
         """Cabeçalho da aplicação"""
@@ -208,10 +266,15 @@ class AgendaObras:
                         
                         with ui.row().classes('items-center'):
                             ui.icon('event').style('color: #666; font-size: 16px;')
-                            data_formatada = datetime.datetime.strptime(
-                                obra['data_inicio'], '%Y-%m-%d'
-                            ).strftime('%d/%m/%Y')
-                            ui.label(f'Início: {data_formatada}').style('color: #666; font-size: 13px;')
+                            
+                            if obra.get('data_inicio') and obra.get('data_inicio').strip():
+                                data_formatada = self.formatar_data_exibicao(obra['data_inicio'])
+                                if data_formatada:
+                                    ui.label(f'Início: {data_formatada}').style('color: #666; font-size: 13px;')
+                                else:
+                                    ui.label(f'Data de início não definida').style('color: #999; font-style: italic; font-size: 13px;')
+                            else:
+                                ui.label(f'Data de início não definida').style('color: #999; font-style: italic; font-size: 13px;')
                         
                         # Data de criação da obra
                         if obra.get('data_criacao'):
@@ -249,9 +312,15 @@ class AgendaObras:
                             
                             if proxima_tarefa['data_limite']:
                                 dias_restantes = self.helper.calcular_dias_restantes(proxima_tarefa['data_limite'])
-                                data_formatada_prazo = datetime.datetime.strptime(proxima_tarefa['data_limite'], '%Y-%m-%d').strftime('%d/%m/%Y')
+                                data_formatada_prazo = self.formatar_data_exibicao(proxima_tarefa['data_limite'])
                                 cor_prazo = 'red' if dias_restantes < 0 else 'orange' if dias_restantes <= 3 else 'green'
-                                ui.label(f'⏰ Prazo: {data_formatada_prazo} ({abs(dias_restantes)} dia{"s" if abs(dias_restantes) != 1 else ""} {"atrasado" if dias_restantes < 0 else "restante" if dias_restantes > 0 else "hoje"})').style(
+                                
+                                if dias_restantes == 0:
+                                    ui.label(f'⏰ Prazo: {data_formatada_prazo} (HOJE!)').style(
+                                        f'font-size: 11px; color: {cor_prazo}; margin-left: 20px;'
+                                    )
+                                else:
+                                    ui.label(f'⏰ Prazo: {data_formatada_prazo} ({abs(dias_restantes)} dia{"s" if abs(dias_restantes) != 1 else ""} {"atrasado" if dias_restantes < 0 else "restante" if dias_restantes > 0 else "hoje"})').style(
                                     f'font-size: 11px; color: {cor_prazo}; margin-left: 20px;'
                                 )
                 
@@ -267,7 +336,8 @@ class AgendaObras:
                             # Determina tooltip baseado no estado
                             if item['concluido']:
                                 data_conclusao = item.get('data_conclusao')
-                                tooltip_text = f"✅ Concluída" + (f" em {datetime.datetime.strptime(data_conclusao, '%Y-%m-%d').strftime('%d/%m/%Y')}" if data_conclusao else "")
+                                data_conclusao_fmt = self.formatar_data_exibicao(data_conclusao) if data_conclusao else ''
+                                tooltip_text = f"✅ Concluída" + (f" em {data_conclusao_fmt}" if data_conclusao_fmt else "")
                             elif item.get('bloqueado'):
                                 base_calculo = item.get('base_calculo', '')
                                 if base_calculo == 'assinatura':
@@ -280,17 +350,19 @@ class AgendaObras:
                                     tooltip_text = '🔒 Tarefa bloqueada'
                             elif item.get('data_limite'):
                                 dias_restantes = self.helper.calcular_dias_restantes(item['data_limite'])
-                                data_formatada = datetime.datetime.strptime(item['data_limite'], '%Y-%m-%d').strftime('%d/%m/%Y')
+                                data_formatada = self.formatar_data_exibicao(item['data_limite'])
                                 if dias_restantes < 0:
                                     tooltip_text = f"⚠️ Atrasada: {abs(dias_restantes)} dias - Prazo: {data_formatada}"
                                     # Adiciona info de reiteração se houver
                                     info_reiteracao = self.formatar_info_reiteracao(item)
                                     if info_reiteracao:
                                         tooltip_text += f"\n{info_reiteracao}"
+                                elif dias_restantes == 0:
+                                    tooltip_text = f"Prazo: {data_formatada} (HOJE!)"
                                 else:
-                                    tooltip_text = f"📅 Prazo: {data_formatada} ({dias_restantes} dias restantes)"
+                                    tooltip_text = f"Prazo: {data_formatada} ({dias_restantes} dias restantes)"
                             else:
-                                tooltip_text = "📋 Tarefa pendente"
+                                tooltip_text = "Tarefa pendente"
                             
                             # Estilo com hover suave usando CSS puro
                             with ui.row().classes('items-center gap-2').style(
@@ -301,11 +373,9 @@ class AgendaObras:
                                     with ui.column().classes('gap-0'):
                                         ui.label(item['descricao']).style('font-size: 11px; color: #999; text-decoration: line-through;')
                                         if item.get('data_conclusao'):
-                                            try:
-                                                data_concl_fmt = datetime.datetime.strptime(item['data_conclusao'], '%Y-%m-%d').strftime('%d/%m/%Y')
+                                            data_concl_fmt = self.formatar_data_exibicao(item['data_conclusao'])
+                                            if data_concl_fmt:
                                                 ui.label(f'✓ Concluída em {data_concl_fmt}').style('font-size: 9px; color: #999; font-style: italic;')
-                                            except:
-                                                pass
                                 elif item['bloqueado']:
                                     ui.icon('lock').style('color: #ccc; font-size: 14px;')
                                     ui.label(item['descricao']).style('font-size: 11px; color: #ccc;')
@@ -363,10 +433,10 @@ class AgendaObras:
                 mes_execucao_input = ui.select(meses, label='Mês de Execução').classes('w-1/2').props('outlined')
                 ano_execucao_input = ui.number(label='Ano', value=datetime.date.today().year, min=2020, max=2050, step=1).classes('w-1/2').props('outlined')
             
-            # Date picker - Data de Início
-            with ui.input('Data de Início *', value=datetime.date.today().strftime('%Y-%m-%d'), placeholder='dd/mm/aaaa').classes('w-full').props('outlined') as data_input:
+            # Date picker - Data de início da obra
+            with ui.input('Data de início da obra', value='', placeholder='dd/mm/aaaa').classes('w-full').props('outlined').tooltip('📅 Data em que a obra deve começar. Este campo será preenchido pelo coordenador.') as data_input:
                 with ui.menu().props('no-parent-event') as menu:
-                    with ui.date(value=datetime.date.today().strftime('%Y-%m-%d')).bind_value(data_input):
+                    with ui.date(value='').bind_value(data_input):
                         with ui.row().classes('justify-end'):
                             ui.button('Fechar', on_click=menu.close).props('flat')
                 with data_input.add_slot('append'):
@@ -430,6 +500,15 @@ class AgendaObras:
             return
         
         try:
+            # Converte datas para formato ISO
+            data_inicio = self.converter_data_para_iso(data_inicio)
+            if 'data_assinatura' in kwargs:
+                kwargs['data_assinatura'] = self.converter_data_para_iso(kwargs['data_assinatura'])
+            if 'data_aio' in kwargs:
+                kwargs['data_aio'] = self.converter_data_para_iso(kwargs['data_aio'])
+            if 'data_conclusao' in kwargs:
+                kwargs['data_conclusao'] = self.converter_data_para_iso(kwargs['data_conclusao'])
+            
             # Cria obra com todos os campos
             obra_id = self.db.criar_obra(nome, cliente, valor, data_inicio, status, **kwargs)
             
@@ -500,9 +579,9 @@ class AgendaObras:
                 mes_execucao_input = ui.select(meses, label='Mês de Execução', value=obra.get('mes_execucao')).classes('w-1/2').props('outlined')
                 ano_execucao_input = ui.number(label='Ano', value=obra.get('ano_execucao') or datetime.date.today().year, min=2020, max=2050, step=1).classes('w-1/2').props('outlined')
             
-            with ui.input('Data de Início', value=obra['data_inicio'], placeholder='dd/mm/aaaa').classes('w-full').props('outlined') as data_input:
+            with ui.input('Data de início da obra', value=obra.get('data_inicio') or '', placeholder='dd/mm/aaaa').classes('w-full').props('outlined').tooltip('📅 Data em que a obra deve começar') as data_input:
                 with ui.menu().props('no-parent-event') as menu:
-                    with ui.date(value=obra['data_inicio']).bind_value(data_input):
+                    with ui.date(value=obra.get('data_inicio') or '').bind_value(data_input):
                         with ui.row().classes('justify-end'):
                             ui.button('Fechar', on_click=menu.close).props('flat')
                 with data_input.add_slot('append'):
@@ -619,6 +698,9 @@ class AgendaObras:
             if dias_restantes < 0:
                 cor_status = 'red'
                 texto_status = f'⚠️ {abs(dias_restantes)} dias em atraso'
+            elif dias_restantes == 0:
+                cor_status = 'orange'
+                texto_status = f'⏰ Prazo é hoje!'
             elif dias_restantes <= 3:
                 cor_status = 'orange'
                 texto_status = f'⏰ {dias_restantes} dias restantes'
@@ -655,11 +737,9 @@ class AgendaObras:
                         
                         # Mostra data de conclusão se concluída
                         if item['concluido'] and item.get('data_conclusao'):
-                            try:
-                                data_concl_fmt = datetime.datetime.strptime(item['data_conclusao'], '%Y-%m-%d').strftime('%d/%m/%Y')
+                            data_concl_fmt = self.formatar_data_exibicao(item['data_conclusao'])
+                            if data_concl_fmt:
                                 ui.label(f'✓ Concluída em {data_concl_fmt}').style('font-size: 10px; color: #999; font-style: italic;')
-                            except:
-                                pass
                         
                         # Mostra informações de reiteração se tarefa atrasada
                         if not item['concluido'] and not bloqueado and dias_restantes is not None and dias_restantes < 0:
@@ -669,8 +749,12 @@ class AgendaObras:
                 
                 # Data limite (se disponível)
                 if item['data_limite'] and not bloqueado:
-                    data_formatada = datetime.datetime.strptime(item['data_limite'], '%Y-%m-%d').strftime('%d/%m/%Y')
-                    ui.label(f'Prazo: {data_formatada}').style('font-size: 12px; color: #666;')
+                    data_formatada = self.formatar_data_exibicao(item['data_limite'])
+                    
+                    if data_formatada == datetime.datetime.today().strftime('%d/%m/%Y'):
+                        ui.label(f'⏰ Prazo: {data_formatada} (HOJE!)').style('font-size: 12px; color: red; font-weight: bold;')
+                    else:
+                        ui.label(f'Prazo: {data_formatada}').style('font-size: 12px; color: #666;')
                 elif bloqueado:
                     ui.label('Bloqueada').style('font-size: 12px; color: #999;')
     
@@ -708,6 +792,9 @@ class AgendaObras:
             if dias_restantes < 0:
                 cor_status = 'red'
                 texto_status = f'⚠️ {abs(dias_restantes)} dias em atraso'
+            elif dias_restantes == 0:
+                cor_status = 'orange'
+                texto_status = f'⏰ Prazo é hoje!'
             elif dias_restantes <= 3:
                 cor_status = 'orange'
                 texto_status = f'⏰ {dias_restantes} dias restantes'
@@ -751,11 +838,9 @@ class AgendaObras:
                         
                         # Mostra data de conclusão se concluída
                         if item['concluido'] and item.get('data_conclusao'):
-                            try:
-                                data_concl_fmt = datetime.datetime.strptime(item['data_conclusao'], '%Y-%m-%d').strftime('%d/%m/%Y')
+                            data_concl_fmt = self.formatar_data_exibicao(item['data_conclusao'])
+                            if data_concl_fmt:
                                 ui.label(f'✓ Concluída em {data_concl_fmt}').style('font-size: 10px; color: #999; font-style: italic;')
-                            except:
-                                pass
                         
                         # Mostra informações de reiteração se tarefa atrasada
                         if not item['concluido'] and not bloqueado and dias_restantes is not None and dias_restantes < 0:
@@ -765,8 +850,12 @@ class AgendaObras:
                 
                 # Data limite (se disponível)
                 if item['data_limite'] and not bloqueado:
-                    data_formatada = datetime.datetime.strptime(item['data_limite'], '%Y-%m-%d').strftime('%d/%m/%Y')
-                    ui.label(f'Prazo: {data_formatada}').style('font-size: 12px; color: #666;')
+                    data_formatada = self.formatar_data_exibicao(item['data_limite'])
+                    
+                    if data_formatada == datetime.datetime.today().strftime('%d/%m/%Y'):
+                        ui.label(f'⏰ Prazo: {data_formatada} (HOJE!)').style('font-size: 12px; color: red; font-weight: bold;')
+                    else:
+                        ui.label(f'Prazo: {data_formatada}').style('font-size: 12px; color: #666;')
                 elif bloqueado:
                     ui.label('Bloqueada').style('font-size: 12px; color: #999;')
     
@@ -840,6 +929,9 @@ class AgendaObras:
             return
         
         try:
+            # Converte data para formato ISO
+            data = self.converter_data_para_iso(data)
+            
             # Atualiza a obra com a nova data
             obra = self.db.obter_obra(obra_id)
             kwargs = {campo: data}
@@ -885,6 +977,15 @@ class AgendaObras:
             return
         
         try:
+            # Converte datas para formato ISO
+            data_inicio = self.converter_data_para_iso(data_inicio)
+            if 'data_assinatura' in kwargs:
+                kwargs['data_assinatura'] = self.converter_data_para_iso(kwargs['data_assinatura'])
+            if 'data_aio' in kwargs:
+                kwargs['data_aio'] = self.converter_data_para_iso(kwargs['data_aio'])
+            if 'data_conclusao' in kwargs:
+                kwargs['data_conclusao'] = self.converter_data_para_iso(kwargs['data_conclusao'])
+            
             # Busca dados antigos para comparação
             obra_antiga = self.db.obter_obra(obra_id)
             

@@ -22,11 +22,12 @@ class GeradorTarefasRecorrentes:
             conn = self.database.get_connection()
             cursor = conn.cursor()
             
-            # Busca obras que já começaram
+            # Busca obras que já começaram (com data_inicio preenchida e válida)
             hoje = datetime.date.today()
             cursor.execute('''
                 SELECT * FROM obras 
-                WHERE data_inicio <= ? AND (data_conclusao IS NULL OR data_conclusao >= ?)
+                WHERE data_inicio IS NOT NULL AND data_inicio != '' 
+                AND data_inicio <= ? AND (data_conclusao IS NULL OR data_conclusao >= ?)
                 AND status != 'Concluída'
             ''', (hoje.strftime('%Y-%m-%d'), hoje.strftime('%Y-%m-%d')))
             

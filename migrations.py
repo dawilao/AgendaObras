@@ -99,6 +99,22 @@ class MigrationManager:
             upgrade=self._migration_005_create_verificacoes_prazos_table,
             downgrade=None
         ))
+        
+        # Migração 6: Permitir NULL na coluna data_inicio
+        self.migrations.append(Migration(
+            version=6,
+            description="Permitir NULL na coluna data_inicio da tabela obras",
+            upgrade=self._migration_006_allow_null_data_inicio,
+            downgrade=None
+        ))
+        
+        # Migração 7: Corrigir datas em formato incorreto
+        self.migrations.append(Migration(
+            version=7,
+            description="Converter datas do formato brasileiro para ISO nas tabelas obras e obra_checklist",
+            upgrade=self._migration_007_fix_date_formats,
+            downgrade=None
+        ))
     
     def _migration_001_add_tipo_recorrencia(self, conn: sqlite3.Connection):
         """Adiciona coluna tipo_recorrencia à tabela checklist_templates"""
@@ -336,6 +352,159 @@ class MigrationManager:
             print("    ✅ Índice idx_verificacoes_data criado")
         
         conn.commit()
+    
+    def _migration_006_allow_null_data_inicio(self, conn: sqlite3.Connection):
+        """Permite NULL na coluna data_inicio da tabela obras"""
+        cursor = conn.cursor()
+        
+        print("    🔄 Modificando estrutura da tabela obras...")
+        
+        # Verifica se a coluna já permite NULL
+        cursor.execute("PRAGMA table_info(obras)")
+        columns_info = cursor.fetchall()
+        data_inicio_info = [col for col in columns_info if col[1] == 'data_inicio']
+        
+        if data_inicio_info and data_inicio_info[0][3] == 0:  # notnull = 0 significa que já permite NULL
+            print("    ⏭️  Coluna data_inicio já permite NULL, pulando...")
+            return
+        
+        # No SQLite, precisamos recriar a tabela para modificar constraints
+        # 1. Criar tabela temporária com nova estrutura
+        cursor.execute('''
+            CREATE TABLE obras_new (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                nome_contrato TEXT NOT NULL,
+                cliente TEXT NOT NULL,
+                valor_contrato REAL NOT NULL,
+                data_inicio TEXT,
+                status TEXT DEFAULT 'Não Iniciada',
+                data_criacao TEXT DEFAULT CURRENT_TIMESTAMP,
+                contrato_ic TEXT,
+                prefixo_agencia TEXT,
+                servico TEXT,
+                valor_parceiro REAL,
+                valor_percentual REAL,
+                total_obra REAL,
+                mes_execucao TEXT,
+                ano_execucao INTEGER,
+                data_conclusao TEXT,
+                data_assinatura TEXT,
+                data_aio TEXT
+            )
+        ''')
+        print("    ✅ Tabela obras_new criada")
+        
+        # 2. Copiar dados da tabela antiga para a nova
+        cursor.execute('''
+            INSERT INTO obras_new 
+            (id, nome_contrato, cliente, valor_contrato, data_inicio, status, data_criacao,
+             contrato_ic, prefixo_agencia, servico, valor_parceiro, valor_percentual,
+             total_obra, mes_execucao, ano_execucao, data_conclusao, data_assinatura, data_aio)
+            SELECT 
+                id, nome_contrato, cliente, valor_contrato, data_inicio, status, data_criacao,
+                contrato_ic, prefixo_agencia, servico, valor_parceiro, valor_percentual,
+                total_obra, mes_execucao, ano_execucao, data_conclusao, data_assinatura, data_aio
+            FROM obras
+        ''')
+        rows_copied = cursor.rowcount
+        print(f"    ✅ {rows_copied} registro(s) copiado(s)")
+        
+        # 3. Deletar tabela antiga
+        cursor.execute('DROP TABLE obras')
+        print("    ✅ Tabela antiga removida")
+        
+        # 4. Renomear tabela nova
+        cursor.execute('ALTER TABLE obras_new RENAME TO obras')
+        print("    ✅ Tabela renomeada para 'obras'")
+        
+        conn.commit()
+        print("    ✅ Migração concluída: data_inicio agora permite NULL")
+    
+    def _migration_007_fix_date_formats(self, conn: sqlite3.Connection):
+        """Converte datas em formato incorreto (dd/mm/aaaa) para formato ISO (aaaa-mm-dd)"""
+        import datetime as dt
+        cursor = conn.cursor()
+        
+        print("    🔄 Verificando e corrigindo formatos de datas...")
+        
+        def converter_data(data_str):
+            """Converte data de dd/mm/aaaa para aaaa-mm-dd"""
+            if not data_str or not isinstance(data_str, str):
+                return data_str
+            
+            # Se tem '/', está no formato brasileiro
+            if '/' in data_str:
+                try:
+                    data_obj = dt.datetime.strptime(data_str, '%d/%m/%Y')
+                    return data_obj.strftime('%Y-%m-%d')
+                except ValueError:
+                    return data_str
+            
+            # Se já está no formato ISO, deixa como está
+            if '-' in data_str:
+                try:
+                    dt.datetime.strptime(data_str, '%Y-%m-%d')
+                    return data_str
+                except ValueError:
+                    return data_str
+            
+            return data_str
+        
+        # Corrige datas na tabela obras
+        cursor.execute('SELECT id, data_inicio, data_assinatura, data_aio, data_conclusao FROM obras')
+        obras = cursor.fetchall()
+        
+        obras_corrigidas = 0
+        for obra in obras:
+            obra_id = obra[0]
+            data_inicio = converter_data(obra[1])
+            data_assinatura = converter_data(obra[2])
+            data_aio = converter_data(obra[3])
+            data_conclusao = converter_data(obra[4])
+            
+            # Se alguma data foi alterada, atualiza
+            if (data_inicio != obra[1] or data_assinatura != obra[2] or 
+                data_aio != obra[3] or data_conclusao != obra[4]):
+                cursor.execute('''
+                    UPDATE obras 
+                    SET data_inicio = ?, data_assinatura = ?, data_aio = ?, data_conclusao = ?
+                    WHERE id = ?
+                ''', (data_inicio, data_assinatura, data_aio, data_conclusao, obra_id))
+                obras_corrigidas += 1
+        
+        if obras_corrigidas > 0:
+            print(f"    ✅ {obras_corrigidas} obra(s) com datas corrigidas")
+        else:
+            print("    ⏭️  Nenhuma data precisou ser corrigida na tabela obras")
+        
+        # Corrige datas na tabela obra_checklist
+        cursor.execute('SELECT id, data_limite, data_base_calculo, data_conclusao FROM obra_checklist')
+        tarefas = cursor.fetchall()
+        
+        tarefas_corrigidas = 0
+        for tarefa in tarefas:
+            tarefa_id = tarefa[0]
+            data_limite = converter_data(tarefa[1])
+            data_base_calculo = converter_data(tarefa[2])
+            data_conclusao = converter_data(tarefa[3])
+            
+            # Se alguma data foi alterada, atualiza
+            if (data_limite != tarefa[1] or data_base_calculo != tarefa[2] or 
+                data_conclusao != tarefa[3]):
+                cursor.execute('''
+                    UPDATE obra_checklist 
+                    SET data_limite = ?, data_base_calculo = ?, data_conclusao = ?
+                    WHERE id = ?
+                ''', (data_limite, data_base_calculo, data_conclusao, tarefa_id))
+                tarefas_corrigidas += 1
+        
+        if tarefas_corrigidas > 0:
+            print(f"    ✅ {tarefas_corrigidas} tarefa(s) com datas corrigidas")
+        else:
+            print("    ⏭️  Nenhuma data precisou ser corrigida na tabela obra_checklist")
+        
+        conn.commit()
+        print("    ✅ Migração concluída: todas as datas estão no formato ISO")
     
     def _get_applied_versions(self) -> List[int]:
         """Retorna lista de migrações já aplicadas"""

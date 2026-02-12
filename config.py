@@ -69,11 +69,9 @@ class EmailConfig:
         """
         # Lista de caminhos para buscar (em ordem de prioridade)
         caminhos = [
-            # 1. Diretório atual
+            r'G:\Meu Drive\17 - MODELOS\PROGRAMAS\AgendaObras\app\email_config.env',
             nome_arquivo,
-            # 2. Mesmo diretório do script config.py
             os.path.join(os.path.dirname(os.path.abspath(__file__)), nome_arquivo),
-            # 3. Caminhos alternativos fornecidos pelo usuário
             *[os.path.join(caminho, nome_arquivo) for caminho in self.caminhos_alternativos],
         ]
         

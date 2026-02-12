@@ -8,9 +8,10 @@ import datetime
 from typing import List, Dict, Optional
 from migrations import run_migrations
 
+CAMINHO_DB = r'G:\Meu Drive\17 - MODELOS\PROGRAMAS\AgendaObras\app\db\agendaobras.db'
 
 class Database:
-    def __init__(self, db_name: str = "agendaobras.db"):
+    def __init__(self, db_name: str = CAMINHO_DB):
         self.db_name = db_name
         self.init_database()
         # Executa migrações pendentes
@@ -37,7 +38,7 @@ class Database:
                 nome_contrato TEXT NOT NULL,
                 cliente TEXT NOT NULL,
                 valor_contrato REAL NOT NULL,
-                data_inicio TEXT NOT NULL,
+                data_inicio TEXT,
                 status TEXT DEFAULT 'Não Iniciada',
                 data_criacao TEXT DEFAULT CURRENT_TIMESTAMP,
                 contrato_ic TEXT,
@@ -182,6 +183,9 @@ class Database:
         data_assinatura = kwargs.get('data_assinatura', None) or None
         data_aio = kwargs.get('data_aio', None) or None
         
+        # Converte string vazia de data_inicio para None
+        data_inicio = data_inicio or None
+        
         # Data de criação com horário local
         data_criacao = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         
@@ -227,16 +231,20 @@ class Database:
         # Verifica se a obra já começou
         hoje = datetime.date.today()
         obra_ja_comecou = False
-        if data_inicio:
-            data_inicio_obj = datetime.datetime.strptime(data_inicio, '%Y-%m-%d').date()
-            obra_ja_comecou = data_inicio_obj <= hoje
+        if data_inicio and data_inicio.strip():  # Verifica se data_inicio não é vazio
+            try:
+                data_inicio_obj = datetime.datetime.strptime(data_inicio, '%Y-%m-%d').date()
+                obra_ja_comecou = data_inicio_obj <= hoje
+            except ValueError:
+                # Se data_inicio for inválida, considera que a obra não começou
+                obra_ja_comecou = False
         
         # Primeira passagem: criar todos os itens
         for template in templates:
             # Para tarefas recorrentes mensais: cria template inicial bloqueado
             # Serão desbloqueadas e geradas mensalmente pelo GeradorTarefasRecorrentes
             if template['recorrencia'] == 'mensal':
-                # Determina se deve bloquear: bloqueia se a obra ainda não começou
+                # Determina se deve bloquear: bloqueia se a obra ainda não começou ou se data_inicio não foi preenchida
                 bloqueado_mensal = 0 if obra_ja_comecou else 1
                 
                 # Cria tarefa mensal "template" (será gerenciada pelo gerador)
@@ -267,10 +275,17 @@ class Database:
                     
             elif template['base_calculo'] == 'inicio':
                 data_base = data_inicio
-                if data_base:
-                    data_obj = datetime.datetime.strptime(data_base, '%Y-%m-%d')
-                    # Suporta prazos negativos (regressivos)
-                    data_limite = data_obj + datetime.timedelta(days=template['prazo_dias'])
+                if data_base and data_base.strip():  # Verifica se data_inicio não é vazio
+                    try:
+                        data_obj = datetime.datetime.strptime(data_base, '%Y-%m-%d')
+                        # Suporta prazos negativos (regressivos)
+                        data_limite = data_obj + datetime.timedelta(days=template['prazo_dias'])
+                    except ValueError:
+                        # Se data for inválida, bloqueia a tarefa
+                        bloqueado = 1
+                        data_limite = None
+                else:
+                    bloqueado = 1  # Bloqueia até data_inicio ser preenchida
                     
             elif template['base_calculo'] == 'assinatura':
                 data_base = data_assinatura
@@ -398,6 +413,9 @@ class Database:
         data_assinatura = kwargs.get('data_assinatura', None) or None
         data_aio = kwargs.get('data_aio', None) or None
         
+        # Converte string vazia de data_inicio para None
+        data_inicio = data_inicio or None
+        
         cursor.execute('''
             UPDATE obras 
             SET nome_contrato = ?, cliente = ?, valor_contrato = ?, 
@@ -464,6 +482,28 @@ class Database:
         base_calculo = base_calculo_map.get(campo_atualizado)
         if not base_calculo:
             conn.close()
+            return
+        
+        # Se nova_data está vazia, bloqueia as tarefas relacionadas
+        if not nova_data or not nova_data.strip():
+            print(f"\n🔒 Data {campo_atualizado} removida. Bloqueando tarefas relacionadas...")
+            cursor.execute('''
+                UPDATE obra_checklist 
+                SET bloqueado = 1, data_limite = NULL, data_base_calculo = NULL
+                WHERE obra_id = ? AND base_calculo = ? AND concluido = 0
+            ''', (obra_id, base_calculo))
+            
+            # Se for data_inicio, bloqueia também tarefas mensais
+            if campo_atualizado == 'data_inicio':
+                cursor.execute('''
+                    UPDATE obra_checklist 
+                    SET bloqueado = 1
+                    WHERE obra_id = ? AND recorrencia = 'mensal' AND concluido = 0
+                ''', (obra_id,))
+            
+            conn.commit()
+            conn.close()
+            print(f"✅ Tarefas bloqueadas com sucesso\n")
             return
         
         print(f"\n🔄 Recalculando tarefas com base_calculo='{base_calculo}' para obra {obra_id}...")
