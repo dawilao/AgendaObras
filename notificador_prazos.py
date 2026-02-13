@@ -9,6 +9,10 @@ import datetime
 import sqlite3
 from typing import Dict
 
+# Flag global para controlar se o notificador já está executando
+_notificador_ativo = False
+_notificador_lock = threading.Lock()
+
 
 class NotificadorPrazos:
     def __init__(self, database: 'Database', email_service: 'EmailService', gerador_recorrentes: 'GeradorTarefasRecorrentes'):
@@ -18,8 +22,15 @@ class NotificadorPrazos:
         self.executando = False
     
     def iniciar_verificacao(self):
-        """Inicia thread de verificação periódica de prazos"""
-        if not self.executando:
+        """Inicia thread de verificação periódica de prazos (singleton global)"""
+        global _notificador_ativo
+        
+        with _notificador_lock:
+            if _notificador_ativo:
+                # Já existe um notificador ativo, não inicia outro
+                return
+            
+            _notificador_ativo = True
             self.executando = True
             thread = threading.Thread(target=self._verificar_loop, daemon=True)
             thread.start()
@@ -88,57 +99,69 @@ class NotificadorPrazos:
     
     def _verificar_prazos(self) -> int:
         """Verifica tarefas atrasadas e envia alertas conforme tipo. Retorna total de alertas enviados."""
-        conn = None
-        try:
-            conn = self.database.get_connection()
-            cursor = conn.cursor()
-            
-            hoje = datetime.date.today().strftime('%Y-%m-%d')
-            
-            # Busca tarefas não concluídas e não bloqueadas
-            cursor.execute('''
-                SELECT oc.*, o.nome_contrato, o.cliente, ct.possui_reiteracao, ct.tipo_recorrencia
-                FROM obra_checklist oc
-                JOIN obras o ON oc.obra_id = o.id 
-                LEFT JOIN checklist_templates ct ON oc.template_id = ct.id
-                WHERE oc.concluido = 0 AND oc.bloqueado = 0 
-                AND oc.data_limite IS NOT NULL
-                ORDER BY oc.data_limite
-            ''')
-            
-            tarefas = [dict(row) for row in cursor.fetchall()]
-            
-            alertas_enviados = 0
-            
-            for tarefa in tarefas:
-                data_limite = datetime.datetime.strptime(tarefa['data_limite'], '%Y-%m-%d').date()
-                dias_diff = (hoje - data_limite).days if isinstance(hoje, datetime.date) else (datetime.datetime.strptime(hoje, '%Y-%m-%d').date() - data_limite).days
+        # Retry mechanism para lidar com database locked
+        max_tentativas = 3
+        for tentativa in range(max_tentativas):
+            conn = None
+            try:
+                conn = self.database.get_connection()
+                cursor = conn.cursor()
                 
-                if tarefa['tipo'] == 'A':
-                    # Tipo A: Com reiterações (dias 2, 4, 6, depois diário)
-                    if self._processar_tipo_a(cursor, tarefa, dias_diff):
-                        alertas_enviados += 1
+                hoje = datetime.date.today().strftime('%Y-%m-%d')
+                
+                # Busca tarefas não concluídas e não bloqueadas
+                cursor.execute('''
+                    SELECT oc.*, o.nome_contrato, o.cliente, ct.possui_reiteracao, ct.tipo_recorrencia
+                    FROM obra_checklist oc
+                    JOIN obras o ON oc.obra_id = o.id 
+                    LEFT JOIN checklist_templates ct ON oc.template_id = ct.id
+                    WHERE oc.concluido = 0 AND oc.bloqueado = 0 
+                    AND oc.data_limite IS NOT NULL
+                    ORDER BY oc.data_limite
+                ''')
+                
+                tarefas = [dict(row) for row in cursor.fetchall()]
+                
+                alertas_enviados = 0
+                
+                for tarefa in tarefas:
+                    data_limite = datetime.datetime.strptime(tarefa['data_limite'], '%Y-%m-%d').date()
+                    dias_diff = (hoje - data_limite).days if isinstance(hoje, datetime.date) else (datetime.datetime.strptime(hoje, '%Y-%m-%d').date() - data_limite).days
+                    
+                    try:
+                        if tarefa['tipo'] == 'A':
+                            # Tipo A: Com reiterações (dias 2, 4, 6, depois diário)
+                            if self._processar_tipo_a(cursor, tarefa, dias_diff):
+                                alertas_enviados += 1
+                        else:
+                            # Tipo B: Prazo fixo (último dia crítico, depois diário)
+                            if self._processar_tipo_b(cursor, tarefa, dias_diff):
+                                alertas_enviados += 1
+                    except Exception as e:
+                        print(f"⚠️ Erro ao processar tarefa {tarefa['id']}: {e}")
+                        continue
+                
+                # Não precisa de commit aqui pois cada método já faz seu próprio commit
+                
+                if alertas_enviados > 0:
+                    print(f"\n📧 Total de alertas enviados: {alertas_enviados}\n")
+                
+                return alertas_enviados
+            
+            except sqlite3.OperationalError as e:
+                if "locked" in str(e).lower():
+                    if tentativa < max_tentativas - 1:
+                        print(f"⚠️ Banco de dados temporariamente bloqueado, tentando novamente em 5 segundos... (tentativa {tentativa + 1}/{max_tentativas})")
+                        time.sleep(5)
+                        continue
+                    else:
+                        print(f"❌ Banco de dados permanece bloqueado após {max_tentativas} tentativas")
+                        return 0
                 else:
-                    # Tipo B: Prazo fixo (último dia crítico, depois diário)
-                    if self._processar_tipo_b(cursor, tarefa, dias_diff):
-                        alertas_enviados += 1
-            
-            conn.commit()
-            
-            if alertas_enviados > 0:
-                print(f"\n📧 Total de alertas enviados: {alertas_enviados}\n")
-            
-            return alertas_enviados
-        
-        except sqlite3.OperationalError as e:
-            if "locked" in str(e).lower():
-                print(f"⚠️ Banco de dados temporariamente bloqueado, tentando novamente em 5 segundos...")
-                time.sleep(5)
-            else:
-                raise
-        finally:
-            if conn:
-                conn.close()
+                    raise
+            finally:
+                if conn:
+                    conn.close()
         
         return 0
     
@@ -219,16 +242,12 @@ class NotificadorPrazos:
             
             sucesso, msg = self.email_service.enviar_email(destinatario, assunto, html)
             
-            # Atualiza banco
+            # Atualiza banco com retry (usa conexão separada para evitar lock)
             status = 'atrasado' if tipo_alerta == 'critico_atrasado' else 'alerta'
-            cursor.execute('''
-                UPDATE obra_checklist 
-                SET tentativas_reiteracao = ?, ultima_notificacao = ?, status_notificacao = ?
-                WHERE id = ?
-            ''', (tentativas, hoje_str, status, tarefa['id']))
+            self._atualizar_tarefa_com_retry(tarefa['id'], tentativas, hoje_str, status)
             
-            # Registra histórico
-            self.email_service.registrar_envio(
+            # Registra histórico com retry (usa conexão separada)
+            self._registrar_historico_com_retry(
                 tarefa['obra_id'], tarefa['id'], tipo_alerta,
                 destinatario, sucesso, None if sucesso else msg
             )
@@ -274,15 +293,12 @@ class NotificadorPrazos:
             destinatario = self.email_service.config.email_remetente
             sucesso, msg = self.email_service.enviar_email(destinatario, assunto, html)
             
-            # Atualiza banco
+            # Atualiza banco com retry (usa conexão separada para evitar lock)
             status = 'critico' if dias_diff == 0 else 'atrasado'
-            cursor.execute('''
-                UPDATE obra_checklist 
-                SET ultima_notificacao = ?, status_notificacao = ?
-                WHERE id = ?
-            ''', (hoje_str, status, tarefa['id']))
+            self._atualizar_tarefa_tipo_b_com_retry(tarefa['id'], hoje_str, status)
             
-            self.email_service.registrar_envio(
+            # Registra histórico com retry (usa conexão separada)
+            self._registrar_historico_com_retry(
                 tarefa['obra_id'], tarefa['id'], tipo_alerta,
                 destinatario, sucesso, None if sucesso else msg
             )
@@ -344,3 +360,134 @@ class NotificadorPrazos:
                 print(f"⚠️ Verificação de prazos registrada com status '{status}' para {hoje}")
         except Exception as e:
             print(f"⚠️ Erro ao registrar execução: {e}")
+    
+    def _atualizar_tarefa_com_retry(self, tarefa_id: int, tentativas: int, ultima_notif: str, status: str, max_tentativas: int = 5):
+        """Atualiza tarefa com retry em caso de database locked"""
+        for tentativa in range(max_tentativas):
+            conn = None
+            try:
+                conn = self.database.get_connection()
+                cursor = conn.cursor()
+                
+                cursor.execute('''
+                    UPDATE obra_checklist 
+                    SET tentativas_reiteracao = ?, ultima_notificacao = ?, status_notificacao = ?
+                    WHERE id = ?
+                ''', (tentativas, ultima_notif, status, tarefa_id))
+                
+                conn.commit()
+                conn.close()
+                return True
+                
+            except sqlite3.OperationalError as e:
+                if "locked" in str(e).lower():
+                    if conn:
+                        try:
+                            conn.close()
+                        except:
+                            pass
+                    if tentativa < max_tentativas - 1:
+                        time.sleep(0.5)  # Aguarda 500ms antes de tentar novamente
+                        continue
+                    else:
+                        print(f"❌ Falha ao atualizar tarefa {tarefa_id} após {max_tentativas} tentativas")
+                        return False
+                else:
+                    raise
+            except Exception as e:
+                print(f"❌ Erro ao atualizar tarefa {tarefa_id}: {e}")
+                if conn:
+                    try:
+                        conn.close()
+                    except:
+                        pass
+                return False
+        return False
+    
+    def _registrar_historico_com_retry(self, obra_id: int, tarefa_id: int, tipo: str, destinatarios: str, sucesso: bool, erro: str = None, max_tentativas: int = 5):
+        """Registra histórico com retry em caso de database locked"""
+        for tentativa in range(max_tentativas):
+            conn = None
+            try:
+                conn = self.database.get_connection()
+                cursor = conn.cursor()
+                
+                data_envio = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                
+                cursor.execute('''
+                    INSERT INTO historico_notificacoes 
+                    (obra_id, tarefa_id, tipo_notificacao, data_envio, destinatarios, sucesso, mensagem_erro)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                ''', (obra_id, tarefa_id, tipo, data_envio, destinatarios, 1 if sucesso else 0, erro))
+                
+                conn.commit()
+                conn.close()
+                return True
+                
+            except sqlite3.OperationalError as e:
+                if "locked" in str(e).lower():
+                    if conn:
+                        try:
+                            conn.close()
+                        except:
+                            pass
+                    if tentativa < max_tentativas - 1:
+                        time.sleep(0.5)  # Aguarda 500ms antes de tentar novamente
+                        continue
+                    else:
+                        print(f"❌ Falha ao registrar histórico após {max_tentativas} tentativas")
+                        return False
+                else:
+                    raise
+            except Exception as e:
+                print(f"❌ Erro ao registrar histórico: {e}")
+                if conn:
+                    try:
+                        conn.close()
+                    except:
+                        pass
+                return False
+        return False
+    
+    def _atualizar_tarefa_tipo_b_com_retry(self, tarefa_id: int, ultima_notif: str, status: str, max_tentativas: int = 5):
+        """Atualiza tarefa tipo B com retry em caso de database locked"""
+        for tentativa in range(max_tentativas):
+            conn = None
+            try:
+                conn = self.database.get_connection()
+                cursor = conn.cursor()
+                
+                cursor.execute('''
+                    UPDATE obra_checklist 
+                    SET ultima_notificacao = ?, status_notificacao = ?
+                    WHERE id = ?
+                ''', (ultima_notif, status, tarefa_id))
+                
+                conn.commit()
+                conn.close()
+                return True
+                
+            except sqlite3.OperationalError as e:
+                if "locked" in str(e).lower():
+                    if conn:
+                        try:
+                            conn.close()
+                        except:
+                            pass
+                    if tentativa < max_tentativas - 1:
+                        time.sleep(0.5)  # Aguarda 500ms antes de tentar novamente
+                        continue
+                    else:
+                        print(f"❌ Falha ao atualizar tarefa tipo B {tarefa_id} após {max_tentativas} tentativas")
+                        return False
+                else:
+                    raise
+            except Exception as e:
+                print(f"❌ Erro ao atualizar tarefa tipo B {tarefa_id}: {e}")
+                if conn:
+                    try:
+                        conn.close()
+                    except:
+                        pass
+                return False
+        return False
