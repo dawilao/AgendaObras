@@ -11,6 +11,8 @@ from email_service import EmailService
 from obras_helper import ObrasHelper
 from gerador_tarefas_recorrentes import GeradorTarefasRecorrentes
 from notificador_prazos import NotificadorPrazos
+from version_checker import VersionChecker
+from config import VERSION
 
 
 class AgendaObras:
@@ -34,6 +36,9 @@ class AgendaObras:
         # Container do body (para atualização dinâmica)
         self.body_container = None
         self.filtro_pesquisa = ""
+        
+        # Verifica atualização antes de construir UI
+        self.verificar_atualizacao()
         
         # Construção da UI
         self.header()
@@ -141,6 +146,93 @@ class AgendaObras:
         # Se não conseguiu converter, retorna original
         return data_str
     
+    def verificar_atualizacao(self):
+        """Verifica se há atualização disponível e exige atualização se necessário"""
+        try:
+            checker = VersionChecker()
+            info = checker.get_version_info()
+            
+            # Se precisa atualizar
+            if info['needs_update']:
+                # Mostra modal de atualização
+                self.mostrar_dialogo_atualizacao(info)
+        except Exception as e:
+            # Se falhar a verificação, apenas loga o erro mas não bloqueia
+            print(f"Erro ao verificar atualização: {e}")
+    
+    def mostrar_dialogo_atualizacao(self, info: Dict):
+        """Mostra diálogo de atualização (obrigatório ou opcional)"""
+        force_update = info.get('force_update', False)
+        online_version = info.get('online_version', 'desconhecida')
+        current_version = info.get('current_version', VERSION)
+        download_url = info.get('download_url', '')
+        release_notes = info.get('release_notes', '')
+        changelog = info.get('changelog', [])
+        
+        with ui.dialog().props('persistent' if force_update else '') as dialog, ui.card().style('min-width: 500px; max-width: 600px;'):
+            # Cabeçalho
+            with ui.row().classes('w-full items-center'):
+                if force_update:
+                    ui.icon('warning', size='48px').style('color: #f44336;')
+                    ui.label('⚠️ ATUALIZAÇÃO OBRIGATÓRIA').style('font-size: 22px; font-weight: bold; color: #f44336; margin-left: 10px;')
+                else:
+                    ui.icon('info', size='48px').style('color: #2196f3;')
+                    ui.label('ℹ️ Atualização Disponível').style('font-size: 22px; font-weight: bold; color: #2196f3; margin-left: 10px;')
+            
+            ui.separator()
+            
+            # Informações de versão
+            with ui.column().classes('w-full').style('padding: 15px 0;'):
+                ui.label(f'Versão atual: {current_version}').style('font-size: 16px;')
+                ui.label(f'Nova versão: {online_version}').style('font-size: 16px; font-weight: bold; color: #4caf50;')
+                
+                if force_update:
+                    ui.label('⚠️ Esta atualização é obrigatória para continuar usando o sistema.').style(
+                        'font-size: 14px; color: #f44336; margin-top: 10px; padding: 10px; background-color: #ffebee; border-radius: 4px;'
+                    )
+                
+                # Notas de lançamento
+                if release_notes:
+                    ui.separator().style('margin: 15px 0;')
+                    ui.label('📝 Notas de Lançamento:').style('font-size: 16px; font-weight: bold; margin-bottom: 10px;')
+                    ui.label(release_notes).style('font-size: 14px; line-height: 1.6;')
+                
+                # Changelog
+                if changelog:
+                    ui.separator().style('margin: 15px 0;')
+                    ui.label('📋 Novidades:').style('font-size: 16px; font-weight: bold; margin-bottom: 10px;')
+                    with ui.column().classes('w-full'):
+                        for item in changelog:
+                            with ui.row().classes('items-start'):
+                                ui.label('•').style('margin-right: 8px; font-size: 14px;')
+                                ui.label(item).style('font-size: 14px; line-height: 1.6;')
+            
+            ui.separator()
+            
+            # Botões de ação
+            with ui.row().classes('w-full justify-end').style('margin-top: 15px;'):
+                if not force_update:
+                    ui.button('Lembrar Depois', on_click=lambda: dialog.close()).props('flat').style('color: #666;')
+                
+                if download_url:
+                    ui.button(
+                        '⬇️ Baixar Atualização' if force_update else 'Baixar Atualização',
+                        on_click=lambda: ui.navigate.to(download_url, new_tab=True)
+                    ).props('color=primary' if force_update else 'color=positive')
+                else:
+                    ui.button('OK', on_click=lambda: dialog.close()).props('color=primary')
+        
+        dialog.open()
+        
+        # Se é atualização obrigatória, também mostra notificação
+        if force_update:
+            ui.notification(
+                f'⚠️ Atualização obrigatória disponível! Versão {online_version}',
+                type='negative',
+                timeout=0,  # Não fecha automaticamente
+                position='top'
+            )
+    
     # ========== UI ========== #
     def header(self):
         """Cabeçalho da aplicação"""
@@ -169,7 +261,7 @@ class AgendaObras:
     def footer(self):
         """Rodapé da aplicação"""
         with ui.footer().style('background-color: #f5f5f5; padding: 15px; text-align: center;'):
-            ui.label(f'AgendaObras v1.0 | © {datetime.datetime.now().year}').style(
+            ui.label(f'AgendaObras v{VERSION} | © {datetime.datetime.now().year}').style(
                 'color: #666; font-size: 12px;'
             )
     

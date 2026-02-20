@@ -41,7 +41,14 @@ from typing import Optional, Dict, List
 from dataclasses import dataclass, field
 
 
+# ========== Informações do Sistema ========== #
 VERSION = '1.0.0'
+
+# URL do repositório no GitHub
+GITHUB_REPO_URL = "https://github.com/dawilao/AgendaObras"
+
+# URL do arquivo version.json no GitHub (raw)
+VERSION_JSON_URL = "https://raw.githubusercontent.com/dawilao/AgendaObras/main/version.json"
 
 
 @dataclass

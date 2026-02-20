@@ -1,0 +1,16 @@
+{
+  "version": "1.0.0",
+  "release_date": "2026-02-23",
+  "minimum_version": "1.0.0",
+  "force_update": false,
+  "download_url": "https://github.com/dawilao/AgendaObras/releases/latest",
+  "release_notes": {
+    "pt-BR": "Versão inicial do AgendaObras com sistema de validação de versão"
+},
+  "changelog": [
+    "Sistema de validação de versão automática",
+    "Formatação de datas em formato brasileiro DD/MM/AAAA",
+    "Tratamento de dependências de tarefas",
+    "Interface de usuário com NiceGUI"
+  ]
+}
