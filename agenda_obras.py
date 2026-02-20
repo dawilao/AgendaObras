@@ -300,7 +300,7 @@ class AgendaObras:
                         # Barra de progresso
                         ui.separator()
                         ui.label(f'Progresso: {progresso}%').style('font-size: 12px; font-weight: bold; color: #666;')
-                        ui.linear_progress(progresso / 100).style('height: 8px;')
+                        ui.linear_progress(progresso / 100, show_value=False).style('height: 8px;')
                         
                         # Próxima tarefa pendente
                         if proxima_tarefa:
@@ -436,7 +436,8 @@ class AgendaObras:
             # Date picker - Data de início da obra
             with ui.input('Data de início da obra', value='', placeholder='dd/mm/aaaa').classes('w-full').props('outlined').tooltip('📅 Data em que a obra deve começar. Este campo será preenchido pelo coordenador.') as data_input:
                 with ui.menu().props('no-parent-event') as menu:
-                    with ui.date(value='').bind_value(data_input):
+                    with ui.date(value='') as date_picker:
+                        date_picker.on('update:model-value', lambda e: data_input.set_value(self.formatar_data_exibicao(e.args) if e.args else ''))
                         with ui.row().classes('justify-end'):
                             ui.button('Fechar', on_click=menu.close).props('flat')
                 with data_input.add_slot('append'):
@@ -445,7 +446,8 @@ class AgendaObras:
             # Datas críticas (desabilitadas inicialmente)
             with ui.input('Data de Assinatura do Contrato', value='', placeholder='dd/mm/aaaa').classes('w-full').props('outlined disable').tooltip('🔒 Será desbloqueado quando a tarefa "CONTRATO ASSINADO" for concluída') as data_assinatura_input:
                 with ui.menu().props('no-parent-event') as menu_assinatura:
-                    with ui.date().bind_value(data_assinatura_input):
+                    with ui.date() as date_picker_assinatura:
+                        date_picker_assinatura.on('update:model-value', lambda e: data_assinatura_input.set_value(self.formatar_data_exibicao(e.args) if e.args else ''))
                         with ui.row().classes('justify-end'):
                             ui.button('Fechar', on_click=menu_assinatura.close).props('flat')
                 with data_assinatura_input.add_slot('append'):
@@ -453,7 +455,8 @@ class AgendaObras:
             
             with ui.input('Data da AIO', value='', placeholder='dd/mm/aaaa').classes('w-full').props('outlined disable').tooltip('🔒 Será desbloqueado quando a tarefa "SOLICITAR A DATA DA AIO" for concluída') as data_aio_input:
                 with ui.menu().props('no-parent-event') as menu_aio:
-                    with ui.date().bind_value(data_aio_input):
+                    with ui.date() as date_picker_aio:
+                        date_picker_aio.on('update:model-value', lambda e: data_aio_input.set_value(self.formatar_data_exibicao(e.args) if e.args else ''))
                         with ui.row().classes('justify-end'):
                             ui.button('Fechar', on_click=menu_aio.close).props('flat')
                 with data_aio_input.add_slot('append'):
@@ -579,9 +582,10 @@ class AgendaObras:
                 mes_execucao_input = ui.select(meses, label='Mês de Execução', value=obra.get('mes_execucao')).classes('w-1/2').props('outlined')
                 ano_execucao_input = ui.number(label='Ano', value=obra.get('ano_execucao') or datetime.date.today().year, min=2020, max=2050, step=1).classes('w-1/2').props('outlined')
             
-            with ui.input('Data de início da obra', value=obra.get('data_inicio') or '', placeholder='dd/mm/aaaa').classes('w-full').props('outlined').tooltip('📅 Data em que a obra deve começar') as data_input:
+            with ui.input('Data de início da obra', value=self.formatar_data_exibicao(obra.get('data_inicio') or ''), placeholder='dd/mm/aaaa').classes('w-full').props('outlined').tooltip('📅 Data em que a obra deve começar') as data_input:
                 with ui.menu().props('no-parent-event') as menu:
-                    with ui.date(value=obra.get('data_inicio') or '').bind_value(data_input):
+                    with ui.date(value=obra.get('data_inicio') or '') as date_picker:
+                        date_picker.on('update:model-value', lambda e: data_input.set_value(self.formatar_data_exibicao(e.args) if e.args else ''))
                         with ui.row().classes('justify-end'):
                             ui.button('Fechar', on_click=menu.close).props('flat')
                 with data_input.add_slot('append'):
@@ -591,10 +595,11 @@ class AgendaObras:
             data_assinatura_props = 'outlined' if contrato_assinado_concluido else 'outlined disable'
             tooltip_assinatura = '📅 Data de assinatura do contrato' if contrato_assinado_concluido else '🔒 Complete a tarefa "CONTRATO ASSINADO" para desbloquear'
             
-            with ui.input('Data de Assinatura do Contrato', value=obra.get('data_assinatura') or '', placeholder='dd/mm/aaaa').classes('w-full').props(data_assinatura_props).tooltip(tooltip_assinatura) as data_assinatura_input:
+            with ui.input('Data de Assinatura do Contrato', value=self.formatar_data_exibicao(obra.get('data_assinatura') or ''), placeholder='dd/mm/aaaa').classes('w-full').props(data_assinatura_props).tooltip(tooltip_assinatura) as data_assinatura_input:
                 if contrato_assinado_concluido:
                     with ui.menu().props('no-parent-event') as menu_assinatura:
-                        with ui.date(value=obra.get('data_assinatura') or '').bind_value(data_assinatura_input):
+                        with ui.date(value=obra.get('data_assinatura') or '') as date_picker_assinatura:
+                            date_picker_assinatura.on('update:model-value', lambda e: data_assinatura_input.set_value(self.formatar_data_exibicao(e.args) if e.args else ''))
                             with ui.row().classes('justify-end'):
                                 ui.button('Fechar', on_click=menu_assinatura.close).props('flat')
                     with data_assinatura_input.add_slot('append'):
@@ -607,10 +612,11 @@ class AgendaObras:
             data_aio_props = 'outlined' if aio_concluido else 'outlined disable'
             tooltip_aio = '📅 Data da Autorização de Início de Obra' if aio_concluido else '🔒 Complete a tarefa "SOLICITAR A DATA DA AIO" para desbloquear'
             
-            with ui.input('Data da AIO', value=obra.get('data_aio') or '', placeholder='dd/mm/aaaa').classes('w-full').props(data_aio_props).tooltip(tooltip_aio) as data_aio_input:
+            with ui.input('Data da AIO', value=self.formatar_data_exibicao(obra.get('data_aio') or ''), placeholder='dd/mm/aaaa').classes('w-full').props(data_aio_props).tooltip(tooltip_aio) as data_aio_input:
                 if aio_concluido:
                     with ui.menu().props('no-parent-event') as menu_aio:
-                        with ui.date(value=obra.get('data_aio') or '').bind_value(data_aio_input):
+                        with ui.date(value=obra.get('data_aio') or '') as date_picker_aio:
+                            date_picker_aio.on('update:model-value', lambda e: data_aio_input.set_value(self.formatar_data_exibicao(e.args) if e.args else ''))
                             with ui.row().classes('justify-end'):
                                 ui.button('Fechar', on_click=menu_aio.close).props('flat')
                     with data_aio_input.add_slot('append'):
@@ -899,9 +905,13 @@ class AgendaObras:
             ui.label(descricao).style('color: #666; margin-bottom: 15px;')
             
             # Date picker
-            with ui.input('Data *', value=datetime.date.today().strftime('%Y-%m-%d'), placeholder='dd/mm/aaaa').classes('w-full').props('outlined') as data_input:
+            data_hoje_formatada = datetime.date.today().strftime('%d/%m/%Y')
+            data_hoje_iso = datetime.date.today().strftime('%Y-%m-%d')
+            
+            with ui.input('Data *', value=data_hoje_formatada, placeholder='dd/mm/aaaa').classes('w-full').props('outlined') as data_input:
                 with ui.menu().props('no-parent-event') as menu:
-                    with ui.date(value=datetime.date.today().strftime('%Y-%m-%d')).bind_value(data_input):
+                    with ui.date(value=data_hoje_iso) as date_picker:
+                        date_picker.on('update:model-value', lambda e: data_input.set_value(self.formatar_data_exibicao(e.args) if e.args else ''))
                         with ui.row().classes('justify-end'):
                             ui.button('Fechar', on_click=menu.close).props('flat')
                 with data_input.add_slot('append'):
