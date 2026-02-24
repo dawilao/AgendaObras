@@ -963,7 +963,7 @@ class AgendaObras:
         trigger_ui = self.db.marcar_item_checklist(item_id, concluido)
         
         # Notifica antes de qualquer atualização
-        ui.notify('✓ Checklist atualizado!', type='positive', timeout=2000)
+        self.notificar('✓ Checklist atualizado!', tipo='positive', timeout=2000)
         
         # Se há trigger_ui e tarefa foi marcada como concluída, abre dialog para preencher data crítica
         if trigger_ui and concluido and obra_id:
@@ -1027,7 +1027,7 @@ class AgendaObras:
     def salvar_data_critica(self, dialog, obra_id: int, campo: str, data: str, checklist_container = None):
         """Salva data crítica e recalcula checklist"""
         if not data:
-            ui.notify('⚠️ Informe uma data válida!', type='warning')
+            self.notificar('⚠️ Informe uma data válida!', tipo='warning')
             return
         
         try:
@@ -1062,20 +1062,20 @@ class AgendaObras:
             self.renderizar_obras()
             
             campo_label = 'Data de Assinatura' if campo == 'data_assinatura' else 'Data da AIO'
-            ui.notify(f'✅ {campo_label} salva! Prazos recalculados.', type='positive')
+            self.notificar(f'✅ {campo_label} salva! Prazos recalculados.', tipo='positive')
             
         except Exception as e:
-            ui.notify(f'❌ Erro ao salvar: {str(e)}', type='negative')
+            self.notificar(f'❌ Erro ao salvar: {str(e)}', tipo='negative')
     
     def atualizar_obra_dialog(self, dialog, obra_id: int, nome: str, cliente: str,
                               valor: float, data_inicio: str, status: str, checklist_estados: Dict = None, **kwargs):
         """Atualiza obra e checklist a partir do dialog de detalhes"""
         if not nome or not cliente:
-            ui.notify('⚠️ Nome e cliente são obrigatórios!', type='warning')
+            self.notificar('⚠️ Nome e cliente são obrigatórios!', tipo='warning')
             return
         
         if not valor or valor <= 0:
-            ui.notify('⚠️ Valor deve ser maior que zero!', type='warning')
+            self.notificar('⚠️ Valor deve ser maior que zero!', tipo='warning')
             return
         
         try:
@@ -1097,30 +1097,36 @@ class AgendaObras:
             # Verifica se precisa recalcular datas
             if obra_antiga['data_inicio'] != data_inicio:
                 self.db.recalcular_checklist(obra_id, 'data_inicio', data_inicio)
-                ui.notify('🔄 Prazos recalculados com base na nova data de início', type='info')
+                self.notificar('🔄 Prazos recalculados com base na nova data de início', tipo='info')
             
             # Verifica se data_assinatura foi alterada
             data_assinatura_nova = kwargs.get('data_assinatura')
             if data_assinatura_nova and obra_antiga.get('data_assinatura') != data_assinatura_nova:
                 self.db.recalcular_checklist(obra_id, 'data_assinatura', data_assinatura_nova)
-                ui.notify('🔄 Prazos recalculados com base na data de assinatura', type='info')
+                self.notificar('🔄 Prazos recalculados com base na data de assinatura', tipo='info')
             
             # Verifica se data_aio foi alterada
             data_aio_nova = kwargs.get('data_aio')
             if data_aio_nova and obra_antiga.get('data_aio') != data_aio_nova:
                 self.db.recalcular_checklist(obra_id, 'data_aio', data_aio_nova)
-                ui.notify('🔄 Prazos recalculados com base na data da AIO', type='info')
+                self.notificar('🔄 Prazos recalculados com base na data da AIO', tipo='info')
             
             # Atualiza checklist se fornecido
             if checklist_estados:
                 for item_id, checkbox in checklist_estados.items():
                     self.db.marcar_item_checklist(item_id, checkbox.value)
             
-            ui.notify('✅ Obra atualizada com sucesso!', type='positive')
+            # Fecha o dialog atual
             dialog.close()
-            self.renderizar_obras()
+            
+            # Reabre o dialog com os dados atualizados
+            self.abrir_detalhes_obra(obra_id)
+            
+            # Notifica sucesso
+            self.notificar('✅ Obra atualizada!', tipo='positive', timeout=4000)
+            
         except Exception as e:
-            ui.notify(f'❌ Erro ao atualizar: {str(e)}', type='negative')
+            self.notificar(f'❌ Erro ao atualizar: {str(e)}', tipo='negative')
     
     def confirmar_exclusao(self, dialog_pai, obra_id: int):
         """Confirmação de exclusão de obra"""
@@ -1141,12 +1147,12 @@ class AgendaObras:
         """Exclui obra do banco de dados"""
         try:
             self.db.deletar_obra(obra_id)
-            ui.notify('🗑️ Obra excluída com sucesso!', type='positive')
+            self.notificar('🗑️ Obra excluída com sucesso!', tipo='positive')
             dialog_confirm.close()
             dialog_pai.close()
             self.renderizar_obras()
         except Exception as e:
-            ui.notify(f'❌ Erro ao excluir: {str(e)}', type='negative')
+            self.notificar(f'❌ Erro ao excluir: {str(e)}', tipo='negative')
     
     # ========== Funções dos botões ========== #
     def pesquisa(self, texto: str):
