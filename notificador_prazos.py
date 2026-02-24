@@ -98,7 +98,7 @@ class NotificadorPrazos:
             time.sleep(3600)  # Verifica a cada 1 hora se mudou o dia
     
     def _verificar_prazos(self) -> int:
-        """Verifica tarefas atrasadas e envia alertas conforme tipo. Retorna total de alertas enviados."""
+        """Verifica tarefas atrasadas e envia alertas agrupados por obra. Retorna total de alertas enviados."""
         # Retry mechanism para lidar com database locked
         max_tentativas = 3
         for tentativa in range(max_tentativas):
@@ -122,31 +122,66 @@ class NotificadorPrazos:
                 
                 tarefas = [dict(row) for row in cursor.fetchall()]
                 
-                alertas_enviados = 0
+                # Dicionário para agrupar alertas por obra
+                # Estrutura: {obra_id: {'info': {...}, 'tarefas': {tipo_alerta: [tarefa_data, ...]}}}
+                alertas_por_obra = {}
                 
                 for tarefa in tarefas:
                     data_limite = datetime.datetime.strptime(tarefa['data_limite'], '%Y-%m-%d').date()
                     dias_diff = (hoje - data_limite).days if isinstance(hoje, datetime.date) else (datetime.datetime.strptime(hoje, '%Y-%m-%d').date() - data_limite).days
                     
                     try:
+                        # Processa tarefa e obtém dados de alerta (se aplicável)
                         if tarefa['tipo'] == 'A':
                             # Tipo A: Com reiterações (dias 2, 4, 6, depois diário)
-                            if self._processar_tipo_a(cursor, tarefa, dias_diff):
-                                alertas_enviados += 1
+                            alerta_data = self._processar_tipo_a(cursor, tarefa, dias_diff)
                         else:
                             # Tipo B: Prazo fixo (último dia crítico, depois diário)
-                            if self._processar_tipo_b(cursor, tarefa, dias_diff):
-                                alertas_enviados += 1
+                            alerta_data = self._processar_tipo_b(cursor, tarefa, dias_diff)
+                        
+                        # Se deve enviar alerta, adiciona ao agrupamento por obra
+                        if alerta_data:
+                            obra_id = tarefa['obra_id']
+                            
+                            # Inicializa estrutura da obra se não existir
+                            if obra_id not in alertas_por_obra:
+                                alertas_por_obra[obra_id] = {
+                                    'info': {
+                                        'nome_contrato': tarefa['nome_contrato'],
+                                        'cliente': tarefa['cliente']
+                                    },
+                                    'tarefas': {
+                                        'reiteracao_1': [],
+                                        'reiteracao_2': [],
+                                        'reiteracao_3': [],
+                                        'critico_atrasado': [],
+                                        'tipo_b': []
+                                    }
+                                }
+                            
+                            # Adiciona tarefa no tipo de alerta correspondente
+                            tipo_alerta = alerta_data['tipo_alerta']
+                            alertas_por_obra[obra_id]['tarefas'][tipo_alerta].append(alerta_data)
+                            
                     except Exception as e:
                         print(f"⚠️ Erro ao processar tarefa {tarefa['id']}: {e}")
                         continue
                 
-                # Não precisa de commit aqui pois cada método já faz seu próprio commit
+                # Envia emails agrupados por obra
+                total_emails_enviados = 0
+                for obra_id, dados_obra in alertas_por_obra.items():
+                    if self._enviar_email_agrupado_por_obra(obra_id, dados_obra):
+                        total_emails_enviados += 1
                 
-                if alertas_enviados > 0:
-                    print(f"\n📧 Total de alertas enviados: {alertas_enviados}\n")
+                if total_emails_enviados > 0:
+                    total_tarefas = sum(
+                        len(tarefas) 
+                        for obra in alertas_por_obra.values() 
+                        for tarefas in obra['tarefas'].values()
+                    )
+                    print(f"\n📧 {total_emails_enviados} email(s) enviado(s) para {total_tarefas} tarefa(s)\n")
                 
-                return alertas_enviados
+                return total_tarefas if alertas_por_obra else 0
             
             except sqlite3.OperationalError as e:
                 if "locked" in str(e).lower():
@@ -165,15 +200,19 @@ class NotificadorPrazos:
         
         return 0
     
-    def _processar_tipo_a(self, cursor, tarefa: Dict, dias_diff: int) -> bool:
-        """Processa notificação para tarefa Tipo A (com reiterações)"""
+    def _processar_tipo_a(self, cursor, tarefa: Dict, dias_diff: int):
+        """Processa notificação para tarefa Tipo A (com reiterações)
+        
+        Returns:
+            Dict com dados do alerta se deve enviar, None caso contrário
+        """
         tentativas = tarefa['tentativas_reiteracao']
         ultima_notif = tarefa['ultima_notificacao']
         tipo_recorrencia = tarefa.get('tipo_recorrencia', 'padrao')
         
         # Se ainda não passou do prazo, não faz nada
         if dias_diff < 0:
-            return False
+            return None
         
         hoje_str = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         hoje_data_str = datetime.date.today().strftime('%Y-%m-%d')
@@ -184,10 +223,11 @@ class NotificadorPrazos:
             # Extrai apenas a data do campo ultima_notificacao (pode ter hora ou não)
             data_ultima_notif = ultima_notif.split(' ')[0] if ' ' in ultima_notif else ultima_notif
             if data_ultima_notif == hoje_data_str:
-                return False
+                return None
         
         deve_enviar = False
         tipo_alerta = None
+        nova_tentativa = tentativas
         
         # Lógica especial para CONFIRMAÇÃO DE MEDIÇÃO (dias do mês 11, 12, 13+)
         if tipo_recorrencia == 'confirmacao':
@@ -197,31 +237,31 @@ class NotificadorPrazos:
             # Dia 11: Reiteração 1
             if dia_mes == 11 and tentativas == 0:
                 deve_enviar = True
-                tentativas = 1
+                nova_tentativa = 1
                 tipo_alerta = 'reiteracao_1'
             # Dia 12: Reiteração 2
             elif dia_mes == 12 and tentativas <= 1:
                 deve_enviar = True
-                tentativas = 2
+                nova_tentativa = 2
                 tipo_alerta = 'reiteracao_2'
             # Dia 13+: Crítico diário
             elif dia_mes >= 13:
                 deve_enviar = True
-                tentativas = 3
+                nova_tentativa = 3
                 tipo_alerta = 'critico_atrasado'
         else:
             # Lógica padrão de reiterações: dias 2, 4, 6 após o prazo
             if dias_diff == 2 and tentativas == 0:
                 deve_enviar = True
-                tentativas = 1
+                nova_tentativa = 1
                 tipo_alerta = 'reiteracao_1'
             elif dias_diff == 4 and tentativas == 1:
                 deve_enviar = True
-                tentativas = 2
+                nova_tentativa = 2
                 tipo_alerta = 'reiteracao_2'
             elif dias_diff == 6 and tentativas == 2:
                 deve_enviar = True
-                tentativas = 3
+                nova_tentativa = 3
                 tipo_alerta = 'reiteracao_3'
             elif dias_diff > 6:
                 # Após 3ª reiteração: alerta crítico diário
@@ -229,36 +269,27 @@ class NotificadorPrazos:
                 tipo_alerta = 'critico_atrasado'
         
         if deve_enviar:
-            # Cria email apropriado
-            if tipo_alerta.startswith('reiteracao'):
-                html = self.email_service.criar_email_alerta_tipo_a(tarefa, tentativas)
-                assunto = f"⚠️ AgendaObras - Reiteração {tentativas}: {tarefa['descricao']}"
-            else:
-                html = self.email_service.criar_email_critico_atrasado(tarefa, dias_diff)
-                assunto = f"🆘 CRÍTICO - {tarefa['descricao']} - {dias_diff} dias em atraso"
-            
-            # TODO: Definir destinatários (pode ser campo na obra ou configuração)
-            destinatario = self.email_service.config.email_remetente  # Por enquanto envia para si mesmo
-            
-            sucesso, msg = self.email_service.enviar_email(destinatario, assunto, html)
-            
-            # Atualiza banco com retry (usa conexão separada para evitar lock)
-            status = 'atrasado' if tipo_alerta == 'critico_atrasado' else 'alerta'
-            self._atualizar_tarefa_com_retry(tarefa['id'], tentativas, hoje_str, status)
-            
-            # Registra histórico com retry (usa conexão separada)
-            self._registrar_historico_com_retry(
-                tarefa['obra_id'], tarefa['id'], tipo_alerta,
-                destinatario, sucesso, None if sucesso else msg
-            )
-            
-            print(f"📧 Tipo A - {tipo_alerta}: {tarefa['descricao']} ({tarefa['nome_contrato']})")
-            return True
+            # Retorna dados do alerta para processamento posterior
+            return {
+                'tarefa_id': tarefa['id'],
+                'obra_id': tarefa['obra_id'],
+                'descricao': tarefa['descricao'],
+                'data_limite': tarefa['data_limite'],
+                'tipo_alerta': tipo_alerta,
+                'nova_tentativa': nova_tentativa,
+                'dias_diff': dias_diff,
+                'hoje_str': hoje_str,
+                'status': 'atrasado' if tipo_alerta == 'critico_atrasado' else 'alerta'
+            }
         
-        return False
+        return None
     
-    def _processar_tipo_b(self, cursor, tarefa: Dict, dias_diff: int) -> bool:
-        """Processa notificação para tarefa Tipo B (prazo fixo)"""
+    def _processar_tipo_b(self, cursor, tarefa: Dict, dias_diff: int):
+        """Processa notificação para tarefa Tipo B (prazo fixo)
+        
+        Returns:
+            Dict com dados do alerta se deve enviar, None caso contrário
+        """
         ultima_notif = tarefa['ultima_notificacao']
         hoje_str = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         hoje_data_str = datetime.date.today().strftime('%Y-%m-%d')
@@ -268,7 +299,7 @@ class NotificadorPrazos:
             # Extrai apenas a data do campo ultima_notificacao (pode ter hora ou não)
             data_ultima_notif = ultima_notif.split(' ')[0] if ' ' in ultima_notif else ultima_notif
             if data_ultima_notif == hoje_data_str:
-                return False
+                return None
         
         deve_enviar = False
         tipo_alerta = None
@@ -276,37 +307,105 @@ class NotificadorPrazos:
         if dias_diff == 0:
             # Último dia - alerta crítico
             deve_enviar = True
-            tipo_alerta = 'critico_ultimo_dia'
+            tipo_alerta = 'tipo_b'
         elif dias_diff > 0:
-            # Atrasado - alerta crítico diário
+            # Atrasado - alerta crítico diário  
             deve_enviar = True
-            tipo_alerta = 'critico_atrasado'
+            tipo_alerta = 'tipo_b'
         
         if deve_enviar:
-            html = self.email_service.criar_email_alerta_tipo_b(tarefa) if dias_diff == 0 else self.email_service.criar_email_critico_atrasado(tarefa, dias_diff)
-            
-            if dias_diff == 0:
-                assunto = f"🚨 ÚLTIMO DIA: {tarefa['descricao']}"
-            else:
-                assunto = f"🆘 ATRASADO {dias_diff}d: {tarefa['descricao']}"
-            
-            destinatario = self.email_service.config.email_remetente
-            sucesso, msg = self.email_service.enviar_email(destinatario, assunto, html)
-            
-            # Atualiza banco com retry (usa conexão separada para evitar lock)
-            status = 'critico' if dias_diff == 0 else 'atrasado'
-            self._atualizar_tarefa_tipo_b_com_retry(tarefa['id'], hoje_str, status)
-            
-            # Registra histórico com retry (usa conexão separada)
-            self._registrar_historico_com_retry(
-                tarefa['obra_id'], tarefa['id'], tipo_alerta,
-                destinatario, sucesso, None if sucesso else msg
+            # Retorna dados do alerta para processamento posterior
+            return {
+                'tarefa_id': tarefa['id'],
+                'obra_id': tarefa['obra_id'],
+                'descricao': tarefa['descricao'],
+                'data_limite': tarefa['data_limite'],
+                'tipo_alerta': tipo_alerta,
+                'dias_diff': dias_diff,
+                'hoje_str': hoje_str,
+                'status': 'critico' if dias_diff == 0 else 'atrasado'
+            }
+        
+        return None
+    
+    def _enviar_email_agrupado_por_obra(self, obra_id: int, dados_obra: Dict) -> bool:
+        """Envia email agrupado com todas as tarefas de uma obra e atualiza banco
+        
+        Args:
+            obra_id: ID da obra
+            dados_obra: Dict com 'info' (nome_contrato, cliente) e 'tarefas' (agrupadas por tipo)
+        
+        Returns:
+            True se enviou com sucesso, False caso contrário
+        """
+        obra_info = dados_obra['info']
+        tarefas_agrupadas = dados_obra['tarefas']
+        
+        # Filtra apenas tipos que têm tarefas
+        tarefas_com_conteudo = {
+            tipo: tarefas 
+            for tipo, tarefas in tarefas_agrupadas.items() 
+            if len(tarefas) > 0
+        }
+        
+        if not tarefas_com_conteudo:
+            return False
+        
+        # Gera email agrupado
+        try:
+            assunto, corpo_html = self.email_service.criar_email_agrupado_por_obra(
+                obra_info, 
+                tarefas_com_conteudo
             )
             
-            print(f"📧 Tipo B - {tipo_alerta}: {tarefa['descricao']} ({tarefa['nome_contrato']})")
+            # Envia email
+            destinatario = self.email_service.config.email_remetente
+            sucesso, msg = self.email_service.enviar_email(destinatario, assunto, corpo_html)
+            
+            if not sucesso:
+                print(f"❌ Falha ao enviar email para obra {obra_info['nome_contrato']}: {msg}")
+                return False
+            
+            # Atualiza banco para todas as tarefas
+            for tipo_alerta, lista_tarefas in tarefas_com_conteudo.items():
+                for tarefa_data in lista_tarefas:
+                    tarefa_id = tarefa_data['tarefa_id']
+                    
+                    # Atualiza campos de controle da tarefa
+                    if 'nova_tentativa' in tarefa_data:
+                        # Tipo A (com reiterações)
+                        self._atualizar_tarefa_com_retry(
+                            tarefa_id,
+                            tarefa_data['nova_tentativa'],
+                            tarefa_data['hoje_str'],
+                            tarefa_data['status']
+                        )
+                    else:
+                        # Tipo B (sem reiterações)
+                        self._atualizar_tarefa_tipo_b_com_retry(
+                            tarefa_id,
+                            tarefa_data['hoje_str'],
+                            tarefa_data['status']
+                        )
+                    
+                    # Registra histórico individual para cada tarefa
+                    self._registrar_historico_com_retry(
+                        obra_id,
+                        tarefa_id,
+                        tipo_alerta,
+                        destinatario,
+                        sucesso,
+                        None if sucesso else msg
+                    )
+            
+            # Log de sucesso
+            total_tarefas = sum(len(tarefas) for tarefas in tarefas_com_conteudo.values())
+            print(f"📧 Email agrupado enviado: {obra_info['nome_contrato']} ({total_tarefas} tarefa(s))")
             return True
-        
-        return False
+            
+        except Exception as e:
+            print(f"❌ Erro ao enviar email agrupado para obra {obra_info['nome_contrato']}: {e}")
+            return False
     
     def _ja_executou_hoje(self) -> bool:
         """Verifica se a verificação de prazos já foi executada hoje"""

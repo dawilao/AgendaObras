@@ -419,3 +419,212 @@ TEMPLATE_EMAIL_CRITICO_ATRASADO = """
 </body>
 </html>
 """
+
+TEMPLATE_EMAIL_AGRUPADO_POR_OBRA = """
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <style>
+        body {{ font-family: 'Segoe UI', Arial, sans-serif; line-height: 1.6; color: #333; background-color: #f5f5f5; }}
+        .container {{ max-width: 750px; margin: 20px auto; background-color: white; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }}
+        
+        /* Header */
+        .header {{ background: linear-gradient(135deg, #f57c00 0%, #ff9800 100%); color: white; padding: 25px 30px; }}
+        .header.critico {{ background: linear-gradient(135deg, #c62828 0%, #d32f2f 100%); }}
+        .header h1 {{ margin: 0 0 10px 0; font-size: 24px; font-weight: 600; }}
+        .header p {{ margin: 0; font-size: 15px; opacity: 0.95; }}
+        
+        /* Resumo Executivo */
+        .resumo-executivo {{ background-color: #fff8e1; border-left: 5px solid #ffa000; padding: 20px 25px; margin: 20px 25px; border-radius: 4px; }}
+        .resumo-executivo.critico {{ background-color: #ffebee; border-left-color: #c62828; }}
+        .resumo-titulo {{ font-size: 18px; font-weight: 600; color: #333; margin: 0 0 15px 0; }}
+        .info-grid {{ display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 15px; }}
+        .info-item {{ display: flex; align-items: center; }}
+        .info-label {{ color: #666; font-size: 13px; margin-right: 8px; }}
+        .info-valor {{ color: #1565c0; font-weight: 600; font-size: 14px; }}
+        
+        /* Content */
+        .content {{ padding: 0 25px 25px 25px; }}
+        
+        /* Seções */
+        .secao {{ margin: 25px 0; border-radius: 6px; overflow: hidden; box-shadow: 0 1px 4px rgba(0,0,0,0.08); }}
+        .secao-header {{ padding: 14px 18px; font-weight: 600; font-size: 15px; color: white; display: flex; align-items: center; justify-content: space-between; }}
+        .secao-header .icone {{ font-size: 20px; margin-right: 8px; }}
+        .secao-header .contador {{ background-color: rgba(255,255,255,0.25); padding: 2px 10px; border-radius: 12px; font-size: 13px; }}
+        
+        /* Cores das seções */
+        .secao-critico .secao-header {{ background: linear-gradient(135deg, #c62828 0%, #d32f2f 100%); }}
+        .secao-tipo-b .secao-header {{ background: linear-gradient(135deg, #d84315 0%, #f4511e 100%); }}
+        .secao-reiteracao .secao-header {{ background: linear-gradient(135deg, #ef6c00 0%, #f57c00 100%); }}
+        
+        /* Tabelas */
+        table {{ width: 100%; border-collapse: collapse; background-color: white; }}
+        thead {{ background-color: #fafafa; }}
+        th {{ padding: 12px 15px; text-align: left; font-size: 12px; font-weight: 600; color: #555; text-transform: uppercase; letter-spacing: 0.5px; border-bottom: 2px solid #e0e0e0; }}
+        th.center {{ text-align: center; }}
+        td {{ padding: 14px 15px; font-size: 14px; border-bottom: 1px solid #f0f0f0; }}
+        td.center {{ text-align: center; }}
+        tbody tr:last-child td {{ border-bottom: none; }}
+        tbody tr:hover {{ background-color: #f9f9f9; }}
+        
+        /* Tarefa principal */
+        .tarefa-nome {{ font-weight: 500; color: #333; }}
+        .prazo-data {{ color: #666; font-size: 13px; }}
+        
+        /* Badges */
+        .badge {{ display: inline-block; padding: 4px 10px; border-radius: 4px; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.3px; }}
+        .badge-critico {{ background-color: #d32f2f; color: white; }}
+        .badge-tipo-b {{ background-color: #f4511e; color: white; }}
+        .badge-reiteracao-1 {{ background-color: #fff59d; color: #f57f17; }}
+        .badge-reiteracao-2 {{ background-color: #ffb74d; color: #e65100; }}
+        .badge-reiteracao-3 {{ background-color: #ff9800; color: white; }}
+        
+        /* Dias em atraso */
+        .dias-atraso {{ font-weight: 700; color: #d32f2f; font-size: 15px; }}
+        .dias-atraso.medio {{ color: #f57c00; }}
+        .dias-atraso.leve {{ color: #ffa726; }}
+        
+        /* Rodapé das seções */
+        .secao-rodape {{ padding: 12px 18px; background-color: #f5f5f5; font-size: 12px; color: #666; border-top: 1px solid #e0e0e0; }}
+        .secao-rodape.urgente {{ background-color: #ffebee; color: #c62828; font-weight: 500; }}
+        
+        /* Call to Action */
+        .cta-box {{ margin: 25px 0 15px 0; padding: 20px; background: linear-gradient(135deg, #e3f2fd 0%, #bbdefb 100%); border-radius: 6px; border: 1px solid #90caf9; }}
+        .cta-titulo {{ font-size: 16px; font-weight: 600; color: #1565c0; margin: 0 0 10px 0; }}
+        .cta-texto {{ color: #424242; margin: 0; font-size: 14px; line-height: 1.6; }}
+        
+        /* Footer */
+        .footer {{ background-color: #263238; color: white; padding: 20px; text-align: center; }}
+        .footer-texto {{ margin: 5px 0; font-size: 13px; opacity: 0.9; }}
+        .footer-data {{ margin: 8px 0 0 0; font-size: 12px; opacity: 0.7; }}
+        
+        /* Responsividade */
+        @media only screen and (max-width: 600px) {{
+            .container {{ margin: 0; box-shadow: none; }}
+            .header, .content {{ padding: 20px 15px; }}
+            .resumo-executivo {{ margin: 15px; padding: 15px; }}
+            .info-grid {{ grid-template-columns: 1fr; }}
+            th, td {{ padding: 10px; font-size: 13px; }}
+        }}
+    </style>
+</head>
+<body>
+    <div class="container">
+        <!-- Cabeçalho -->
+        <div class="header{header_class}">
+            <h1>⚠️ AgendaObras - Alertas de Tarefas Pendentes</h1>
+            <p>{total_tarefas} {texto_tarefas} aguardando providências</p>
+        </div>
+        
+        <!-- Resumo Executivo -->
+        <div class="resumo-executivo{resumo_class}">
+            <div class="resumo-titulo">📋 {nome_contrato}</div>
+            <div class="info-grid">
+                <div class="info-item">
+                    <span class="info-label">👤 Cliente:</span>
+                    <span class="info-valor">{cliente}</span>
+                </div>
+                <div class="info-item">
+                    <span class="info-label">📌 Total de alertas:</span>
+                    <span class="info-valor">{total_tarefas}</span>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Conteúdo -->
+        <div class="content">
+            {secoes_conteudo}
+        </div>
+        
+        <!-- Rodapé -->
+        <div class="footer">
+            <div class="footer-texto">AgendaObras - Sistema de Rastreamento de Obras</div>
+            <div class="footer-data">📅 {data_envio}</div>
+        </div>
+    </div>
+</body>
+</html>
+"""
+
+SECAO_REITERACAO = """
+<div class="secao secao-reiteracao">
+    <div class="secao-header">
+        <div>
+            <span class="icone">🔔</span>
+            {titulo_secao}
+        </div>
+        <span class="contador">{contador}</span>
+    </div>
+    <table>
+        <thead>
+            <tr>
+                <th>Tarefa</th>
+                <th style="width: 120px;">Prazo Original</th>
+                <th class="center" style="width: 100px;">Reiteração</th>
+                <th class="center" style="width: 100px;">Dias Atraso</th>
+            </tr>
+        </thead>
+        <tbody>
+            {linhas_tarefas}
+        </tbody>
+    </table>
+    {mensagem_rodape}
+</div>
+"""
+
+SECAO_CRITICO_ATRASADO = """
+<div class="secao secao-critico">
+    <div class="secao-header">
+        <div>
+            <span class="icone">🆘</span>
+            Tarefas Críticas em Atraso
+        </div>
+        <span class="contador">{contador}</span>
+    </div>
+    <table>
+        <thead>
+            <tr>
+                <th>Tarefa</th>
+                <th style="width: 120px;">Prazo Original</th>
+                <th class="center" style="width: 100px;">Status</th>
+                <th class="center" style="width: 100px;">Dias Atraso</th>
+            </tr>
+        </thead>
+        <tbody>
+            {linhas_tarefas}
+        </tbody>
+    </table>
+    <div class="secao-rodape urgente">
+        ⚠️ URGENTE: Essas tarefas requerem ação imediata!
+    </div>
+</div>
+"""
+
+SECAO_TIPO_B = """
+<div class="secao secao-tipo-b">
+    <div class="secao-header">
+        <div>
+            <span class="icone">🚨</span>
+            Tarefas de Prazo Fixo (Críticas)
+        </div>
+        <span class="contador">{contador}</span>
+    </div>
+    <table>
+        <thead>
+            <tr>
+                <th>Tarefa</th>
+                <th style="width: 120px;">Prazo Limite</th>
+                <th class="center" style="width: 100px;">Status</th>
+                <th class="center" style="width: 100px;">Situação</th>
+            </tr>
+        </thead>
+        <tbody>
+            {linhas_tarefas}
+        </tbody>
+    </table>
+    <div class="secao-rodape urgente">
+        🚨 Atenção: Prazo fixo - Não há prorrogação possível!
+    </div>
+</div>
+"""

@@ -14,6 +14,9 @@ from notificador_prazos import NotificadorPrazos
 from version_checker import VersionChecker
 from config import VERSION
 
+# Valores de status padrão (usado tanto no banco quanto na interface)
+STATUS_OPTIONS = ['Não Iniciada', 'Em Andamento', 'Atrasada', 'Concluída']
+
 
 class AgendaObras:
     def __init__(self):
@@ -555,7 +558,7 @@ class AgendaObras:
                     ui.icon('lock').classes('cursor-not-allowed')
             
             status_input = ui.select(
-                ['Não Iniciada', 'Em Andamento', 'Atrasada', 'Concluída'],
+                STATUS_OPTIONS,
                 label='Status',
                 value='Não Iniciada'
             ).classes('w-full').props('outlined')
@@ -718,16 +721,16 @@ class AgendaObras:
                         ui.icon('lock').classes('cursor-not-allowed')
             
             status_input = ui.select(
-                ['Não Iniciada', 'Em Andamento', 'Atrasada', 'Concluída'],
+                STATUS_OPTIONS,
                 label='Status',
-                value=obra['status']
+                value=obra['status'] or 'Não Iniciada'
             ).classes('w-full').props('outlined')
             
             ui.separator()
             
             # Checklist
             ui.label('📋 Checklist de Atividades').style('font-size: 18px; font-weight: bold; margin-top: 10px;')
-            
+            obra['status'] or 'Não Iniciada'
             # Dicionário para armazenar temporariamente os estados dos checkboxes
             checklist_estados = {}
             
