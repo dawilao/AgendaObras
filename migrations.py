@@ -5,6 +5,7 @@ Gerencia alterações incrementais na estrutura do banco de dados
 
 import sqlite3
 from typing import Callable, List, Tuple
+from error_logger import log_error
 
 
 class Migration:
@@ -208,7 +209,8 @@ class MigrationManager:
                 try:
                     data_inicio_obj = datetime.datetime.strptime(data_inicio, '%Y-%m-%d').date()
                     obra_ja_comecou = data_inicio_obj <= hoje
-                except:
+                except Exception as e:
+                    log_error(e, "migrations", f"Parse de data_inicio na migração 9 - obra_id: {obra_id}")
                     pass
             
             for template in templates_mensais:
@@ -536,6 +538,7 @@ class MigrationManager:
             
             print(f"\n✅ {len(pending)} migração(ões) aplicada(s) com sucesso!\n")
         except Exception as e:
+            log_error(e, "migrations", "Aplicar migrações pendentes")
             print(f"\n❌ Erro ao aplicar migrações: {e}")
             conn.rollback()
             raise

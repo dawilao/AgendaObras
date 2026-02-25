@@ -9,6 +9,7 @@ import urllib.request
 import urllib.error
 from typing import Optional, Dict, Tuple
 from packaging import version as pkg_version
+from error_logger import log_error
 from config import VERSION, VERSION_JSON_URL
 
 
@@ -42,12 +43,15 @@ class VersionChecker:
                 self._online_data = json.loads(data)
                 return self._online_data
         except urllib.error.URLError as e:
+            log_error(e, "version_checker", "Buscar versão online do GitHub")
             print(f"Erro ao buscar versão online: {e}")
             return None
         except json.JSONDecodeError as e:
+            log_error(e, "version_checker", "Decodificar JSON de versão")
             print(f"Erro ao decodificar JSON: {e}")
             return None
         except Exception as e:
+            log_error(e, "version_checker", "Verificar versão - erro inesperado")
             print(f"Erro inesperado ao verificar versão: {e}")
             return None
     
@@ -90,6 +94,7 @@ class VersionChecker:
             return False, f"Você está usando a versão mais recente ({self.current_version})"
             
         except Exception as e:
+            log_error(e, "version_checker", "Comparar versões")
             print(f"Erro ao comparar versões: {e}")
             return False, f"Erro ao comparar versões: {e}"
     
@@ -129,6 +134,7 @@ class VersionChecker:
             return current_ver < minimum_ver or (force_update and current_ver < online_ver)
             
         except Exception as e:
+            log_error(e, "version_checker", "Verificar força de atualização")
             print(f"Erro ao verificar força de atualização: {e}")
             return False
     

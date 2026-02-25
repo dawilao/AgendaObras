@@ -39,6 +39,7 @@ import json
 import os
 from typing import Optional, Dict, List
 from dataclasses import dataclass, field
+from error_logger import log_error
 
 
 # ========== Informações do Sistema ========== #
@@ -96,9 +97,11 @@ class EmailConfig:
                 return json.load(f)
         except json.JSONDecodeError as e:
             print(f"Erro ao decodificar JSON do arquivo {caminho}: {e}")
+            log_error(e, "config", f"Decodificar JSON em: {caminho}")
             return {}
         except Exception as e:
             print(f"Erro ao ler arquivo {caminho}: {e}")
+            log_error(e, "config", f"Ler arquivo de configuração: {caminho}")
             return {}
 
     def config_email(self, caminho_config: Optional[str] = None, 
@@ -141,6 +144,7 @@ class EmailConfig:
                     return True
             except Exception as e:
                 print(f"Erro ao configurar email a partir do arquivo: {e}")
+                log_error(e, "config", f"Configurar email a partir do arquivo: {caminho_encontrado}")
         
         # 4. Fallback: Tentar configurar a partir de variáveis de ambiente do sistema
         print("⚠ Arquivo .env não encontrado. Tentando variáveis de ambiente do sistema...")
@@ -226,6 +230,7 @@ class EmailConfig:
             return True
         except Exception as e:
             print(f"✗ Erro ao salvar configuração: {e}")
+            log_error(e, "config", f"Salvar configuração em: {arquivo}")
             return False
     
     @staticmethod
@@ -271,6 +276,7 @@ class EmailConfig:
                 return False
         except Exception as e:
             print(f"✗ Erro ao remover configuração: {e}")
+            log_error(e, "config", f"Remover arquivo de configuração: {arquivo}")
             return False
 
 

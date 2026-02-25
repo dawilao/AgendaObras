@@ -8,11 +8,11 @@ import time
 import datetime
 import sqlite3
 from typing import Dict
+from error_logger import log_error
 
 # Flag global para controlar se o notificador já está executando
 _notificador_ativo = False
 _notificador_lock = threading.Lock()
-
 
 class NotificadorPrazos:
     def __init__(self, database: 'Database', email_service: 'EmailService', gerador_recorrentes: 'GeradorTarefasRecorrentes'):
@@ -180,9 +180,14 @@ class NotificadorPrazos:
                         for tarefas in obra['tarefas'].values()
                     )
                     print(f"\n📧 {total_emails_enviados} email(s) enviado(s) para {total_tarefas} tarefa(s)\n")
-                
+                    obras_com_emails = [dados['info']['nome_contrato'] for obra_id, dados in alertas_por_obra.items() if any(dados['tarefas'].values())]
+                    
+                    print(f"Obra(s) com e-mails enviados:")
+                    for nome in obras_com_emails:
+                        print(f"   - {nome}\n")
+
                 return total_tarefas if alertas_por_obra else 0
-            
+
             except sqlite3.OperationalError as e:
                 if "locked" in str(e).lower():
                     if tentativa < max_tentativas - 1:
@@ -483,7 +488,8 @@ class NotificadorPrazos:
                     if conn:
                         try:
                             conn.close()
-                        except:
+                        except Exception as e_close:
+                            log_error(e_close, "notificador_prazos", "Fechar conexão após database locked em _atualizar_tarefa_com_retry")
                             pass
                     if tentativa < max_tentativas - 1:
                         time.sleep(0.5)  # Aguarda 500ms antes de tentar novamente
@@ -494,11 +500,13 @@ class NotificadorPrazos:
                 else:
                     raise
             except Exception as e:
+                log_error(e, "notificador_prazos", f"Atualizar tarefa {tarefa_id} com retry")
                 print(f"❌ Erro ao atualizar tarefa {tarefa_id}: {e}")
                 if conn:
                     try:
                         conn.close()
-                    except:
+                    except Exception as e_close:
+                        log_error(e_close, "notificador_prazos", "Fechar conexão após erro em _atualizar_tarefa_com_retry")
                         pass
                 return False
         return False
@@ -528,7 +536,8 @@ class NotificadorPrazos:
                     if conn:
                         try:
                             conn.close()
-                        except:
+                        except Exception as e_close:
+                            log_error(e_close, "notificador_prazos", "Fechar conexão após database locked em _registrar_historico_com_retry")
                             pass
                     if tentativa < max_tentativas - 1:
                         time.sleep(0.5)  # Aguarda 500ms antes de tentar novamente
@@ -539,11 +548,13 @@ class NotificadorPrazos:
                 else:
                     raise
             except Exception as e:
+                log_error(e, "notificador_prazos", "Registrar histórico com retry")
                 print(f"❌ Erro ao registrar histórico: {e}")
                 if conn:
                     try:
                         conn.close()
-                    except:
+                    except Exception as e_close:
+                        log_error(e_close, "notificador_prazos", "Fechar conexão após erro em _registrar_historico_com_retry")
                         pass
                 return False
         return False
@@ -571,7 +582,8 @@ class NotificadorPrazos:
                     if conn:
                         try:
                             conn.close()
-                        except:
+                        except Exception as e_close:
+                            log_error(e_close, "notificador_prazos", "Fechar conexão após database locked em _atualizar_tarefa_tipo_b_com_retry")
                             pass
                     if tentativa < max_tentativas - 1:
                         time.sleep(0.5)  # Aguarda 500ms antes de tentar novamente
@@ -582,11 +594,13 @@ class NotificadorPrazos:
                 else:
                     raise
             except Exception as e:
+                log_error(e, "notificador_prazos", f"Atualizar tarefa tipo B {tarefa_id} com retry")
                 print(f"❌ Erro ao atualizar tarefa tipo B {tarefa_id}: {e}")
                 if conn:
                     try:
                         conn.close()
-                    except:
+                    except Exception as e_close:
+                        log_error(e_close, "notificador_prazos", "Fechar conexão após erro em _atualizar_tarefa_tipo_b_com_retry")
                         pass
                 return False
         return False

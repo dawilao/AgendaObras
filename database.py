@@ -7,6 +7,7 @@ import sqlite3
 import datetime
 from typing import List, Dict, Optional
 from migrations import run_migrations
+from error_logger import log_error
 
 CAMINHO_DB = r'G:\Meu Drive\17 - MODELOS\PROGRAMAS\AgendaObras\app\db\agendaobras.db'
 
@@ -167,53 +168,63 @@ class Database:
     def criar_obra(self, nome_contrato: str, cliente: str, valor_contrato: float, 
                    data_inicio: str, status: str = 'Não Iniciada', **kwargs) -> int:
         """Cria uma nova obra e retorna o ID"""
-        conn = self.get_connection()
-        cursor = conn.cursor()
+        try:
+            conn = self.get_connection()
+            cursor = conn.cursor()
         
-        # Extrai campos adicionais e converte strings vazias para None
-        contrato_ic = kwargs.get('contrato_ic', None) or None
-        prefixo_agencia = kwargs.get('prefixo_agencia', None) or None
-        servico = kwargs.get('servico', None) or None
-        valor_parceiro = kwargs.get('valor_parceiro', None) or None
-        valor_percentual = kwargs.get('valor_percentual', None) or None
-        total_obra = kwargs.get('total_obra', None) or None
-        mes_execucao = kwargs.get('mes_execucao', None) or None
-        ano_execucao = kwargs.get('ano_execucao', None)
-        data_conclusao = kwargs.get('data_conclusao', None) or None
-        data_assinatura = kwargs.get('data_assinatura', None) or None
-        data_aio = kwargs.get('data_aio', None) or None
-        
-        # Converte string vazia de data_inicio para None
-        data_inicio = data_inicio or None
-        
-        # Data de criação com horário local
-        data_criacao = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-        
-        cursor.execute('''
-            INSERT INTO obras (nome_contrato, cliente, valor_contrato, data_inicio, status,
-                             contrato_ic, prefixo_agencia, servico, valor_parceiro, valor_percentual,
-                             total_obra, mes_execucao, ano_execucao, data_conclusao, data_assinatura, data_aio, data_criacao)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ''', (nome_contrato, cliente, valor_contrato, data_inicio, status,
-              contrato_ic, prefixo_agencia, servico, valor_parceiro, valor_percentual,
-              total_obra, mes_execucao, ano_execucao, data_conclusao, data_assinatura, data_aio, data_criacao))
-        
-        obra_id = cursor.lastrowid
-        
-        # Prepara dados completos da obra para criar checklist
-        obra_dados = {
-            'data_inicio': data_inicio,
-            'data_assinatura': data_assinatura,
-            'data_aio': data_aio
-        }
-        
-        # Cria checklist automático para a obra
-        self._criar_checklist_obra(cursor, obra_id, obra_dados)
-        
-        conn.commit()
-        conn.close()
-        
-        return obra_id
+            # Extrai campos adicionais e converte strings vazias para None
+            contrato_ic = kwargs.get('contrato_ic', None) or None
+            prefixo_agencia = kwargs.get('prefixo_agencia', None) or None
+            servico = kwargs.get('servico', None) or None
+            valor_parceiro = kwargs.get('valor_parceiro', None) or None
+            valor_percentual = kwargs.get('valor_percentual', None) or None
+            total_obra = kwargs.get('total_obra', None) or None
+            mes_execucao = kwargs.get('mes_execucao', None) or None
+            ano_execucao = kwargs.get('ano_execucao', None)
+            data_conclusao = kwargs.get('data_conclusao', None) or None
+            data_assinatura = kwargs.get('data_assinatura', None) or None
+            data_aio = kwargs.get('data_aio', None) or None
+            
+            # Converte string vazia de data_inicio para None
+            data_inicio = data_inicio or None
+            
+            # Data de criação com horário local
+            data_criacao = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            
+            cursor.execute('''
+                INSERT INTO obras (nome_contrato, cliente, valor_contrato, data_inicio, status,
+                                 contrato_ic, prefixo_agencia, servico, valor_parceiro, valor_percentual,
+                                 total_obra, mes_execucao, ano_execucao, data_conclusao, data_assinatura, data_aio, data_criacao)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (nome_contrato, cliente, valor_contrato, data_inicio, status,
+                  contrato_ic, prefixo_agencia, servico, valor_parceiro, valor_percentual,
+                  total_obra, mes_execucao, ano_execucao, data_conclusao, data_assinatura, data_aio, data_criacao))
+            
+            obra_id = cursor.lastrowid
+            
+            # Prepara dados completos da obra para criar checklist
+            obra_dados = {
+                'data_inicio': data_inicio,
+                'data_assinatura': data_assinatura,
+                'data_aio': data_aio
+            }
+            
+            # Cria checklist automático para a obra
+            self._criar_checklist_obra(cursor, obra_id, obra_dados)
+            
+            conn.commit()
+            conn.close()
+            
+            return obra_id
+            
+        except Exception as e:
+            log_error(e, "database", f"Criar obra: {nome_contrato}")
+            if 'conn' in locals():
+                try:
+                    conn.close()
+                except:
+                    pass
+            raise
     
     def _criar_checklist_obra(self, cursor, obra_id: int, obra_dados: Dict):
         """Cria checklist automático baseado nos templates com dependências e lógica avançada"""
@@ -393,80 +404,100 @@ class Database:
     def atualizar_obra(self, obra_id: int, nome_contrato: str, cliente: str, 
                        valor_contrato: float, data_inicio: str, status: str, **kwargs) -> bool:
         """Atualiza uma obra existente. Retorna True se requer confirmação de recálculo"""
-        conn = self.get_connection()
-        cursor = conn.cursor()
+        try:
+            conn = self.get_connection()
+            cursor = conn.cursor()
         
-        # Busca dados antigos para comparação
-        cursor.execute('SELECT data_inicio, data_assinatura, data_aio FROM obras WHERE id = ?', (obra_id,))
-        obra_antiga = cursor.fetchone()
-        
-        # Extrai campos adicionais e converte strings vazias para None
-        contrato_ic = kwargs.get('contrato_ic', None) or None
-        prefixo_agencia = kwargs.get('prefixo_agencia', None) or None
-        servico = kwargs.get('servico', None) or None
-        valor_parceiro = kwargs.get('valor_parceiro', None) or None
-        valor_percentual = kwargs.get('valor_percentual', None) or None
-        total_obra = kwargs.get('total_obra', None) or None
-        mes_execucao = kwargs.get('mes_execucao', None) or None
-        ano_execucao = kwargs.get('ano_execucao', None)
-        data_conclusao = kwargs.get('data_conclusao', None) or None
-        data_assinatura = kwargs.get('data_assinatura', None) or None
-        data_aio = kwargs.get('data_aio', None) or None
-        
-        # Converte string vazia de data_inicio para None
-        data_inicio = data_inicio or None
-        
-        cursor.execute('''
-            UPDATE obras 
-            SET nome_contrato = ?, cliente = ?, valor_contrato = ?, 
-                data_inicio = ?, status = ?, contrato_ic = ?, prefixo_agencia = ?,
-                servico = ?, valor_parceiro = ?, valor_percentual = ?, total_obra = ?,
-                mes_execucao = ?, ano_execucao = ?, data_conclusao = ?, 
-                data_assinatura = ?, data_aio = ?
-            WHERE id = ?
-        ''', (nome_contrato, cliente, valor_contrato, data_inicio, status,
-              contrato_ic, prefixo_agencia, servico, valor_parceiro, valor_percentual, total_obra,
-              mes_execucao, ano_execucao, data_conclusao, data_assinatura, data_aio, obra_id))
-        
-        # Verifica se houve mudança em datas críticas
-        requer_confirmacao = False
-        if obra_antiga:
-            # Verifica mudança em data_inicio
-            if obra_antiga['data_inicio'] != data_inicio:
-                # Verifica se existem tarefas com base_calculo='inicio'
-                cursor.execute('''
-                    SELECT COUNT(*) as count FROM obra_checklist 
-                    WHERE obra_id = ? AND base_calculo = 'inicio'
-                ''', (obra_id,))
-                if cursor.fetchone()['count'] > 0:
-                    requer_confirmacao = True
+            # Busca dados antigos para comparação
+            cursor.execute('SELECT data_inicio, data_assinatura, data_aio FROM obras WHERE id = ?', (obra_id,))
+            obra_antiga = cursor.fetchone()
             
-            # Verifica mudança em data_assinatura ou data_aio
-            if obra_antiga['data_assinatura'] != data_assinatura or obra_antiga['data_aio'] != data_aio:
-                # Verifica se existem tarefas concluídas que dependem dessas datas
-                cursor.execute('''
-                    SELECT COUNT(*) as count FROM obra_checklist 
-                    WHERE obra_id = ? AND concluido = 1 
-                    AND (base_calculo = 'assinatura' OR base_calculo = 'aio')
-                ''', (obra_id,))
-                if cursor.fetchone()['count'] > 0:
-                    requer_confirmacao = True
-        
-        conn.commit()
-        conn.close()
-        
-        return requer_confirmacao
+            # Extrai campos adicionais e converte strings vazias para None
+            contrato_ic = kwargs.get('contrato_ic', None) or None
+            prefixo_agencia = kwargs.get('prefixo_agencia', None) or None
+            servico = kwargs.get('servico', None) or None
+            valor_parceiro = kwargs.get('valor_parceiro', None) or None
+            valor_percentual = kwargs.get('valor_percentual', None) or None
+            total_obra = kwargs.get('total_obra', None) or None
+            mes_execucao = kwargs.get('mes_execucao', None) or None
+            ano_execucao = kwargs.get('ano_execucao', None)
+            data_conclusao = kwargs.get('data_conclusao', None) or None
+            data_assinatura = kwargs.get('data_assinatura', None) or None
+            data_aio = kwargs.get('data_aio', None) or None
+            
+            # Converte string vazia de data_inicio para None
+            data_inicio = data_inicio or None
+            
+            cursor.execute('''
+                UPDATE obras 
+                SET nome_contrato = ?, cliente = ?, valor_contrato = ?, 
+                    data_inicio = ?, status = ?, contrato_ic = ?, prefixo_agencia = ?,
+                    servico = ?, valor_parceiro = ?, valor_percentual = ?, total_obra = ?,
+                    mes_execucao = ?, ano_execucao = ?, data_conclusao = ?, 
+                    data_assinatura = ?, data_aio = ?
+                WHERE id = ?
+            ''', (nome_contrato, cliente, valor_contrato, data_inicio, status,
+                  contrato_ic, prefixo_agencia, servico, valor_parceiro, valor_percentual, total_obra,
+                  mes_execucao, ano_execucao, data_conclusao, data_assinatura, data_aio, obra_id))
+            
+            # Verifica se houve mudança em datas críticas
+            requer_confirmacao = False
+            if obra_antiga:
+                # Verifica mudança em data_inicio
+                if obra_antiga['data_inicio'] != data_inicio:
+                    # Verifica se existem tarefas com base_calculo='inicio'
+                    cursor.execute('''
+                        SELECT COUNT(*) as count FROM obra_checklist 
+                        WHERE obra_id = ? AND base_calculo = 'inicio'
+                    ''', (obra_id,))
+                    if cursor.fetchone()['count'] > 0:
+                        requer_confirmacao = True
+                
+                # Verifica mudança em data_assinatura ou data_aio
+                if obra_antiga['data_assinatura'] != data_assinatura or obra_antiga['data_aio'] != data_aio:
+                    # Verifica se existem tarefas concluídas que dependem dessas datas
+                    cursor.execute('''
+                        SELECT COUNT(*) as count FROM obra_checklist 
+                        WHERE obra_id = ? AND concluido = 1 
+                        AND (base_calculo = 'assinatura' OR base_calculo = 'aio')
+                    ''', (obra_id,))
+                    if cursor.fetchone()['count'] > 0:
+                        requer_confirmacao = True
+            
+            conn.commit()
+            conn.close()
+            
+            return requer_confirmacao
+            
+        except Exception as e:
+            log_error(e, "database", f"Atualizar obra - ID: {obra_id}, Nome: {nome_contrato}")
+            if 'conn' in locals():
+                try:
+                    conn.close()
+                except:
+                    pass
+            raise
     
     def deletar_obra(self, obra_id: int):
         """Deleta uma obra e seu checklist"""
-        conn = self.get_connection()
-        cursor = conn.cursor()
-        
-        cursor.execute('DELETE FROM obra_checklist WHERE obra_id = ?', (obra_id,))
-        cursor.execute('DELETE FROM obras WHERE id = ?', (obra_id,))
-        
-        conn.commit()
-        conn.close()
+        try:
+            conn = self.get_connection()
+            cursor = conn.cursor()
+            
+            cursor.execute('DELETE FROM obra_checklist WHERE obra_id = ?', (obra_id,))
+            cursor.execute('DELETE FROM obras WHERE id = ?', (obra_id,))
+            
+            conn.commit()
+            conn.close()
+            
+        except Exception as e:
+            log_error(e, "database", f"Deletar obra - ID: {obra_id}")
+            if 'conn' in locals():
+                try:
+                    conn.close()
+                except:
+                    pass
+            raise
     
     def recalcular_checklist(self, obra_id: int, campo_atualizado: str, nova_data: str):
         """Recalcula prazos do checklist quando data crítica é alterada"""

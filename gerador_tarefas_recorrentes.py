@@ -7,6 +7,7 @@ import sqlite3
 import datetime
 import calendar
 from typing import Dict
+from error_logger import log_error
 
 
 class GeradorTarefasRecorrentes:
@@ -60,7 +61,11 @@ class GeradorTarefasRecorrentes:
             if "locked" in str(e).lower():
                 print(f"⚠️ Banco de dados temporariamente bloqueado ao gerar tarefas recorrentes...")
             else:
+                log_error(e, "gerador_tarefas_recorrentes", "Gerar tarefas mensais - OperationalError")
                 raise
+        except Exception as e:
+            log_error(e, "gerador_tarefas_recorrentes", "Gerar tarefas mensais")
+            print(f"❌ Erro ao gerar tarefas recorrentes: {e}")
         finally:
             if conn:
                 conn.close()

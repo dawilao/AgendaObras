@@ -8,6 +8,7 @@ import datetime
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from typing import Tuple, Dict, List
+from error_logger import log_error
 from config import (
     EmailConfig, 
     TEMPLATE_EMAIL_ALERTA_A, 
@@ -59,16 +60,19 @@ class EmailService:
             print(f"✅ Email enviado com sucesso para {destinatario}")
             return (True, "Email enviado com sucesso")
             
-        except smtplib.SMTPAuthenticationError:
+        except smtplib.SMTPAuthenticationError as e:
             erro = "Falha na autenticação SMTP. Verifique usuário e senha."
+            log_error(e, "email_service", f"Autenticação SMTP para {destinatario}")
             print(f"❌ {erro}")
             return (False, erro)
         except smtplib.SMTPException as e:
             erro = f"Erro SMTP: {str(e)}"
+            log_error(e, "email_service", f"Envio de email SMTP para {destinatario}")
             print(f"❌ {erro}")
             return (False, erro)
         except Exception as e:
             erro = f"Erro ao enviar email: {str(e)}"
+            log_error(e, "email_service", f"Enviar email para {destinatario} - assunto: {assunto}")
             print(f"❌ {erro}")
             return (False, erro)
     
@@ -88,6 +92,7 @@ class EmailService:
             server.quit()
             return (True, "Conexão SMTP bem-sucedida!")
         except Exception as e:
+            log_error(e, "email_service", "Teste de conexão SMTP")
             return (False, f"Erro: {str(e)}")
     
     def criar_email_alerta_tipo_a(self, tarefa: Dict, reiteracao: int) -> str:

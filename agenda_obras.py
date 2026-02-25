@@ -13,6 +13,7 @@ from gerador_tarefas_recorrentes import GeradorTarefasRecorrentes
 from notificador_prazos import NotificadorPrazos
 from version_checker import VersionChecker
 from config import VERSION
+from error_logger import log_error
 
 # Valores de status padrão (usado tanto no banco quanto na interface)
 STATUS_OPTIONS = ['Não Iniciada', 'Em Andamento', 'Atrasada', 'Concluída']
@@ -78,8 +79,9 @@ class AgendaObras:
                 # Só tem data - formata apenas data
                 dt = datetime.datetime.strptime(ultima_notif, '%Y-%m-%d')
                 data_notif_formatada = dt.strftime('%d/%m/%Y')
-        except:
+        except Exception as e:
             # Fallback se houver erro no parse
+            log_error(e, "agenda_obras", "Parse de data em formatar_info_reiteracao")
             data_notif_formatada = ultima_notif
         
         # Monta mensagem baseada no número de tentativas
@@ -161,7 +163,7 @@ class AgendaObras:
                 self.mostrar_dialogo_atualizacao(info)
         except Exception as e:
             # Se falhar a verificação, apenas loga o erro mas não bloqueia
-            print(f"Erro ao verificar atualização: {e}")
+            log_error(e, "agenda_obras", "Verificação de atualização ao iniciar")
     
     def mostrar_dialogo_atualizacao(self, info: Dict):
         """Mostra diálogo de atualização (obrigatório ou opcional)"""
@@ -379,12 +381,13 @@ class AgendaObras:
                                     data_criacao_formatada = datetime.datetime.strptime(
                                         obra['data_criacao'], '%Y-%m-%d %H:%M:%S'
                                     ).strftime('%d/%m/%Y %H:%M')
-                                except:
+                                except Exception as e1:
                                     try:
                                         data_criacao_formatada = datetime.datetime.strptime(
                                             obra['data_criacao'], '%Y-%m-%d'
                                         ).strftime('%d/%m/%Y')
-                                    except:
+                                    except Exception as e2:
+                                        log_error(e2, "agenda_obras", "Parse de data_criacao em renderizar_obras")
                                         data_criacao_formatada = obra['data_criacao']
                                 ui.label(f'Criado em: {data_criacao_formatada}').style('color: #666; font-size: 13px;')
                         
@@ -616,6 +619,7 @@ class AgendaObras:
             self.notificar(f'✅ Obra "{nome}" criada com sucesso!', tipo='positive')
             
         except Exception as e:
+            log_error(e, "agenda_obras", f"Criar obra: {nome}")
             self.notificar(f'❌ Erro ao criar obra: {str(e)}', tipo='negative')
     
     def abrir_detalhes_obra(self, obra_id: int):
@@ -1068,6 +1072,7 @@ class AgendaObras:
             self.notificar(f'✅ {campo_label} salva! Prazos recalculados.', tipo='positive')
             
         except Exception as e:
+            log_error(e, "agenda_obras", f"Salvar data crítica - campo: {campo}")
             self.notificar(f'❌ Erro ao salvar: {str(e)}', tipo='negative')
     
     def atualizar_obra_dialog(self, dialog, obra_id: int, nome: str, cliente: str,
@@ -1129,6 +1134,7 @@ class AgendaObras:
             self.notificar('✅ Obra atualizada!', tipo='positive', timeout=4000)
             
         except Exception as e:
+            log_error(e, "agenda_obras", f"Atualizar obra - ID: {obra_id}")
             self.notificar(f'❌ Erro ao atualizar: {str(e)}', tipo='negative')
     
     def confirmar_exclusao(self, dialog_pai, obra_id: int):
@@ -1155,6 +1161,7 @@ class AgendaObras:
             dialog_pai.close()
             self.renderizar_obras()
         except Exception as e:
+            log_error(e, "agenda_obras", f"Excluir obra - ID: {obra_id}")
             self.notificar(f'❌ Erro ao excluir: {str(e)}', tipo='negative')
     
     # ========== Funções dos botões ========== #
