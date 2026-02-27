@@ -43,7 +43,7 @@ from error_logger import log_error
 
 
 # ========== Informações do Sistema ========== #
-VERSION = '1.0.0'
+VERSION = '1.1.0'
 
 # URL do repositório no GitHub
 GITHUB_REPO_URL = "https://github.com/dawilao/AgendaObras"

@@ -504,6 +504,7 @@ class AgendaObras:
             
             with ui.row().classes('w-full gap-2'):
                 contrato_ic_input = ui.input(label='Contrato (IC)').classes('w-full').props('outlined')
+                pedido_sap_input = ui.input(label='Pedido SAP').classes('w-full').props('outlined')
                 prefixo_agencia_input = ui.input(label='Prefixo Agência').classes('w-full').props('outlined')
             
             servico_input = ui.input(label='Serviço').classes('w-full').props('outlined')
@@ -575,6 +576,7 @@ class AgendaObras:
                     dialog, nome_input.value, cliente_input.value, 
                     valor_input.value, data_input.value, status_input.value,
                     contrato_ic=contrato_ic_input.value or None,
+                    pedido_sap=pedido_sap_input.value or None,
                     prefixo_agencia=prefixo_agencia_input.value or None,
                     servico=servico_input.value or None,
                     valor_parceiro=valor_parceiro_input.value or None,
@@ -641,7 +643,7 @@ class AgendaObras:
             # Cabeçalho
             with ui.row().classes('w-full items-center justify-between'):
                 ui.label(f'🏗️ {obra["nome_contrato"]}').style('font-size: 22px; font-weight: bold;')
-                ui.button(icon='close', on_click=dialog.close).props('flat round')
+                ui.button(icon='close', on_click=lambda: [dialog.close(), self.renderizar_obras()]).props('flat round')
             
             ui.separator()
             
@@ -654,6 +656,7 @@ class AgendaObras:
                 
                 with ui.row().classes('w-full gap-2'):
                     contrato_ic_input = ui.input(label='Contrato (IC)', value=obra.get('contrato_ic') or '').classes('w-full').props('outlined')
+                    pedido_sap_input = ui.input(label='Pedido SAP', value=obra.get('pedido_sap') or '').classes('w-full').props('outlined')
                     prefixo_agencia_input = ui.input(label='Prefixo Agência', value=obra.get('prefixo_agencia') or '').classes('w-full').props('outlined')
                 
                 servico_input = ui.input(label='Serviço', value=obra.get('servico') or '').classes('w-full').props('outlined')
@@ -677,7 +680,7 @@ class AgendaObras:
             
             with ui.row().classes('w-full gap-2'):
                 meses = ['Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho', 
-                         'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro']
+                        'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro']
                 mes_execucao_input = ui.select(meses, label='Mês de Execução', value=obra.get('mes_execucao')).classes('w-1/2').props('outlined')
                 ano_execucao_input = ui.number(label='Ano', value=obra.get('ano_execucao') or datetime.date.today().year, min=2020, max=2050, step=1).classes('w-1/2').props('outlined')
             
@@ -734,15 +737,24 @@ class AgendaObras:
             
             # Checklist
             ui.label('📋 Checklist de Atividades').style('font-size: 18px; font-weight: bold; margin-top: 10px;')
-            obra['status'] or 'Não Iniciada'
+            
             # Dicionário para armazenar temporariamente os estados dos checkboxes
             checklist_estados = {}
             
             checklist_container = ui.column().classes('w-full gap-2')
             
+            def atualizar_checklist():
+                """Recarrega todos os itens do checklist a partir do banco"""
+                checklist_estados.clear()
+                checklist_container.clear()
+                checklist_atualizado = self.db.obter_checklist(obra_id)
+                with checklist_container:
+                    for it in checklist_atualizado:
+                        self.criar_item_checklist_editavel(it, checklist_estados, obra_id, atualizar_checklist)
+            
             with checklist_container:
                 for item in checklist:
-                    self.criar_item_checklist_editavel(item, checklist_estados)
+                    self.criar_item_checklist_editavel(item, checklist_estados, obra_id, atualizar_checklist)
             
             ui.separator()
             
@@ -751,11 +763,13 @@ class AgendaObras:
                 ui.button('🗑️ Excluir Obra', on_click=lambda: self.confirmar_exclusao(dialog, obra_id)).props('color=negative flat')
                 
                 with ui.row().classes('gap-2'):
-                    ui.button('Cancelar', on_click=dialog.close).props('flat')
+                    ui.button('Cancelar', on_click=lambda: [dialog.close(), self.renderizar_obras()]).props('flat')
                     ui.button('💾 Salvar Alterações', on_click=lambda: self.atualizar_obra_dialog(
                         dialog, obra_id, nome_input.value, cliente_input.value,
                         valor_input.value, data_input.value, status_input.value, checklist_estados,
+                        checklist_container,  # << PASSA O CONTAINER
                         contrato_ic=contrato_ic_input.value,
+                        pedido_sap=pedido_sap_input.value or None,
                         prefixo_agencia=prefixo_agencia_input.value,
                         servico=servico_input.value,
                         valor_parceiro=valor_parceiro_input.value,
@@ -768,9 +782,25 @@ class AgendaObras:
                     )).props('color=primary')
         
         dialog.open()
-    
-    def criar_item_checklist_editavel(self, item: Dict, checklist_estados: Dict):
-        """Cria um item do checklist no modo de edição (sem salvar automaticamente)"""
+        
+        # Após abrir o dialog, verifica se há datas críticas pendentes
+        # (tarefas concluídas mas datas não preenchidas)
+        datas_pendentes = []
+        if contrato_assinado_concluido and not (obra.get('data_assinatura') or '').strip():
+            datas_pendentes.append('data_assinatura')
+        if aio_concluido and not (obra.get('data_aio') or '').strip():
+            datas_pendentes.append('data_aio')
+        
+        for campo in datas_pendentes:
+            self.abrir_dialog_data_critica(obra_id, campo, atualizar_checklist)
+
+    def criar_item_checklist_editavel(self, item: Dict, checklist_estados: Dict, obra_id: int,
+                                       atualizar_checklist_fn=None):
+        """Cria um item do checklist no modo de edição.
+        Renderiza diretamente a partir dos dados já carregados (sem query extra).
+        Ao marcar/desmarcar, atualiza TODO o checklist via atualizar_checklist_fn.
+        """
+        
         # Verifica se está bloqueado e determina motivo
         bloqueado = bool(item.get('bloqueado', 0))
         motivo_bloqueio = ''
@@ -826,109 +856,28 @@ class AgendaObras:
                     # Checkbox - desabilitado se bloqueado
                     checkbox_props = 'disable' if bloqueado else ''
                     checkbox = ui.checkbox(value=bool(item['concluido'])).props(checkbox_props)
-                    # Armazena referência ao checkbox para pegar o valor depois
+                    
+                    # Armazena referência para uso posterior no "Salvar"
                     checklist_estados[item['id']] = checkbox
                     
-                    # Informações
-                    with ui.column().classes('gap-0'):
-                        if item['concluido']:
-                            style_texto = 'text-decoration: line-through; color: #999;'
-                        elif bloqueado:
-                            style_texto = 'color: #999;'
-                        else:
-                            style_texto = 'font-weight: bold;'
-                        ui.label(item['descricao']).style(style_texto)
-                        ui.label(texto_status).style(f'font-size: 11px; color: {cor_status};')
-                        
-                        # Mostra data de conclusão se concluída
-                        if item['concluido'] and item.get('data_conclusao'):
-                            data_concl_fmt = self.formatar_data_exibicao(item['data_conclusao'])
-                            if data_concl_fmt:
-                                ui.label(f'✓ Concluída em {data_concl_fmt}').style('font-size: 10px; color: #999; font-style: italic;')
-                        
-                        # Mostra informações de reiteração se tarefa atrasada
-                        if not item['concluido'] and not bloqueado and dias_restantes is not None and dias_restantes < 0:
-                            info_reiteracao = self.formatar_info_reiteracao(item)
-                            if info_reiteracao:
-                                ui.label(info_reiteracao).style('font-size: 10px; color: #ff5722; font-weight: bold;')
-                
-                # Data limite (se disponível)
-                if item['data_limite'] and not bloqueado:
-                    data_formatada = self.formatar_data_exibicao(item['data_limite'])
-                    
-                    if data_formatada == datetime.datetime.today().strftime('%d/%m/%Y'):
-                        ui.label(f'⏰ Prazo: {data_formatada} (HOJE!)').style('font-size: 12px; color: red; font-weight: bold;')
-                    else:
-                        ui.label(f'Prazo: {data_formatada}').style('font-size: 12px; color: #666;')
-                elif bloqueado:
-                    ui.label('Bloqueada').style('font-size: 12px; color: #999;')
-    
-    def criar_item_checklist(self, item: Dict, obra_id: int = None, checklist_container = None):
-        """Cria um item do checklist"""
-        # Verifica se está bloqueado e determina motivo
-        bloqueado = bool(item.get('bloqueado', 0))
-        motivo_bloqueio = ''
-        
-        if bloqueado:
-            base_calculo = item.get('base_calculo', '')
-            if base_calculo == 'assinatura':
-                motivo_bloqueio = 'Aguardando data de assinatura do contrato'
-            elif base_calculo == 'aio':
-                motivo_bloqueio = 'Aguardando data da AIO'
-            elif base_calculo == 'fim_tarefa':
-                motivo_bloqueio = 'Aguardando conclusão de tarefa dependente'
-            else:
-                motivo_bloqueio = 'Tarefa bloqueada'
-        
-        # Calcula dias restantes (se tiver data_limite)
-        if item['data_limite'] and not bloqueado:
-            dias_restantes = self.helper.calcular_dias_restantes(item['data_limite'])
-        else:
-            dias_restantes = None
-        
-        # Define cor baseada no status
-        if bloqueado:
-            cor_status = '#bdbdbd'  # Cinza claro
-            texto_status = motivo_bloqueio
-        elif item['concluido']:
-            cor_status = 'green'
-            texto_status = '✓ Concluída'
-        elif dias_restantes is not None:
-            if dias_restantes < 0:
-                cor_status = 'red'
-                texto_status = f'⚠️ {abs(dias_restantes)} dias em atraso'
-            elif dias_restantes == 0:
-                cor_status = 'orange'
-                texto_status = f'⏰ Prazo é hoje!'
-            elif dias_restantes <= 3:
-                cor_status = 'orange'
-                texto_status = f'⏰ {dias_restantes} dias restantes'
-            else:
-                cor_status = 'gray'
-                texto_status = f'📅 {dias_restantes} dias restantes'
-        else:
-            cor_status = 'gray'
-            texto_status = 'Sem prazo definido'
-        
-        with ui.card().classes('w-full').style(f'border-left: 3px solid {cor_status}; padding: 10px; {"opacity: 0.6;" if bloqueado else ""}').tooltip(motivo_bloqueio if bloqueado else ''):
-            with ui.row().classes('w-full items-center justify-between'):
-                with ui.row().classes('items-center gap-3'):
-                    # Ícone de cadeado se bloqueado
-                    if bloqueado:
-                        ui.icon('lock').style('color: #999; font-size: 18px;')
-                    
-                    # Checkbox - desabilitado se bloqueado
-                    def criar_handler(item_id, oid, cc):
-                        def handler(e):
-                            # O novo valor está em e.args (True ou False)
-                            novo_valor = e.args if hasattr(e, 'args') else e
-                            self.toggle_checklist_item(item_id, novo_valor, oid, cc)
-                        return handler
-                    
-                    checkbox_props = 'disable' if bloqueado else ''
-                    checkbox = ui.checkbox(value=bool(item['concluido'])).props(checkbox_props)
+                    # Evento: ao marcar/desmarcar, salva e atualiza TODO o checklist
                     if not bloqueado:
-                        checkbox.on('update:model-value', criar_handler(item['id'], obra_id, checklist_container))
+                        def on_change(e, item_id=item['id']):
+                            novo_valor = bool(e.value)
+                            # Salva no banco imediatamente
+                            trigger_ui = self.db.marcar_item_checklist(item_id, novo_valor)
+                            
+                            # Se marcou como concluído e há trigger_ui, abre dialog de data crítica
+                            # Neste caso, o próprio dialog cuidará de atualizar o checklist
+                            if trigger_ui and novo_valor and obra_id:
+                                self.abrir_dialog_data_critica(obra_id, trigger_ui, atualizar_checklist_fn)
+                                return
+                            
+                            # Atualiza todo o checklist (inclui itens dependentes)
+                            if atualizar_checklist_fn:
+                                ui.timer(0.05, atualizar_checklist_fn, once=True)
+                        
+                        checkbox.on_value_change(on_change)
                     
                     # Informações
                     with ui.column().classes('gap-0'):
@@ -964,30 +913,7 @@ class AgendaObras:
                 elif bloqueado:
                     ui.label('Bloqueada').style('font-size: 12px; color: #999;')
     
-    def toggle_checklist_item(self, item_id: int, concluido: bool, obra_id: int = None, checklist_container = None):
-        """Marca/desmarca item do checklist"""
-        # Captura trigger_ui que pode ser retornado
-        trigger_ui = self.db.marcar_item_checklist(item_id, concluido)
-        
-        # Notifica antes de qualquer atualização
-        self.notificar('✓ Checklist atualizado!', tipo='positive', timeout=2000)
-        
-        # Se há trigger_ui e tarefa foi marcada como concluída, abre dialog para preencher data crítica
-        if trigger_ui and concluido and obra_id:
-            self.abrir_dialog_data_critica(obra_id, trigger_ui, checklist_container)
-        
-        # Se temos o container e obra_id, atualiza apenas o checklist do dialog
-        if obra_id and checklist_container:
-            checklist_container.clear()
-            checklist = self.db.obter_checklist(obra_id)
-            with checklist_container:
-                for item in checklist:
-                    self.criar_item_checklist(item, obra_id, checklist_container)
-        
-        # Atualiza a lista de obras para refletir o novo progresso
-        self.renderizar_obras()
-    
-    def abrir_dialog_data_critica(self, obra_id: int, campo: str, checklist_container = None):
+    def abrir_dialog_data_critica(self, obra_id: int, campo: str, atualizar_checklist_fn=None):
         """Abre dialog para preencher datas críticas (data_assinatura ou data_aio)"""
         obra = self.db.obter_obra(obra_id)
         
@@ -1024,14 +950,18 @@ class AgendaObras:
             
             # Botões de ação
             with ui.row().classes('w-full justify-end gap-2'):
-                ui.button('Pular por enquanto', on_click=dialog_data.close).props('flat')
+                def pular_data_critica():
+                    dialog_data.close()
+                    if atualizar_checklist_fn:
+                        ui.timer(0.05, atualizar_checklist_fn, once=True)
+                ui.button('Pular por enquanto', on_click=pular_data_critica).props('flat')
                 ui.button('💾 Salvar e Recalcular', on_click=lambda: self.salvar_data_critica(
-                    dialog_data, obra_id, campo, data_input.value, checklist_container
+                    dialog_data, obra_id, campo, data_input.value, atualizar_checklist_fn
                 )).props('color=primary')
         
         dialog_data.open()
     
-    def salvar_data_critica(self, dialog, obra_id: int, campo: str, data: str, checklist_container = None):
+    def salvar_data_critica(self, dialog, obra_id: int, campo: str, data: str, atualizar_checklist_fn=None):
         """Salva data crítica e recalcula checklist"""
         if not data:
             self.notificar('⚠️ Informe uma data válida!', tipo='warning')
@@ -1057,13 +987,9 @@ class AgendaObras:
             # Fecha dialog
             dialog.close()
             
-            # Atualiza checklist se fornecido
-            if checklist_container:
-                checklist_container.clear()
-                checklist = self.db.obter_checklist(obra_id)
-                with checklist_container:
-                    for item in checklist:
-                        self.criar_item_checklist(item, obra_id, checklist_container)
+            # Atualiza checklist dinamicamente
+            if atualizar_checklist_fn:
+                atualizar_checklist_fn()
             
             # Atualiza lista de obras
             self.renderizar_obras()
@@ -1076,7 +1002,8 @@ class AgendaObras:
             self.notificar(f'❌ Erro ao salvar: {str(e)}', tipo='negative')
     
     def atualizar_obra_dialog(self, dialog, obra_id: int, nome: str, cliente: str,
-                              valor: float, data_inicio: str, status: str, checklist_estados: Dict = None, **kwargs):
+                            valor: float, data_inicio: str, status: str, checklist_estados: Dict = None, 
+                            checklist_container = None, **kwargs):
         """Atualiza obra e checklist a partir do dialog de detalhes"""
         if not nome or not cliente:
             self.notificar('⚠️ Nome e cliente são obrigatórios!', tipo='warning')
@@ -1103,40 +1030,53 @@ class AgendaObras:
             requer_recalculo = self.db.atualizar_obra(obra_id, nome, cliente, valor, data_inicio, status, **kwargs)
             
             # Verifica se precisa recalcular datas
+            recalculou = False
             if obra_antiga['data_inicio'] != data_inicio:
                 self.db.recalcular_checklist(obra_id, 'data_inicio', data_inicio)
                 self.notificar('🔄 Prazos recalculados com base na nova data de início', tipo='info')
+                recalculou = True
             
             # Verifica se data_assinatura foi alterada
             data_assinatura_nova = kwargs.get('data_assinatura')
             if data_assinatura_nova and obra_antiga.get('data_assinatura') != data_assinatura_nova:
                 self.db.recalcular_checklist(obra_id, 'data_assinatura', data_assinatura_nova)
                 self.notificar('🔄 Prazos recalculados com base na data de assinatura', tipo='info')
+                recalculou = True
             
             # Verifica se data_aio foi alterada
             data_aio_nova = kwargs.get('data_aio')
             if data_aio_nova and obra_antiga.get('data_aio') != data_aio_nova:
                 self.db.recalcular_checklist(obra_id, 'data_aio', data_aio_nova)
                 self.notificar('🔄 Prazos recalculados com base na data da AIO', tipo='info')
+                recalculou = True
             
-            # Atualiza checklist se fornecido
-            if checklist_estados:
-                for item_id, checkbox in checklist_estados.items():
-                    self.db.marcar_item_checklist(item_id, checkbox.value)
+            # Os checkboxes já salvam no banco instantaneamente via on_value_change,
+            # então não é necessário re-salvar aqui.
             
-            # Fecha o dialog atual
-            dialog.close()
-            
-            # Reabre o dialog com os dados atualizados
-            self.abrir_detalhes_obra(obra_id)
+            # Apenas recria o checklist se houve recálculo de datas
+            # (os checkboxes já se atualizam dinamicamente quando marcados/desmarcados)
+            if recalculou and checklist_container:
+                checklist_estados.clear()
+                
+                def atualizar_checklist_local():
+                    checklist_container.clear()
+                    checklist = self.db.obter_checklist(obra_id)
+                    with checklist_container:
+                        for item in checklist:
+                            self.criar_item_checklist_editavel(item, checklist_estados, obra_id, atualizar_checklist_local)
+                
+                atualizar_checklist_local()
             
             # Notifica sucesso
-            self.notificar('✅ Obra atualizada!', tipo='positive', timeout=4000)
+            self.notificar('✅ Obra atualizada!', tipo='positive', timeout=3)
+            
+            # NÃO fecha o dialog
+            # O dialog permanece aberto
             
         except Exception as e:
             log_error(e, "agenda_obras", f"Atualizar obra - ID: {obra_id}")
             self.notificar(f'❌ Erro ao atualizar: {str(e)}', tipo='negative')
-    
+
     def confirmar_exclusao(self, dialog_pai, obra_id: int):
         """Confirmação de exclusão de obra"""
         with ui.dialog() as dialog_confirm, ui.card().style('padding: 20px;'):

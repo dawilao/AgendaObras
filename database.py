@@ -43,6 +43,7 @@ class Database:
                 status TEXT DEFAULT 'Não Iniciada',
                 data_criacao TEXT DEFAULT CURRENT_TIMESTAMP,
                 contrato_ic TEXT,
+                pedido_sap TEXT,
                 prefixo_agencia TEXT,
                 servico TEXT,
                 valor_parceiro REAL,
@@ -174,6 +175,7 @@ class Database:
         
             # Extrai campos adicionais e converte strings vazias para None
             contrato_ic = kwargs.get('contrato_ic', None) or None
+            pedido_sap = kwargs.get('pedido_sap', None) or None
             prefixo_agencia = kwargs.get('prefixo_agencia', None) or None
             servico = kwargs.get('servico', None) or None
             valor_parceiro = kwargs.get('valor_parceiro', None) or None
@@ -193,11 +195,11 @@ class Database:
             
             cursor.execute('''
                 INSERT INTO obras (nome_contrato, cliente, valor_contrato, data_inicio, status,
-                                 contrato_ic, prefixo_agencia, servico, valor_parceiro, valor_percentual,
+                                 contrato_ic, pedido_sap, prefixo_agencia, servico, valor_parceiro, valor_percentual,
                                  total_obra, mes_execucao, ano_execucao, data_conclusao, data_assinatura, data_aio, data_criacao)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ''', (nome_contrato, cliente, valor_contrato, data_inicio, status,
-                  contrato_ic, prefixo_agencia, servico, valor_parceiro, valor_percentual,
+                  contrato_ic, pedido_sap, prefixo_agencia, servico, valor_parceiro, valor_percentual,
                   total_obra, mes_execucao, ano_execucao, data_conclusao, data_assinatura, data_aio, data_criacao))
             
             obra_id = cursor.lastrowid
@@ -414,6 +416,7 @@ class Database:
             
             # Extrai campos adicionais e converte strings vazias para None
             contrato_ic = kwargs.get('contrato_ic', None) or None
+            pedido_sap = kwargs.get('pedido_sap', None) or None
             prefixo_agencia = kwargs.get('prefixo_agencia', None) or None
             servico = kwargs.get('servico', None) or None
             valor_parceiro = kwargs.get('valor_parceiro', None) or None
@@ -431,13 +434,13 @@ class Database:
             cursor.execute('''
                 UPDATE obras 
                 SET nome_contrato = ?, cliente = ?, valor_contrato = ?, 
-                    data_inicio = ?, status = ?, contrato_ic = ?, prefixo_agencia = ?,
+                    data_inicio = ?, status = ?, contrato_ic = ?, pedido_sap = ?, prefixo_agencia = ?,
                     servico = ?, valor_parceiro = ?, valor_percentual = ?, total_obra = ?,
                     mes_execucao = ?, ano_execucao = ?, data_conclusao = ?, 
                     data_assinatura = ?, data_aio = ?
                 WHERE id = ?
             ''', (nome_contrato, cliente, valor_contrato, data_inicio, status,
-                  contrato_ic, prefixo_agencia, servico, valor_parceiro, valor_percentual, total_obra,
+                  contrato_ic, pedido_sap, prefixo_agencia, servico, valor_parceiro, valor_percentual, total_obra,
                   mes_execucao, ano_execucao, data_conclusao, data_assinatura, data_aio, obra_id))
             
             # Verifica se houve mudança em datas críticas
@@ -627,6 +630,21 @@ class Database:
         conn.close()
         
         return checklist
+    
+    def obter_item_checklist(self, item_id: int) -> Optional[Dict]:
+        """Obtém um item específico do checklist"""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        
+        cursor.execute('''
+            SELECT * FROM obra_checklist 
+            WHERE id = ?
+        ''', (item_id,))
+        
+        row = cursor.fetchone()
+        conn.close()
+        
+        return dict(row) if row else None
     
     def marcar_item_checklist(self, item_id: int, concluido: bool) -> Optional[str]:
         """Marca/desmarca um item do checklist. Retorna trigger_ui se houver"""

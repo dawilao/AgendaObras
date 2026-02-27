@@ -1,16 +1,17 @@
 {
-  "version": "1.0.0",
-  "release_date": "2026-02-23",
-  "minimum_version": "1.0.0",
-  "force_update": false,
+  "version": "1.1.0",
+  "release_date": "2026-02-27",
+  "minimum_version": "1.1.0",
+  "force_update": true,
   "download_url": "https://github.com/dawilao/AgendaObras/releases/latest",
   "release_notes": {
-    "pt-BR": "Versão inicial do AgendaObras com sistema de validação de versão"
+    "pt-BR": "AgendaObras - Versão 1.1.0"
 },
   "changelog": [
-    "Sistema de validação de versão automática",
-    "Formatação de datas em formato brasileiro DD/MM/AAAA",
-    "Tratamento de dependências de tarefas",
-    "Interface de usuário com NiceGUI"
+    "Adicionado campo \"pedido_sap\" para obras (migração, interface e banco de dados).",
+    "Interface atualizada para permitir cadastro e edição do \"pedido_sap\".",
+    "Checklist de atividades agora atualiza dinamicamente ao marcar/desmarcar itens.",
+    "Melhorias na lógica de atualização de obras e checklist.",
+    "Ajustes e correções na estrutura do banco de dados."
   ]
 }

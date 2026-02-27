@@ -116,6 +116,14 @@ class MigrationManager:
             upgrade=self._migration_007_fix_date_formats,
             downgrade=None
         ))
+        
+        # Migração 8: Adicionar coluna pedido_sap
+        self.migrations.append(Migration(
+            version=8,
+            description="Adicionar coluna pedido_sap à tabela obras",
+            upgrade=self._migration_008_add_pedido_sap,
+            downgrade=None
+        ))
     
     def _migration_001_add_tipo_recorrencia(self, conn: sqlite3.Connection):
         """Adiciona coluna tipo_recorrencia à tabela checklist_templates"""
@@ -507,6 +515,26 @@ class MigrationManager:
         
         conn.commit()
         print("    ✅ Migração concluída: todas as datas estão no formato ISO")
+    
+    def _migration_008_add_pedido_sap(self, conn: sqlite3.Connection):
+        """Adiciona coluna pedido_sap à tabela obras"""
+        cursor = conn.cursor()
+        
+        # Verifica se coluna já existe
+        cursor.execute("PRAGMA table_info(obras)")
+        columns = [row[1] for row in cursor.fetchall()]
+        
+        if 'pedido_sap' not in columns:
+            # Adiciona coluna
+            cursor.execute('''
+                ALTER TABLE obras 
+                ADD COLUMN pedido_sap TEXT
+            ''')
+            print("    ✅ Coluna pedido_sap adicionada à tabela obras")
+        else:
+            print("    ⏭️  Coluna pedido_sap já existe, pulando...")
+        
+        conn.commit()
     
     def _get_applied_versions(self) -> List[int]:
         """Retorna lista de migrações já aplicadas"""

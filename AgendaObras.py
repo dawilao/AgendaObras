@@ -16,8 +16,9 @@ def index():
 if __name__ in {"__main__", "__mp_main__"}:
     ui.run(
         title='AgendaObras - Rastreador de Obras',
+        port=8080,
         native=False,
-        reload=True,
+        reload=False,
         language='pt-BR',
         favicon='🏗️',
         binding_refresh_interval=0.1,
