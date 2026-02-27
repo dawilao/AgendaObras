@@ -364,7 +364,7 @@ class NotificadorPrazos:
             )
             
             # Envia email
-            destinatario = self.email_service.config.email_remetente
+            destinatario = self.email_service.config.email_destinatarios
             sucesso, msg = self.email_service.enviar_email(destinatario, assunto, corpo_html)
             
             if not sucesso:
@@ -521,11 +521,15 @@ class NotificadorPrazos:
                 
                 data_envio = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
                 
+                # Converte a lista de destinatários em string para armazenamento (se for lista)
+                if isinstance(destinatarios, list):
+                    destinatarios_str = ", ".join(destinatarios)
+
                 cursor.execute('''
                     INSERT INTO historico_notificacoes 
                     (obra_id, tarefa_id, tipo_notificacao, data_envio, destinatarios, sucesso, mensagem_erro)
                     VALUES (?, ?, ?, ?, ?, ?, ?)
-                ''', (obra_id, tarefa_id, tipo, data_envio, destinatarios, 1 if sucesso else 0, erro))
+                ''', (obra_id, tarefa_id, tipo, data_envio, destinatarios_str, 1 if sucesso else 0, erro))
                 
                 conn.commit()
                 conn.close()

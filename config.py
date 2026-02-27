@@ -139,6 +139,7 @@ class EmailConfig:
                     self.smtp_user = data.get('smtp_user', self.smtp_user)
                     self.smtp_password = data.get('smtp_password', self.smtp_password)
                     self.email_remetente = data.get('email_remetente', self.email_remetente)
+                    self.email_destinatarios = data.get('email_destinatarios', [])
                     self.usar_tls = data.get('usar_tls', self.usar_tls)
                     print("✓ Configurações de email carregadas do arquivo .env")
                     return True
@@ -158,6 +159,7 @@ class EmailConfig:
         self.smtp_user = os.getenv('SMTP_USER', self.smtp_user)
         self.smtp_password = os.getenv('SMTP_PASSWORD', self.smtp_password)
         self.email_remetente = os.getenv('EMAIL_REMETENTE', self.email_remetente)
+        self.email_destinatarios = os.getenv('EMAIL_DESTINATARIOS', '').split(',') if os.getenv('EMAIL_DESTINATARIOS') else []
         usar_tls_env = os.getenv('USAR_TLS')
         if usar_tls_env is not None:
             self.usar_tls = usar_tls_env.lower() in ['true', '1', 'yes']
@@ -197,6 +199,7 @@ class EmailConfig:
             'smtp_user': self.smtp_user,
             'smtp_password': self.smtp_password,
             'email_remetente': self.email_remetente,
+            'email_destinatarios': self.email_destinatarios,
             'usar_tls': self.usar_tls
         }
     
@@ -209,6 +212,7 @@ class EmailConfig:
             smtp_user=data.get('smtp_user', ''),
             smtp_password=data.get('smtp_password', ''),
             email_remetente=data.get('email_remetente', ''),
+            email_destinatarios=data.get('email_destinatarios', []),
             usar_tls=data.get('usar_tls', True)
         )
     

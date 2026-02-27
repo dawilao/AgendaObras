@@ -41,7 +41,7 @@ class EmailService:
             msg = MIMEMultipart('alternative')
             msg['Subject'] = assunto
             msg['From'] = self.config.email_remetente
-            msg['To'] = destinatario
+            msg['To'] = ", ".join(destinatario)
             
             html_part = MIMEText(corpo_html, 'html', 'utf-8')
             msg.attach(html_part)
