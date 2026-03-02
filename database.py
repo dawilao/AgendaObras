@@ -645,6 +645,17 @@ class Database:
         conn.close()
         
         return dict(row) if row else None
+
+    def atualizar_data_critica(self, obra_id: int, campo: str, data: str):
+        """Atualiza apenas um campo de data crítica (data_assinatura ou data_aio) sem afetar outros campos"""
+        if campo not in ('data_assinatura', 'data_aio'):
+            raise ValueError(f"Campo de data crítica inválido: {campo}")
+        
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        cursor.execute(f'UPDATE obras SET {campo} = ? WHERE id = ?', (data or None, obra_id))
+        conn.commit()
+        conn.close()
     
     def marcar_item_checklist(self, item_id: int, concluido: bool) -> Optional[str]:
         """Marca/desmarca um item do checklist. Retorna trigger_ui se houver"""
@@ -653,6 +664,18 @@ class Database:
         
         trigger_ui = None
         
+        # Busca trigger_ui e obra_id (necessário tanto ao marcar quanto desmarcar)
+        cursor.execute('''
+            SELECT ct.trigger_ui, oc.obra_id 
+            FROM obra_checklist oc
+            JOIN checklist_templates ct ON oc.template_id = ct.id
+            WHERE oc.id = ?
+        ''', (item_id,))
+        row_info = cursor.fetchone()
+        obra_id = row_info['obra_id'] if row_info else None
+        if row_info and row_info['trigger_ui']:
+            trigger_ui = row_info['trigger_ui']
+        
         if concluido:
             data_conclusao = datetime.datetime.now().strftime('%Y-%m-%d')
             cursor.execute('''
@@ -660,18 +683,6 @@ class Database:
                 SET concluido = 1, data_conclusao = ?
                 WHERE id = ?
             ''', (data_conclusao, item_id))
-            
-            # Busca se tem trigger_ui
-            cursor.execute('''
-                SELECT ct.trigger_ui, oc.obra_id 
-                FROM obra_checklist oc
-                JOIN checklist_templates ct ON oc.template_id = ct.id
-                WHERE oc.id = ?
-            ''', (item_id,))
-            
-            row = cursor.fetchone()
-            if row and row['trigger_ui']:
-                trigger_ui = row['trigger_ui']
             
             # Desbloqueia tarefas dependentes
             cursor.execute('''
@@ -697,12 +708,63 @@ class Database:
                 WHERE id = ?
             ''', (item_id,))
             
-            # Rebloqueia tarefas dependentes
+            # Rebloqueia tarefas dependentes diretas (por depende_item_id)
             cursor.execute('''
                 UPDATE obra_checklist 
                 SET bloqueado = 1, data_limite = NULL
                 WHERE depende_item_id = ? AND concluido = 0
             ''', (item_id,))
+            
+            # Se tem trigger_ui, limpa a data correspondente e rebloqueia tarefas baseadas nela
+            if trigger_ui and obra_id:
+                # Mapa trigger_ui -> campo na tabela obras e base_calculo no checklist
+                trigger_map = {
+                    'data_assinatura': ('data_assinatura', 'assinatura'),
+                    'data_aio': ('data_aio', 'aio'),
+                }
+                if trigger_ui in trigger_map:
+                    campo_obra, base_calculo = trigger_map[trigger_ui]
+                    
+                    # Limpa a data na tabela obras
+                    cursor.execute(f'UPDATE obras SET {campo_obra} = NULL WHERE id = ?', (obra_id,))
+                    
+                    # Rebloqueia e limpa prazos de tarefas que dependem dessa data
+                    cursor.execute('''
+                        UPDATE obra_checklist 
+                        SET bloqueado = 1, data_limite = NULL, data_base_calculo = NULL
+                        WHERE obra_id = ? AND base_calculo = ? AND concluido = 0
+                    ''', (obra_id, base_calculo))
+                    
+                    # Tarefas com base_calculo dessa data que foram concluídas e têm trigger_ui
+                    # também devem ter seus efeitos cascateados (ex: desmarcar CONTRATO ASSINADO
+                    # limpa data_assinatura, que afeta SOLICITAR A DATA DA AIO que tem trigger_ui=data_aio)
+                    cursor.execute('''
+                        SELECT oc.id, ct.trigger_ui
+                        FROM obra_checklist oc
+                        JOIN checklist_templates ct ON oc.template_id = ct.id
+                        WHERE oc.obra_id = ? AND oc.base_calculo = ? AND oc.concluido = 1
+                        AND ct.trigger_ui IS NOT NULL
+                    ''', (obra_id, base_calculo))
+                    
+                    tarefas_cascata = cursor.fetchall()
+                    for tarefa_cascata in tarefas_cascata:
+                        # Desmarca a tarefa em cascata
+                        cursor.execute('''
+                            UPDATE obra_checklist 
+                            SET concluido = 0, data_conclusao = NULL
+                            WHERE id = ?
+                        ''', (tarefa_cascata['id'],))
+                        
+                        # Se essa tarefa cascateada também tem trigger_ui, limpa a data correspondente
+                        cascata_trigger = tarefa_cascata['trigger_ui']
+                        if cascata_trigger in trigger_map:
+                            campo_cascata, base_cascata = trigger_map[cascata_trigger]
+                            cursor.execute(f'UPDATE obras SET {campo_cascata} = NULL WHERE id = ?', (obra_id,))
+                            cursor.execute('''
+                                UPDATE obra_checklist 
+                                SET bloqueado = 1, data_limite = NULL, data_base_calculo = NULL
+                                WHERE obra_id = ? AND base_calculo = ? AND concluido = 0
+                            ''', (obra_id, base_cascata))
         
         conn.commit()
         conn.close()

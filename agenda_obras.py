@@ -528,7 +528,7 @@ class AgendaObras:
             
             with ui.row().classes('w-full gap-2'):
                 meses = ['Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho', 
-                         'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro']
+                        'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro']
                 mes_execucao_input = ui.select(meses, label='Mês de Execução').classes('w-1/2').props('outlined')
                 ano_execucao_input = ui.number(label='Ano', value=datetime.date.today().year, min=2020, max=2050, step=1).classes('w-1/2').props('outlined')
             
@@ -628,7 +628,7 @@ class AgendaObras:
         """Dialog para visualizar e editar obra com checklist"""
         obra = self.db.obter_obra(obra_id)
         checklist = self.db.obter_checklist(obra_id)
-        
+
         # Verificar se tarefas críticas estão concluídas para habilitar campos
         contrato_assinado_concluido = any(
             item['descricao'] == 'CONTRATO ASSINADO' and item['concluido'] 
@@ -638,7 +638,7 @@ class AgendaObras:
             item['descricao'] == 'SOLICITAR A DATA DA AIO' and item['concluido'] 
             for item in checklist
         )
-        
+
         with ui.dialog() as dialog, ui.card().style('min-width: 700px; max-width: 900px; padding: 20px; max-height: 90vh; overflow-y: auto;'):
             # Cabeçalho
             with ui.row().classes('w-full items-center justify-between'):
@@ -684,7 +684,7 @@ class AgendaObras:
                 mes_execucao_input = ui.select(meses, label='Mês de Execução', value=obra.get('mes_execucao')).classes('w-1/2').props('outlined')
                 ano_execucao_input = ui.number(label='Ano', value=obra.get('ano_execucao') or datetime.date.today().year, min=2020, max=2050, step=1).classes('w-1/2').props('outlined')
             
-            with ui.input('Data de início da obra', value=self.formatar_data_exibicao(obra.get('data_inicio') or ''), placeholder='dd/mm/aaaa').classes('w-full').props('outlined').tooltip('📅 Data em que a obra deve começar') as data_input:
+            with ui.input('Data de início da obra', value=self.formatar_data_exibicao(obra.get('data_inicio') or ''), placeholder='dd/mm/aaaa').classes('w-full').props('outlined').tooltip('📅 Data em que a obra deve começar. Este campo será preenchido pelo coordenador.') as data_input:
                 with ui.menu().props('no-parent-event') as menu:
                     with ui.date(value=obra.get('data_inicio') or '') as date_picker:
                         date_picker.on('update:model-value', lambda e: data_input.set_value(self.formatar_data_exibicao(e.args) if e.args else ''))
@@ -699,34 +699,18 @@ class AgendaObras:
             
             with ui.input('Data de Assinatura do Contrato', value=self.formatar_data_exibicao(obra.get('data_assinatura') or ''), placeholder='dd/mm/aaaa').classes('w-full').props(data_assinatura_props).tooltip(tooltip_assinatura) as data_assinatura_input:
                 if contrato_assinado_concluido:
-                    with ui.menu().props('no-parent-event') as menu_assinatura:
-                        with ui.date(value=obra.get('data_assinatura') or '') as date_picker_assinatura:
-                            date_picker_assinatura.on('update:model-value', lambda e: data_assinatura_input.set_value(self.formatar_data_exibicao(e.args) if e.args else ''))
-                            with ui.row().classes('justify-end'):
-                                ui.button('Fechar', on_click=menu_assinatura.close).props('flat')
-                    with data_assinatura_input.add_slot('append'):
-                        ui.icon('edit_calendar').on('click', menu_assinatura.open).classes('cursor-pointer')
-                else:
-                    with data_assinatura_input.add_slot('append'):
-                        ui.icon('lock').classes('cursor-not-allowed')
-            
+                    data_assinatura_input.on('update:model-value', lambda e: self.salvar_data_critica(dialog, obra_id, 'data_assinatura', e.value))
+            self._data_assinatura_input = data_assinatura_input
+
             # Data da AIO (condicional)
             data_aio_props = 'outlined' if aio_concluido else 'outlined disable'
             tooltip_aio = '📅 Data da Autorização de Início de Obra' if aio_concluido else '🔒 Complete a tarefa "SOLICITAR A DATA DA AIO" para desbloquear'
             
             with ui.input('Data da AIO', value=self.formatar_data_exibicao(obra.get('data_aio') or ''), placeholder='dd/mm/aaaa').classes('w-full').props(data_aio_props).tooltip(tooltip_aio) as data_aio_input:
                 if aio_concluido:
-                    with ui.menu().props('no-parent-event') as menu_aio:
-                        with ui.date(value=obra.get('data_aio') or '') as date_picker_aio:
-                            date_picker_aio.on('update:model-value', lambda e: data_aio_input.set_value(self.formatar_data_exibicao(e.args) if e.args else ''))
-                            with ui.row().classes('justify-end'):
-                                ui.button('Fechar', on_click=menu_aio.close).props('flat')
-                    with data_aio_input.add_slot('append'):
-                        ui.icon('edit_calendar').on('click', menu_aio.open).classes('cursor-pointer')
-                else:
-                    with data_aio_input.add_slot('append'):
-                        ui.icon('lock').classes('cursor-not-allowed')
-            
+                    data_aio_input.on('update:model-value', lambda e: self.salvar_data_critica(dialog, obra_id, 'data_aio', e.value))
+            self._data_aio_input = data_aio_input
+
             status_input = ui.select(
                 STATUS_OPTIONS,
                 label='Status',
@@ -873,6 +857,39 @@ class AgendaObras:
                                 self.abrir_dialog_data_critica(obra_id, trigger_ui, atualizar_checklist_fn)
                                 return
                             
+                            # Se desmarcou e tinha trigger_ui, limpa e desabilita o campo de data na UI
+                            if trigger_ui and not novo_valor:
+                                trigger_input_map = {
+                                    'data_assinatura': '_data_assinatura_input',
+                                    'data_aio': '_data_aio_input',
+                                }
+                                attr_name = trigger_input_map.get(trigger_ui)
+                                if attr_name and hasattr(self, attr_name):
+                                    input_ref = getattr(self, attr_name)
+                                    if input_ref:
+                                        try:
+                                            input_ref.set_value('')
+                                            input_ref.props('outlined disable')
+                                        except Exception:
+                                            pass
+                                
+                                # Se cascateou (ex: desmarcar CONTRATO ASSINADO afeta SOLICITAR A DATA DA AIO
+                                # que tem trigger_ui=data_aio), limpa também o campo cascateado
+                                cascata_map = {
+                                    'data_assinatura': 'data_aio',  # assinatura -> aio pode cascatear
+                                }
+                                cascata_trigger = cascata_map.get(trigger_ui)
+                                if cascata_trigger:
+                                    cascata_attr = trigger_input_map.get(cascata_trigger)
+                                    if cascata_attr and hasattr(self, cascata_attr):
+                                        cascata_ref = getattr(self, cascata_attr)
+                                        if cascata_ref:
+                                            try:
+                                                cascata_ref.set_value('')
+                                                cascata_ref.props('outlined disable')
+                                            except Exception:
+                                                pass
+                            
                             # Atualiza todo o checklist (inclui itens dependentes)
                             if atualizar_checklist_fn:
                                 ui.timer(0.05, atualizar_checklist_fn, once=True)
@@ -913,26 +930,26 @@ class AgendaObras:
                 elif bloqueado:
                     ui.label('Bloqueada').style('font-size: 12px; color: #999;')
     
-    def abrir_dialog_data_critica(self, obra_id: int, campo: str, atualizar_checklist_fn=None):
+    def abrir_dialog_data_critica(self, obra_id: int, campo: str, atualizar_checklist_fn=None, dialog_edicao=None):
         """Abre dialog para preencher datas críticas (data_assinatura ou data_aio)"""
         obra = self.db.obter_obra(obra_id)
-        
+
         # Define labels baseado no campo
         labels = {
             'data_assinatura': ('📝 Data de Assinatura do Contrato', 'Informe a data em que o contrato foi assinado:'),
             'data_aio': ('📅 Data da AIO (Autorização de Início de Obra)', 'Informe a data da Autorização de Início de Obra:')
         }
-        
+
         titulo, descricao = labels.get(campo, ('Preencher Data', 'Informe a data solicitada:'))
-        
+
         with ui.dialog() as dialog_data, ui.card().style('min-width: 400px; padding: 20px;'):
             ui.label(titulo).style('font-size: 18px; font-weight: bold; margin-bottom: 10px;')
             ui.label(descricao).style('color: #666; margin-bottom: 15px;')
-            
+
             # Date picker
             data_hoje_formatada = datetime.date.today().strftime('%d/%m/%Y')
             data_hoje_iso = datetime.date.today().strftime('%Y-%m-%d')
-            
+
             with ui.input('Data *', value=data_hoje_formatada, placeholder='dd/mm/aaaa').classes('w-full').props('outlined') as data_input:
                 with ui.menu().props('no-parent-event') as menu:
                     with ui.date(value=data_hoje_iso) as date_picker:
@@ -941,65 +958,88 @@ class AgendaObras:
                             ui.button('Fechar', on_click=menu.close).props('flat')
                 with data_input.add_slot('append'):
                     ui.icon('edit_calendar').on('click', menu.open).classes('cursor-pointer')
-            
+
             ui.label('Esta data crítica será usada para calcular prazos de tarefas dependentes.').style(
                 'font-size: 11px; color: #999; margin-top: 10px;'
             )
-            
+
             ui.separator()
-            
+
             # Botões de ação
             with ui.row().classes('w-full justify-end gap-2'):
                 def pular_data_critica():
                     dialog_data.close()
                     if atualizar_checklist_fn:
                         ui.timer(0.05, atualizar_checklist_fn, once=True)
+
                 ui.button('Pular por enquanto', on_click=pular_data_critica).props('flat')
+
                 ui.button('💾 Salvar e Recalcular', on_click=lambda: self.salvar_data_critica(
-                    dialog_data, obra_id, campo, data_input.value, atualizar_checklist_fn
+                    dialog_data, obra_id, campo, data_input.value, atualizar_checklist_fn, dialog_edicao
                 )).props('color=primary')
-        
-        dialog_data.open()
-    
-    def salvar_data_critica(self, dialog, obra_id: int, campo: str, data: str, atualizar_checklist_fn=None):
+
+            dialog_data.open()
+
+    def salvar_data_critica(self, dialog, obra_id: int, campo: str, data: str, atualizar_checklist_fn=None, dialog_edicao=None):
         """Salva data crítica e recalcula checklist"""
+        print(f"DEBUG: Iniciando salvar_data_critica com obra_id={obra_id}, campo={campo}, data={data}")
         if not data:
             self.notificar('⚠️ Informe uma data válida!', tipo='warning')
+            print("DEBUG: Data inválida fornecida.")
             return
-        
+
         try:
             # Converte data para formato ISO
             data = self.converter_data_para_iso(data)
-            
-            # Atualiza a obra com a nova data
-            obra = self.db.obter_obra(obra_id)
-            kwargs = {campo: data}
-            
-            self.db.atualizar_obra(
-                obra_id, obra['nome_contrato'], obra['cliente'], 
-                obra['valor_contrato'], obra['data_inicio'], obra['status'],
-                **kwargs
-            )
-            
+            print(f"DEBUG: Data convertida para formato ISO: {data}")
+
+            if campo not in ('data_assinatura', 'data_aio'):
+                raise ValueError(f"Campo desconhecido: {campo}")
+
+            # Atualiza APENAS o campo de data crítica (sem sobrescrever outros campos da obra)
+            self.db.atualizar_data_critica(obra_id, campo, data)
+            print(f"DEBUG: Campo {campo} atualizado com valor: {data}")
+
             # Recalcula checklist
             self.db.recalcular_checklist(obra_id, campo, data)
-            
-            # Fecha dialog
+            print(f"DEBUG: Checklist recalculado para campo={campo}, data={data}")
+
+            # Atualiza os inputs de data no dialog de edição imediatamente
+            # (usa referências armazenadas como atributos da instância)
+            data_formatada = self.formatar_data_exibicao(data)
+            if campo == 'data_assinatura':
+                if hasattr(self, '_data_assinatura_input') and self._data_assinatura_input:
+                    try:
+                        self._data_assinatura_input.set_value(data_formatada)
+                        self._data_assinatura_input.props('outlined')  # Desbloqueia o campo
+                        print("DEBUG: Campo data_assinatura atualizado no dialog de edição.")
+                    except Exception:
+                        print("DEBUG: Não foi possível atualizar data_assinatura_input (dialog pode ter sido fechado).")
+            elif campo == 'data_aio':
+                if hasattr(self, '_data_aio_input') and self._data_aio_input:
+                    try:
+                        self._data_aio_input.set_value(data_formatada)
+                        self._data_aio_input.props('outlined')  # Desbloqueia o campo
+                        print("DEBUG: Campo data_aio atualizado no dialog de edição.")
+                    except Exception:
+                        print("DEBUG: Não foi possível atualizar data_aio_input (dialog pode ter sido fechado).")
+
+            # Fecha o dialog de data crítica
             dialog.close()
-            
-            # Atualiza checklist dinamicamente
+            print("DEBUG: Dialog de data crítica fechado.")
+
+            # Atualiza checklist dinamicamente (com timer para evitar race condition)
             if atualizar_checklist_fn:
-                atualizar_checklist_fn()
-            
-            # Atualiza lista de obras
-            self.renderizar_obras()
-            
+                ui.timer(0.05, atualizar_checklist_fn, once=True)
+                print("DEBUG: Checklist será atualizado dinamicamente.")
+
             campo_label = 'Data de Assinatura' if campo == 'data_assinatura' else 'Data da AIO'
             self.notificar(f'✅ {campo_label} salva! Prazos recalculados.', tipo='positive')
-            
+
         except Exception as e:
             log_error(e, "agenda_obras", f"Salvar data crítica - campo: {campo}")
             self.notificar(f'❌ Erro ao salvar: {str(e)}', tipo='negative')
+            print(f"DEBUG: Erro ao salvar data crítica: {e}")
     
     def atualizar_obra_dialog(self, dialog, obra_id: int, nome: str, cliente: str,
                             valor: float, data_inicio: str, status: str, checklist_estados: Dict = None, 

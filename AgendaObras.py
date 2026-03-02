@@ -18,7 +18,7 @@ if __name__ in {"__main__", "__mp_main__"}:
         title='AgendaObras - Rastreador de Obras',
         port=8080,
         native=False,
-        reload=False,
+        reload=True,
         language='pt-BR',
         favicon='🏗️',
         binding_refresh_interval=0.1,
