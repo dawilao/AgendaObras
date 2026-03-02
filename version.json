@@ -1,17 +1,17 @@
 {
-  "version": "1.1.0",
-  "release_date": "2026-02-27",
-  "minimum_version": "1.1.0",
+  "version": "1.2.0",
+  "release_date": "2026-03-02",
+  "minimum_version": "1.2.0",
   "force_update": true,
   "download_url": "https://github.com/dawilao/AgendaObras/releases/latest",
   "release_notes": {
-    "pt-BR": "AgendaObras - Versão 1.1.0"
+    "pt-BR": "AgendaObras - Versão 1.2.0"
 },
   "changelog": [
-    "Adicionado campo \"pedido_sap\" para obras (migração, interface e banco de dados).",
-    "Interface atualizada para permitir cadastro e edição do \"pedido_sap\".",
-    "Checklist de atividades agora atualiza dinamicamente ao marcar/desmarcar itens.",
-    "Melhorias na lógica de atualização de obras e checklist.",
-    "Ajustes e correções na estrutura do banco de dados."
+    "Adicionado campo PEDIDO SAP.",
+    "Adicionado suporte à data de acionamento para cálculo de prazos, com a inclusão do campo DATA DE ACIONAMENTO.",
+    "Adicionado suporte para atualização de campos de datas críticas (`data_assinatura` e `data_aio`) sem afetar outros campos da obra.",
+    "Adicionado tratamento de erros e logs de depuração para facilitar o rastreamento de problemas.",
+    "Adicionado destinatário específico para alertas críticos."
   ]
 }

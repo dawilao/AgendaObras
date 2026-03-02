@@ -43,7 +43,7 @@ from error_logger import log_error
 
 
 # ========== Informações do Sistema ========== #
-VERSION = '1.1.0'
+VERSION = '1.2.0'
 
 # URL do repositório no GitHub
 GITHUB_REPO_URL = "https://github.com/dawilao/AgendaObras"
@@ -140,6 +140,7 @@ class EmailConfig:
                     self.smtp_password = data.get('smtp_password', self.smtp_password)
                     self.email_remetente = data.get('email_remetente', self.email_remetente)
                     self.email_destinatarios = data.get('email_destinatarios', [])
+                    self.email_critico = data.get('email_critico', '')
                     self.usar_tls = data.get('usar_tls', self.usar_tls)
                     print("✓ Configurações de email carregadas do arquivo .env")
                     return True
@@ -160,6 +161,7 @@ class EmailConfig:
         self.smtp_password = os.getenv('SMTP_PASSWORD', self.smtp_password)
         self.email_remetente = os.getenv('EMAIL_REMETENTE', self.email_remetente)
         self.email_destinatarios = os.getenv('EMAIL_DESTINATARIOS', '').split(',') if os.getenv('EMAIL_DESTINATARIOS') else []
+        self.email_critico = os.getenv('EMAIL_CRITICO', '')
         usar_tls_env = os.getenv('USAR_TLS')
         if usar_tls_env is not None:
             self.usar_tls = usar_tls_env.lower() in ['true', '1', 'yes']
@@ -200,13 +202,14 @@ class EmailConfig:
             'smtp_password': self.smtp_password,
             'email_remetente': self.email_remetente,
             'email_destinatarios': self.email_destinatarios,
+            'email_critico': getattr(self, 'email_critico', ''),
             'usar_tls': self.usar_tls
         }
     
     @classmethod
     def from_dict(cls, data: Dict) -> 'EmailConfig':
         """Cria instância a partir de dicionário"""
-        return cls(
+        config = cls(
             smtp_server=data.get('smtp_server', 'smtp.gmail.com'),
             smtp_port=data.get('smtp_port', 587),
             smtp_user=data.get('smtp_user', ''),
@@ -215,6 +218,8 @@ class EmailConfig:
             email_destinatarios=data.get('email_destinatarios', []),
             usar_tls=data.get('usar_tls', True)
         )
+        config.email_critico = data.get('email_critico', '')
+        return config
     
     def salvar(self, caminho: Optional[str] = None) -> bool:
         """

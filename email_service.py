@@ -171,7 +171,7 @@ class EmailService:
         conn.commit()
         conn.close()
     
-    def criar_email_agrupado_por_obra(self, obra_info: Dict, tarefas_agrupadas: Dict[str, List[Dict]]) -> Tuple[str, str]:
+    def criar_email_agrupado_por_obra(self, obra_info: Dict, tarefas_agrupadas: Dict[str, List[Dict]]) -> Tuple[str, str, bool]:
         """Cria HTML de email agrupado por obra com múltiplas tarefas
         
         Args:
@@ -348,4 +348,4 @@ class EmailService:
         else:
             assunto = f"⚠️ Obra {obra_info['nome_contrato']} - {total_tarefas} {texto_tarefas} precisam de atenção"
         
-        return (assunto, corpo_html)
+        return (assunto, corpo_html, tem_critico)

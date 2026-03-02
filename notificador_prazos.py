@@ -358,13 +358,18 @@ class NotificadorPrazos:
         
         # Gera email agrupado
         try:
-            assunto, corpo_html = self.email_service.criar_email_agrupado_por_obra(
+            assunto, corpo_html, tem_critico = self.email_service.criar_email_agrupado_por_obra(
                 obra_info, 
                 tarefas_com_conteudo
             )
             
-            # Envia email
-            destinatario = self.email_service.config.email_destinatarios
+            # Monta lista de destinatários (adiciona email_critico para alertas críticos)
+            destinatario = list(self.email_service.config.email_destinatarios)
+            if tem_critico:
+                email_critico = getattr(self.email_service.config, 'email_critico', '')
+                if email_critico and email_critico not in destinatario:
+                    destinatario.append(email_critico)
+                    print(f"📧 Email crítico: adicionando {email_critico} como destinatário")
             sucesso, msg = self.email_service.enviar_email(destinatario, assunto, corpo_html)
             
             if not sucesso:
