@@ -53,7 +53,8 @@ class Database:
                 ano_execucao INTEGER,
                 data_conclusao TEXT,
                 data_assinatura TEXT,
-                data_aio TEXT
+                data_aio TEXT,
+                data_acionamento TEXT
             )
         ''')
         
@@ -186,6 +187,7 @@ class Database:
             data_conclusao = kwargs.get('data_conclusao', None) or None
             data_assinatura = kwargs.get('data_assinatura', None) or None
             data_aio = kwargs.get('data_aio', None) or None
+            data_acionamento = kwargs.get('data_acionamento', None) or None
             
             # Converte string vazia de data_inicio para None
             data_inicio = data_inicio or None
@@ -196,11 +198,13 @@ class Database:
             cursor.execute('''
                 INSERT INTO obras (nome_contrato, cliente, valor_contrato, data_inicio, status,
                                  contrato_ic, pedido_sap, prefixo_agencia, servico, valor_parceiro, valor_percentual,
-                                 total_obra, mes_execucao, ano_execucao, data_conclusao, data_assinatura, data_aio, data_criacao)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                 total_obra, mes_execucao, ano_execucao, data_conclusao, data_assinatura, data_aio,
+                                 data_acionamento, data_criacao)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ''', (nome_contrato, cliente, valor_contrato, data_inicio, status,
                   contrato_ic, pedido_sap, prefixo_agencia, servico, valor_parceiro, valor_percentual,
-                  total_obra, mes_execucao, ano_execucao, data_conclusao, data_assinatura, data_aio, data_criacao))
+                  total_obra, mes_execucao, ano_execucao, data_conclusao, data_assinatura, data_aio,
+                  data_acionamento, data_criacao))
             
             obra_id = cursor.lastrowid
             
@@ -208,7 +212,8 @@ class Database:
             obra_dados = {
                 'data_inicio': data_inicio,
                 'data_assinatura': data_assinatura,
-                'data_aio': data_aio
+                'data_aio': data_aio,
+                'data_acionamento': data_acionamento
             }
             
             # Cria checklist automático para a obra
@@ -240,6 +245,7 @@ class Database:
         data_inicio = obra_dados.get('data_inicio') or None
         data_assinatura = obra_dados.get('data_assinatura') or None
         data_aio = obra_dados.get('data_aio') or None
+        data_acionamento = obra_dados.get('data_acionamento') or None
         
         # Verifica se a obra já começou
         hoje = datetime.date.today()
@@ -281,8 +287,11 @@ class Database:
             
             # Calcula data_limite baseado em base_calculo
             if template['base_calculo'] == 'criacao':
-                # Base na data de criação da obra (hoje)
-                data_base = datetime.date.today().strftime('%Y-%m-%d')
+                # Base na data de acionamento (se informada) ou data de hoje como fallback
+                if data_acionamento and data_acionamento.strip():
+                    data_base = data_acionamento
+                else:
+                    data_base = datetime.date.today().strftime('%Y-%m-%d')
                 data_obj = datetime.datetime.strptime(data_base, '%Y-%m-%d')
                 data_limite = data_obj + datetime.timedelta(days=template['prazo_dias'])
                     
@@ -411,7 +420,7 @@ class Database:
             cursor = conn.cursor()
         
             # Busca dados antigos para comparação
-            cursor.execute('SELECT data_inicio, data_assinatura, data_aio FROM obras WHERE id = ?', (obra_id,))
+            cursor.execute('SELECT data_inicio, data_assinatura, data_aio, data_acionamento FROM obras WHERE id = ?', (obra_id,))
             obra_antiga = cursor.fetchone()
             
             # Extrai campos adicionais e converte strings vazias para None
@@ -427,6 +436,7 @@ class Database:
             data_conclusao = kwargs.get('data_conclusao', None) or None
             data_assinatura = kwargs.get('data_assinatura', None) or None
             data_aio = kwargs.get('data_aio', None) or None
+            data_acionamento = kwargs.get('data_acionamento', None) or None
             
             # Converte string vazia de data_inicio para None
             data_inicio = data_inicio or None
@@ -437,11 +447,11 @@ class Database:
                     data_inicio = ?, status = ?, contrato_ic = ?, pedido_sap = ?, prefixo_agencia = ?,
                     servico = ?, valor_parceiro = ?, valor_percentual = ?, total_obra = ?,
                     mes_execucao = ?, ano_execucao = ?, data_conclusao = ?, 
-                    data_assinatura = ?, data_aio = ?
+                    data_assinatura = ?, data_aio = ?, data_acionamento = ?
                 WHERE id = ?
             ''', (nome_contrato, cliente, valor_contrato, data_inicio, status,
                   contrato_ic, pedido_sap, prefixo_agencia, servico, valor_parceiro, valor_percentual, total_obra,
-                  mes_execucao, ano_execucao, data_conclusao, data_assinatura, data_aio, obra_id))
+                  mes_execucao, ano_execucao, data_conclusao, data_assinatura, data_aio, data_acionamento, obra_id))
             
             # Verifica se houve mudança em datas críticas
             requer_confirmacao = False
@@ -452,6 +462,15 @@ class Database:
                     cursor.execute('''
                         SELECT COUNT(*) as count FROM obra_checklist 
                         WHERE obra_id = ? AND base_calculo = 'inicio'
+                    ''', (obra_id,))
+                    if cursor.fetchone()['count'] > 0:
+                        requer_confirmacao = True
+                
+                # Verifica mudança em data_acionamento
+                if obra_antiga['data_acionamento'] != data_acionamento:
+                    cursor.execute('''
+                        SELECT COUNT(*) as count FROM obra_checklist 
+                        WHERE obra_id = ? AND base_calculo = 'criacao'
                     ''', (obra_id,))
                     if cursor.fetchone()['count'] > 0:
                         requer_confirmacao = True
@@ -510,7 +529,8 @@ class Database:
         base_calculo_map = {
             'data_assinatura': 'assinatura',
             'data_aio': 'aio',
-            'data_inicio': 'inicio'
+            'data_inicio': 'inicio',
+            'data_acionamento': 'criacao'
         }
         
         base_calculo = base_calculo_map.get(campo_atualizado)

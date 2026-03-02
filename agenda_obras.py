@@ -507,6 +507,16 @@ class AgendaObras:
                 pedido_sap_input = ui.input(label='Pedido SAP').classes('w-full').props('outlined')
                 prefixo_agencia_input = ui.input(label='Prefixo Agência').classes('w-full').props('outlined')
             
+            # Date picker - Data de Acionamento
+            with ui.input('Data de Acionamento', value='', placeholder='dd/mm/aaaa').classes('w-full').props('outlined').tooltip('📅 Data usada como base para calcular prazos iniciais (ex: RETORNO PROJETO E ORÇAMENTO). Se não informada, será usada a data de criação do card.') as data_acionamento_input:
+                with ui.menu().props('no-parent-event') as menu_acionamento:
+                    with ui.date(value='') as date_picker_acionamento:
+                        date_picker_acionamento.on('update:model-value', lambda e: data_acionamento_input.set_value(self.formatar_data_exibicao(e.args) if e.args else ''))
+                        with ui.row().classes('justify-end'):
+                            ui.button('Fechar', on_click=menu_acionamento.close).props('flat')
+                with data_acionamento_input.add_slot('append'):
+                    ui.icon('edit_calendar').on('click', menu_acionamento.open).classes('cursor-pointer')
+
             servico_input = ui.input(label='Serviço').classes('w-full').props('outlined')
             
             ui.separator().classes('my-4')
@@ -585,7 +595,8 @@ class AgendaObras:
                     mes_execucao=mes_execucao_input.value or None,
                     ano_execucao=int(ano_execucao_input.value) if ano_execucao_input.value else None,
                     data_assinatura=data_assinatura_input.value or None,
-                    data_aio=data_aio_input.value or None
+                    data_aio=data_aio_input.value or None,
+                    data_acionamento=data_acionamento_input.value or None
                 )).props('color=primary')
             
         dialog.open()
@@ -611,6 +622,8 @@ class AgendaObras:
                 kwargs['data_aio'] = self.converter_data_para_iso(kwargs['data_aio'])
             if 'data_conclusao' in kwargs:
                 kwargs['data_conclusao'] = self.converter_data_para_iso(kwargs['data_conclusao'])
+            if 'data_acionamento' in kwargs:
+                kwargs['data_acionamento'] = self.converter_data_para_iso(kwargs['data_acionamento'])
             
             # Cria obra com todos os campos
             obra_id = self.db.criar_obra(nome, cliente, valor, data_inicio, status, **kwargs)
@@ -658,7 +671,17 @@ class AgendaObras:
                     contrato_ic_input = ui.input(label='Contrato (IC)', value=obra.get('contrato_ic') or '').classes('w-full').props('outlined')
                     pedido_sap_input = ui.input(label='Pedido SAP', value=obra.get('pedido_sap') or '').classes('w-full').props('outlined')
                     prefixo_agencia_input = ui.input(label='Prefixo Agência', value=obra.get('prefixo_agencia') or '').classes('w-full').props('outlined')
-                
+
+                # Data de Acionamento
+                with ui.input('Data de Acionamento', value=self.formatar_data_exibicao(obra.get('data_acionamento') or ''), placeholder='dd/mm/aaaa').classes('w-full').props('outlined').tooltip('📅 Data usada como base para calcular prazos iniciais. Se alterada, os prazos das tarefas dependentes serão recalculados.') as data_acionamento_input:
+                    with ui.menu().props('no-parent-event') as menu_acionamento:
+                        with ui.date(value=obra.get('data_acionamento') or '') as date_picker_acionamento:
+                            date_picker_acionamento.on('update:model-value', lambda e: data_acionamento_input.set_value(self.formatar_data_exibicao(e.args) if e.args else ''))
+                            with ui.row().classes('justify-end'):
+                                ui.button('Fechar', on_click=menu_acionamento.close).props('flat')
+                    with data_acionamento_input.add_slot('append'):
+                        ui.icon('edit_calendar').on('click', menu_acionamento.open).classes('cursor-pointer')
+
                 servico_input = ui.input(label='Serviço', value=obra.get('servico') or '').classes('w-full').props('outlined')
             
             ui.separator().classes('my-4')
@@ -762,7 +785,8 @@ class AgendaObras:
                         mes_execucao=mes_execucao_input.value,
                         ano_execucao=int(ano_execucao_input.value) if ano_execucao_input.value else None,
                         data_assinatura=data_assinatura_input.value if data_assinatura_input.value else None,
-                        data_aio=data_aio_input.value if data_aio_input.value else None
+                        data_aio=data_aio_input.value if data_aio_input.value else None,
+                        data_acionamento=data_acionamento_input.value if data_acionamento_input.value else None
                     )).props('color=primary')
         
         dialog.open()
@@ -795,6 +819,8 @@ class AgendaObras:
                 motivo_bloqueio = '🔒 Aguardando data de assinatura do contrato'
             elif base_calculo == 'aio':
                 motivo_bloqueio = '🔒 Aguardando data da AIO'
+            elif base_calculo == 'criacao':
+                motivo_bloqueio = '🔒 Aguardando data de acionamento'
             elif base_calculo == 'fim_tarefa':
                 motivo_bloqueio = '🔒 Aguardando conclusão de tarefa dependente'
             else:
@@ -1062,6 +1088,8 @@ class AgendaObras:
                 kwargs['data_aio'] = self.converter_data_para_iso(kwargs['data_aio'])
             if 'data_conclusao' in kwargs:
                 kwargs['data_conclusao'] = self.converter_data_para_iso(kwargs['data_conclusao'])
+            if 'data_acionamento' in kwargs:
+                kwargs['data_acionamento'] = self.converter_data_para_iso(kwargs['data_acionamento'])
             
             # Busca dados antigos para comparação
             obra_antiga = self.db.obter_obra(obra_id)
@@ -1071,24 +1099,37 @@ class AgendaObras:
             
             # Verifica se precisa recalcular datas
             recalculou = False
+            datas_recalculadas = []
+
             if obra_antiga['data_inicio'] != data_inicio:
                 self.db.recalcular_checklist(obra_id, 'data_inicio', data_inicio)
-                self.notificar('🔄 Prazos recalculados com base na nova data de início', tipo='info')
+                datas_recalculadas.append('data de início')
                 recalculou = True
             
+            # Verifica se data_acionamento foi alterada
+            data_acionamento_nova = kwargs.get('data_acionamento')
+            if data_acionamento_nova and obra_antiga.get('data_acionamento') != data_acionamento_nova:
+                self.db.recalcular_checklist(obra_id, 'data_acionamento', data_acionamento_nova)
+                datas_recalculadas.append('data de acionamento')
+                recalculou = True
+
             # Verifica se data_assinatura foi alterada
             data_assinatura_nova = kwargs.get('data_assinatura')
             if data_assinatura_nova and obra_antiga.get('data_assinatura') != data_assinatura_nova:
                 self.db.recalcular_checklist(obra_id, 'data_assinatura', data_assinatura_nova)
-                self.notificar('🔄 Prazos recalculados com base na data de assinatura', tipo='info')
+                datas_recalculadas.append('data de assinatura')
                 recalculou = True
             
             # Verifica se data_aio foi alterada
             data_aio_nova = kwargs.get('data_aio')
             if data_aio_nova and obra_antiga.get('data_aio') != data_aio_nova:
                 self.db.recalcular_checklist(obra_id, 'data_aio', data_aio_nova)
-                self.notificar('🔄 Prazos recalculados com base na data da AIO', tipo='info')
+                datas_recalculadas.append('data da AIO')
                 recalculou = True
+
+            if datas_recalculadas:
+                bases = ' e '.join(datas_recalculadas) if len(datas_recalculadas) <= 2 else ', '.join(datas_recalculadas[:-1]) + ' e ' + datas_recalculadas[-1]
+                self.notificar(f'🔄 Prazos recalculados com base na {bases}', tipo='info')
             
             # Os checkboxes já salvam no banco instantaneamente via on_value_change,
             # então não é necessário re-salvar aqui.

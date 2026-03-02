@@ -124,6 +124,14 @@ class MigrationManager:
             upgrade=self._migration_008_add_pedido_sap,
             downgrade=None
         ))
+        
+        # Migração 9: Adicionar coluna data_acionamento
+        self.migrations.append(Migration(
+            version=9,
+            description="Adicionar coluna data_acionamento à tabela obras",
+            upgrade=self._migration_009_add_data_acionamento,
+            downgrade=None
+        ))
     
     def _migration_001_add_tipo_recorrencia(self, conn: sqlite3.Connection):
         """Adiciona coluna tipo_recorrencia à tabela checklist_templates"""
@@ -533,6 +541,35 @@ class MigrationManager:
             print("    ✅ Coluna pedido_sap adicionada à tabela obras")
         else:
             print("    ⏭️  Coluna pedido_sap já existe, pulando...")
+        
+        conn.commit()
+    
+    def _migration_009_add_data_acionamento(self, conn: sqlite3.Connection):
+        """Adiciona coluna data_acionamento à tabela obras"""
+        cursor = conn.cursor()
+        
+        # Verifica se coluna já existe
+        cursor.execute("PRAGMA table_info(obras)")
+        columns = [row[1] for row in cursor.fetchall()]
+        
+        if 'data_acionamento' not in columns:
+            cursor.execute('''
+                ALTER TABLE obras 
+                ADD COLUMN data_acionamento TEXT
+            ''')
+            print("    ✅ Coluna data_acionamento adicionada à tabela obras")
+            
+            # Para obras existentes: preenche data_acionamento com a data de criação (fallback)
+            cursor.execute('''
+                UPDATE obras 
+                SET data_acionamento = SUBSTR(data_criacao, 1, 10)
+                WHERE data_acionamento IS NULL AND data_criacao IS NOT NULL
+            ''')
+            updated = cursor.rowcount
+            if updated > 0:
+                print(f"    ✅ {updated} obra(s) existente(s) preenchida(s) com data_criacao como fallback")
+        else:
+            print("    ⏭️  Coluna data_acionamento já existe, pulando...")
         
         conn.commit()
     
