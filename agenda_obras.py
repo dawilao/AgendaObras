@@ -1068,8 +1068,7 @@ class AgendaObras:
             tooltip_assinatura = '📅 Data de assinatura do contrato' if contrato_assinado_concluido else '🔒 Complete a tarefa "CONTRATO ASSINADO" para desbloquear'
             
             with ui.input('Data de Assinatura do Contrato', value=self.formatar_data_exibicao(obra.get('data_assinatura') or ''), placeholder='dd/mm/aaaa').classes('w-full').props(data_assinatura_props).tooltip(tooltip_assinatura) as data_assinatura_input:
-                if contrato_assinado_concluido:
-                    data_assinatura_input.on('update:model-value', lambda e: self.salvar_data_critica(dialog, obra_id, 'data_assinatura', e.value))
+                pass
             self._data_assinatura_input = data_assinatura_input
 
             # Data da AIO (condicional)
@@ -1077,8 +1076,7 @@ class AgendaObras:
             tooltip_aio = '📅 Data da Autorização de Início de Obra' if aio_concluido else '🔒 Complete a tarefa "SOLICITAR A DATA DA AIO" para desbloquear'
             
             with ui.input('Data da AIO', value=self.formatar_data_exibicao(obra.get('data_aio') or ''), placeholder='dd/mm/aaaa').classes('w-full').props(data_aio_props).tooltip(tooltip_aio) as data_aio_input:
-                if aio_concluido:
-                    data_aio_input.on('update:model-value', lambda e: self.salvar_data_critica(dialog, obra_id, 'data_aio', e.value))
+                pass
             self._data_aio_input = data_aio_input
 
             status_input = ui.select(
@@ -1138,16 +1136,16 @@ class AgendaObras:
         
         dialog.open()
         
-        # Após abrir o dialog, verifica se há datas críticas pendentes
-        # (tarefas concluídas mas datas não preenchidas)
-        datas_pendentes = []
+        # Verifica se há datas críticas pendentes (tarefas concluídas mas datas não preenchidas)
+        datas_pendentes = {}
         if contrato_assinado_concluido and not (obra.get('data_assinatura') or '').strip():
-            datas_pendentes.append('data_assinatura')
+            datas_pendentes['data_assinatura'] = '📝 Data de Assinatura do Contrato'
         if aio_concluido and not (obra.get('data_aio') or '').strip():
-            datas_pendentes.append('data_aio')
+            datas_pendentes['data_aio'] = '📅 Data da AIO (Autorização de Início de Obra)'
         
-        for campo in datas_pendentes:
-            self.abrir_dialog_data_critica(obra_id, campo, atualizar_checklist)
+        # Se há datas pendentes, abre um único dialog consolidado
+        if datas_pendentes:
+            self.abrir_dialog_datas_criticas_consolidado(obra_id, datas_pendentes, atualizar_checklist)
 
     def criar_item_checklist_editavel(self, item: Dict, checklist_estados: Dict, obra_id: int,
                                        atualizar_checklist_fn=None):
@@ -1303,8 +1301,95 @@ class AgendaObras:
                 elif bloqueado:
                     ui.label('Bloqueada').style('font-size: 12px; color: #999;')
     
+    def abrir_dialog_datas_criticas_consolidado(self, obra_id: int, datas_pendentes: Dict[str, str], atualizar_checklist_fn=None):
+        """Abre dialog consolidado para preencher múltiplas datas críticas de uma vez."""
+        with ui.dialog() as dialog_data, ui.card().style('min-width: 450px; max-width: 550px; padding: 25px;'):
+            ui.label('⏰ Datas Críticas Pendentes').style('font-size: 20px; font-weight: bold; margin-bottom: 10px;')
+            ui.label('Complete as informações para que os prazos das tarefas possam ser calculados corretamente:').style(
+                'color: #666; margin-bottom: 15px; font-size: 14px;'
+            )
+            
+            # Dicionário para armazenar os inputs de data
+            data_inputs = {}
+            data_hoje_iso = datetime.date.today().strftime('%Y-%m-%d')
+            data_hoje_formatada = datetime.date.today().strftime('%d/%m/%Y')
+            
+            # Cria um campo de data para cada data pendente
+            for campo, label in datas_pendentes.items():
+                ui.label(label).style('font-size: 14px; font-weight: bold; margin-top: 10px; color: #1976d2;')
+                
+                with ui.input('Data *', value=data_hoje_formatada, placeholder='dd/mm/aaaa').classes('w-full').props('outlined') as data_input:
+                    with ui.menu().props('no-parent-event') as menu:
+                        with ui.date(value=data_hoje_iso) as date_picker:
+                            date_picker.on('update:model-value', lambda e, inp=data_input: inp.set_value(
+                                self.formatar_data_exibicao(e.args) if e.args else ''
+                            ))
+                            with ui.row().classes('justify-end'):
+                                ui.button('Fechar', on_click=menu.close).props('flat')
+                    with data_input.add_slot('append'):
+                        ui.icon('edit_calendar').on('click', menu.open).classes('cursor-pointer')
+                
+                data_inputs[campo] = data_input
+            
+            ui.label('Estas datas críticas serão usadas para calcular prazos de tarefas dependentes.').style(
+                'font-size: 11px; color: #999; margin-top: 15px; padding: 10px; background-color: #f5f5f5; border-radius: 4px;'
+            )
+            
+            ui.separator()
+            
+            # Botões de ação
+            with ui.row().classes('w-full justify-end gap-2'):
+                def pular_datas():
+                    dialog_data.close()
+                
+                ui.button('Pular por enquanto', on_click=pular_datas).props('flat')
+                
+                def salvar_todas_datas():
+                    """Valida e salva todas as datas críticas."""
+                    # Valida se todos os campos foram preenchidos
+                    for campo, data_input in data_inputs.items():
+                        if not data_input.value or not data_input.value.strip():
+                            self.notificar(f'⚠️ Informe a data para {datas_pendentes[campo]}', tipo='warning')
+                            return
+                    
+                    # Salva todas as datas
+                    try:
+                        for campo, data_input in data_inputs.items():
+                            data = self.converter_data_para_iso(data_input.value)
+                            self.db.atualizar_data_critica(obra_id, campo, data)
+                            self.db.recalcular_checklist(obra_id, campo, data)
+                            
+                            # Atualiza o input visual se a referência ainda existe
+                            if campo == 'data_assinatura' and hasattr(self, '_data_assinatura_input'):
+                                try:
+                                    self._data_assinatura_input.set_value(self.formatar_data_exibicao(data))
+                                except Exception:
+                                    pass
+                            elif campo == 'data_aio' and hasattr(self, '_data_aio_input'):
+                                try:
+                                    self._data_aio_input.set_value(self.formatar_data_exibicao(data))
+                                except Exception:
+                                    pass
+                        
+                        dialog_data.close()
+                        
+                        # Atualiza checklist dinamicamente
+                        if atualizar_checklist_fn:
+                            ui.timer(0.05, atualizar_checklist_fn, once=True)
+                        
+                        self.notificar('✅ Datas críticas salvas! Prazos recalculados.', tipo='positive')
+                    
+                    except Exception as e:
+                        log_error(e, "agenda_obras", "Salvar datas críticas consolidado")
+                        self.notificar(f'❌ Erro ao salvar: {str(e)}', tipo='negative')
+                
+                ui.button('💾 Salvar Datas', on_click=salvar_todas_datas).props('color=primary')
+            
+            dialog_data.open()
+
     def abrir_dialog_data_critica(self, obra_id: int, campo: str, atualizar_checklist_fn=None, dialog_edicao=None):
-        """Abre dialog para preencher datas críticas (data_assinatura ou data_aio)"""
+        """Abre dialog para preencher datas críticas (data_assinatura ou data_aio)
+        [DEPRECADO] - Use abrir_dialog_datas_criticas_consolidado para múltiplas datas."""
         obra = self.db.obter_obra(obra_id)
 
         # Define labels baseado no campo
@@ -1355,56 +1440,42 @@ class AgendaObras:
 
     def salvar_data_critica(self, dialog, obra_id: int, campo: str, data: str, atualizar_checklist_fn=None, dialog_edicao=None):
         """Salva data crítica e recalcula checklist"""
-        print(f"DEBUG: Iniciando salvar_data_critica com obra_id={obra_id}, campo={campo}, data={data}")
         if not data:
             self.notificar('⚠️ Informe uma data válida!', tipo='warning')
-            print("DEBUG: Data inválida fornecida.")
             return
 
         try:
             # Converte data para formato ISO
-            data = self.converter_data_para_iso(data)
-            print(f"DEBUG: Data convertida para formato ISO: {data}")
+            data_iso = self.converter_data_para_iso(data)
 
             if campo not in ('data_assinatura', 'data_aio'):
                 raise ValueError(f"Campo desconhecido: {campo}")
 
-            # Atualiza APENAS o campo de data crítica (sem sobrescrever outros campos da obra)
-            self.db.atualizar_data_critica(obra_id, campo, data)
-            print(f"DEBUG: Campo {campo} atualizado com valor: {data}")
+            # Atualiza APENAS o campo de data crítica
+            self.db.atualizar_data_critica(obra_id, campo, data_iso)
 
             # Recalcula checklist
-            self.db.recalcular_checklist(obra_id, campo, data)
-            print(f"DEBUG: Checklist recalculado para campo={campo}, data={data}")
+            self.db.recalcular_checklist(obra_id, campo, data_iso)
 
             # Atualiza os inputs de data no dialog de edição imediatamente
-            # (usa referências armazenadas como atributos da instância)
-            data_formatada = self.formatar_data_exibicao(data)
-            if campo == 'data_assinatura':
-                if hasattr(self, '_data_assinatura_input') and self._data_assinatura_input:
-                    try:
-                        self._data_assinatura_input.set_value(data_formatada)
-                        self._data_assinatura_input.props('outlined')  # Desbloqueia o campo
-                        print("DEBUG: Campo data_assinatura atualizado no dialog de edição.")
-                    except Exception:
-                        print("DEBUG: Não foi possível atualizar data_assinatura_input (dialog pode ter sido fechado).")
-            elif campo == 'data_aio':
-                if hasattr(self, '_data_aio_input') and self._data_aio_input:
-                    try:
-                        self._data_aio_input.set_value(data_formatada)
-                        self._data_aio_input.props('outlined')  # Desbloqueia o campo
-                        print("DEBUG: Campo data_aio atualizado no dialog de edição.")
-                    except Exception:
-                        print("DEBUG: Não foi possível atualizar data_aio_input (dialog pode ter sido fechado).")
+            data_formatada = self.formatar_data_exibicao(data_iso)
+            if campo == 'data_assinatura' and hasattr(self, '_data_assinatura_input'):
+                try:
+                    self._data_assinatura_input.set_value(data_formatada)
+                except Exception:
+                    pass
+            elif campo == 'data_aio' and hasattr(self, '_data_aio_input'):
+                try:
+                    self._data_aio_input.set_value(data_formatada)
+                except Exception:
+                    pass
 
             # Fecha o dialog de data crítica
             dialog.close()
-            print("DEBUG: Dialog de data crítica fechado.")
 
-            # Atualiza checklist dinamicamente (com timer para evitar race condition)
+            # Atualiza checklist dinamicamente
             if atualizar_checklist_fn:
                 ui.timer(0.05, atualizar_checklist_fn, once=True)
-                print("DEBUG: Checklist será atualizado dinamicamente.")
 
             campo_label = 'Data de Assinatura' if campo == 'data_assinatura' else 'Data da AIO'
             self.notificar(f'✅ {campo_label} salva! Prazos recalculados.', tipo='positive')
@@ -1412,7 +1483,6 @@ class AgendaObras:
         except Exception as e:
             log_error(e, "agenda_obras", f"Salvar data crítica - campo: {campo}")
             self.notificar(f'❌ Erro ao salvar: {str(e)}', tipo='negative')
-            print(f"DEBUG: Erro ao salvar data crítica: {e}")
     
     def atualizar_obra_dialog(self, dialog, obra_id: int, nome: str, cliente: str,
                             valor: float, data_inicio: str, status: str, checklist_estados: Dict = None, 
