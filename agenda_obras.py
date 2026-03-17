@@ -3,9 +3,10 @@ Módulo da interface principal do sistema AgendaObras.
 Contém a classe AgendaObras com toda a lógica da interface gráfica usando NiceGUI.
 """
 
-from nicegui import ui
+from nicegui import ui, app
 import datetime
-from typing import Dict
+from secrets import randbelow
+from typing import Dict, List
 from database import Database
 from email_service import EmailService
 from obras_helper import ObrasHelper
@@ -14,6 +15,8 @@ from notificador_prazos import NotificadorPrazos
 from version_checker import VersionChecker
 from config import VERSION
 from error_logger import log_error
+from auth_middleware import obter_usuario_logado, atualizar_usuario_sessao
+from auth_database import AuthDatabase
 
 # Valores de status padrão (usado tanto no banco quanto na interface)
 STATUS_OPTIONS = ['Não Iniciada', 'Em Andamento', 'Atrasada', 'Concluída']
@@ -241,13 +244,15 @@ class AgendaObras:
     # ========== UI ========== #
     def header(self):
         """Cabeçalho da aplicação"""
+        usuario = obter_usuario_logado()
+
         with ui.header().classes('items-center').style('background-color: #1976d2; padding: 15px;'):
             ui.label('🏗️ AgendaObras').style(
                 'font-size: 28px; color: white; font-weight: bold; margin-right: 30px;'
             )
             
-            ui.button('➕ Nova Obra', on_click=self.nova_entrada).props('flat').style(
-                'color: white; font-weight: bold; margin-right: 10px;'
+            ui.button('➕ Nova Obra', on_click=self.nova_entrada).props('flat text-color=white').style(
+                'font-weight: bold; margin-right: 10px; font-size: 14px;'
             )
             
             # Campo de pesquisa
@@ -259,9 +264,175 @@ class AgendaObras:
             
             ui.space()
             
-            ui.button('🔄 Atualizar', on_click=self.atualizar_dados).props('flat').style(
-                'color: white; font-weight: bold;'
+            ui.button('🔄 Atualizar', on_click=self.atualizar_dados).props('flat text-color=white').style(
+                'font-weight: bold; font-size: 14px;'
             )
+
+            # Gerenciar usuários (apenas admin)
+            if usuario.get('is_admin'):
+                ui.button('👥 Usuários', on_click=self.abrir_gerenciar_usuarios).props('flat text-color=white').style(
+                    'font-weight: bold; margin-left: 5px; font-size: 14px;'
+                )
+
+            # Info do usuário logado (clicável) + ações
+            with ui.row().classes('items-center gap-2').style('margin-left: 10px;'):
+                # Armazena referência ao botão do usuário para atualização dinâmica
+                self.user_button = ui.button(
+                    f'👤 {usuario.get("nome", "")} {usuario.get("sobrenome", "")}',
+                    on_click=self.abrir_perfil_usuario
+                ).props('flat text-color=white').style(
+                    'font-size: 14px; font-weight: 500;'
+                )
+                ui.button('Sair', on_click=lambda: ui.navigate.to('/logout')).props('flat dense text-color=white').style(
+                    'font-size: 13px; font-weight: bold;'
+                )
+
+    def abrir_perfil_usuario(self):
+        """Abre diálogo de perfil do usuário logado com opções para editar dados pessoais e senha."""
+        usuario = obter_usuario_logado()
+        user_id = usuario.get('id')
+
+        if not user_id:
+            ui.notification('Sessão inválida. Faça login novamente.', type='negative', timeout=3)
+            return
+
+        auth_db = AuthDatabase()
+
+        with ui.dialog() as dialog, ui.card().style('min-width: 500px; max-width: 600px; padding: 25px;'):
+            # Cabeçalho
+            ui.label('👤 Meu Perfil').style(
+                'font-size: 24px; font-weight: bold; color: #1976d2; margin-bottom: 5px;'
+            )
+            ui.label(f'Gerencie suas informações pessoais').style(
+                'font-size: 13px; color: #999; margin-bottom: 20px;'
+            )
+
+            ui.separator()
+
+            # ===== SEÇÃO 1: Informações Pessoais =====
+            ui.label('📋 Informações Pessoais').style(
+                'font-size: 16px; font-weight: bold; margin-top: 15px; color: #1976d2;'
+            )
+
+            nome_input = ui.input('Nome *', value=usuario.get('nome', '')).props('outlined dense').classes('w-full').style('margin-bottom: 8px;')
+            sobrenome_input = ui.input('Sobrenome *', value=usuario.get('sobrenome', '')).props('outlined dense').classes('w-full').style('margin-bottom: 8px;')
+            email_input = ui.input('E-mail *', value=usuario.get('email', '')).props('outlined dense').classes('w-full').style('margin-bottom: 12px;')
+
+            ui.separator().style('margin: 15px 0;')
+
+            # ===== SEÇÃO 2: Segurança =====
+            ui.label('🔒 Segurança').style(
+                'font-size: 16px; font-weight: bold; color: #1976d2;'
+            )
+
+            senha_atual_input = ui.input('Senha atual *', value='').props('outlined dense type=password').classes('w-full').style('margin-bottom: 8px;')
+            nova_senha_input = ui.input('Nova senha', value='', placeholder='Deixe em branco para não alterar').props('outlined dense type=password').classes('w-full').style('margin-bottom: 8px;')
+            confirma_senha_input = ui.input('Confirmar nova senha', value='').props('outlined dense type=password').classes('w-full').style('margin-bottom: 12px;')
+
+            ui.label('💡 A senha atual é obrigatória para salvar qualquer alteração.').style(
+                'font-size: 12px; color: #1976d2; font-style: italic; margin-bottom: 12px;'
+            )
+
+            # Mensagem de erro
+            erro_label = ui.label('').style('color: #f44336; font-size: 13px; display: none; margin-bottom: 12px; padding: 8px; background-color: #ffebee; border-radius: 4px;')
+
+            # Mensagem de sucesso
+            sucesso_label = ui.label('').style('color: #4caf50; font-size: 13px; display: none; margin-bottom: 12px; padding: 8px; background-color: #e8f5e9; border-radius: 4px;')
+
+            def salvar_alteracoes():
+                """Valida e salva as alterações do perfil."""
+                nome = nome_input.value.strip() if nome_input.value else ''
+                sobrenome = sobrenome_input.value.strip() if sobrenome_input.value else ''
+                email = email_input.value.strip() if email_input.value else ''
+                senha_atual = senha_atual_input.value if senha_atual_input.value else ''
+                nova_senha = nova_senha_input.value if nova_senha_input.value else ''
+                confirma_senha = confirma_senha_input.value if confirma_senha_input.value else ''
+
+                # Limpa mensagens anteriores
+                erro_label.style('display: none;')
+                sucesso_label.style('display: none;')
+
+                # Validações básicas
+                if not all([nome, sobrenome, email]):
+                    erro_label.set_text('⚠️ Nome, sobrenome e e-mail são obrigatórios.')
+                    erro_label.style('display: block;')
+                    return
+
+                if not senha_atual:
+                    erro_label.set_text('⚠️ Você deve informar a senha atual para salvar alterações.')
+                    erro_label.style('display: block;')
+                    return
+
+                # Verifica senha atual
+                if not auth_db.verificar_senha_atual(user_id, senha_atual):
+                    erro_label.set_text('❌ Senha atual incorreta.')
+                    erro_label.style('display: block;')
+                    return
+
+                # Se quer alterar senha
+                if nova_senha or confirma_senha:
+                    if not nova_senha:
+                        erro_label.set_text('⚠️ Informe a nova senha.')
+                        erro_label.style('display: block;')
+                        return
+
+                    if len(nova_senha) < 4:
+                        erro_label.set_text('⚠️ A nova senha deve ter pelo menos 4 caracteres.')
+                        erro_label.style('display: block;')
+                        return
+
+                    if nova_senha != confirma_senha:
+                        erro_label.set_text('❌ A confirmação da nova senha não confere.')
+                        erro_label.style('display: block;')
+                        return
+
+                # Atualiza dados
+                try:
+                    auth_db.atualizar_usuario(user_id, nome, sobrenome, email)
+                    
+                    # Atualiza a sessão do usuário (sem fazer login novamente)
+                    atualizar_usuario_sessao(nome, sobrenome, email)
+                    
+                    # Atualiza o botão do usuário no header com os novos dados
+                    if hasattr(self, 'user_button'):
+                        self.user_button.text = f'👤 {nome} {sobrenome}'
+
+                    # Se alterou senha, salva
+                    if nova_senha:
+                        auth_db.redefinir_senha(user_id, nova_senha)
+                        sucesso_label.set_text('✅ Perfil e senha atualizados com sucesso!')
+                    else:
+                        sucesso_label.set_text('✅ Perfil atualizado com sucesso!')
+
+                    sucesso_label.style('display: block;')
+
+                    # Inicia o timer para fechar o diálogo
+                    async def fechar_apos_delay():
+                        import asyncio
+                        await asyncio.sleep(1.5)
+                        dialog.close()
+
+                    import asyncio
+                    try:
+                        asyncio.create_task(fechar_apos_delay())
+                    except:
+                        ui.timer(1.5, lambda: dialog.close(), once=True)
+
+                except Exception as e:
+                    log_error(e, "agenda_obras", "Atualizar perfil do usuário")
+                    erro_label.set_text(f'❌ Erro ao salvar: {str(e)}')
+                    erro_label.style('display: block;')
+
+            ui.separator()
+
+            # Botões de ação
+            with ui.row().classes('w-full justify-end gap-2'):
+                ui.button('Cancelar', on_click=dialog.close).props('flat').style('color: #666;')
+                ui.button('💾 Salvar Alterações', on_click=salvar_alteracoes).style(
+                    'background-color: #1976d2; color: white; font-weight: bold;'
+                )
+
+        dialog.open()
     
     def footer(self):
         """Rodapé da aplicação"""
@@ -269,6 +440,182 @@ class AgendaObras:
             ui.label(f'AgendaObras v{VERSION} | © {datetime.datetime.now().year}').style(
                 'color: #666; font-size: 12px;'
             )
+
+    # ========== Gerenciamento de Usuários (Admin) ========== #
+
+    def abrir_gerenciar_usuarios(self):
+        """Abre diálogo de gerenciamento de usuários."""
+        auth_db = AuthDatabase()
+        usuarios = auth_db.listar_usuarios()
+
+        with ui.dialog() as dialog, ui.card().style(
+            'min-width: 650px; max-width: 800px; padding: 25px;'
+        ):
+            # Cabeçalho
+            with ui.row().classes('w-full items-center justify-between'):
+                ui.label('👥 Gerenciar Usuários').style(
+                    'font-size: 22px; font-weight: bold; color: #1976d2;'
+                )
+                ui.button('✕', on_click=dialog.close).props('flat dense round').style('color: #666;')
+
+            ui.separator().style('margin: 10px 0;')
+
+            # Container da lista de usuários
+            lista_container = ui.column().classes('w-full')
+
+            def renderizar_lista():
+                lista_container.clear()
+                lista_atualizada = auth_db.listar_usuarios()
+
+                with lista_container:
+                    if not lista_atualizada:
+                        ui.label('Nenhum usuário cadastrado.').style('color: #999;')
+                        return
+
+                    for u in lista_atualizada:
+                        with ui.card().classes('w-full').style(
+                            'padding: 12px 15px; margin-bottom: 8px; background-color: #fafafa;'
+                        ):
+                            with ui.row().classes('w-full items-center justify-between'):
+                                with ui.column().style('gap: 2px;'):
+                                    with ui.row().classes('items-center gap-2'):
+                                        ui.label(f'{u["nome"]} {u["sobrenome"]}').style(
+                                            'font-weight: bold; font-size: 15px;'
+                                        )
+                                        if u['is_admin']:
+                                            ui.badge('Admin', color='blue').style('font-size: 10px;')
+                                    ui.label(u['email']).style('color: #666; font-size: 13px;')
+
+                                # Não permite excluir a si mesmo nem o último admin
+                                usuario_logado = obter_usuario_logado()
+                                pode_excluir = (
+                                    u['id'] != usuario_logado.get('id')
+                                    and not (u['is_admin'] and auth_db.contar_admins() <= 1)
+                                )
+
+                                user_id = u['id']
+                                user_nome = f'{u["nome"]} {u["sobrenome"]}'
+                                user_email = u['email']
+
+                                with ui.row().classes('items-center gap-1'):
+                                    ui.button(
+                                        '🔑',
+                                        on_click=lambda uid=user_id, un=user_nome, ue=user_email: redefinir_senha_usuario(uid, un, ue)
+                                    ).props('flat dense round').style('color: #1976d2;')
+
+                                    if pode_excluir:
+                                        ui.button(
+                                            '🗑️',
+                                            on_click=lambda uid=user_id, un=user_nome: confirmar_exclusao(uid, un)
+                                        ).props('flat dense round').style('color: #f44336;')
+
+            def redefinir_senha_usuario(user_id: int, user_nome: str, user_email: str):
+                nova_senha = f'{randbelow(1_000_000):06d}'
+                ok = auth_db.redefinir_senha(user_id, nova_senha)
+
+                if not ok:
+                    ui.notification('Erro ao redefinir senha.', type='negative', timeout=3)
+                    return
+
+                with ui.dialog() as senha_dialog, ui.card().style('min-width: 420px; padding: 25px;'):
+                    ui.label('🔑 Senha redefinida com sucesso').style(
+                        'font-size: 20px; font-weight: bold; color: #1976d2; margin-bottom: 10px;'
+                    )
+                    ui.label(f'Usuário: {user_nome}').style('font-size: 14px; color: #666;')
+                    ui.label(f'E-mail: {user_email}').style('font-size: 14px; color: #666; margin-bottom: 10px;')
+
+                    ui.label('Nova senha para envio:').style('font-size: 14px; color: #333;')
+                    senha_label = ui.input(value=nova_senha).props('readonly outlined dense').classes('w-full')
+                    senha_label.style('font-size: 22px; font-weight: bold; color: #1976d2; margin: 8px 0 12px 0;')
+
+                    with ui.row().classes('w-full justify-end gap-2'):
+                        ui.button(
+                            'Copiar senha',
+                            on_click=lambda: ui.run_javascript(f'navigator.clipboard.writeText("{nova_senha}")')
+                        ).props('flat').style('color: #1976d2;')
+                        ui.button('Fechar', on_click=senha_dialog.close).style(
+                            'background-color: #1976d2; color: white;'
+                        )
+
+                senha_dialog.open()
+                ui.notification(f'Senha de "{user_nome}" redefinida.', type='positive', timeout=3)
+
+            def confirmar_exclusao(user_id: int, user_nome: str):
+                with ui.dialog() as confirm_dialog, ui.card().style('padding: 25px;'):
+                    ui.label(f'Deseja excluir o usuário "{user_nome}"?').style(
+                        'font-size: 16px; margin-bottom: 15px;'
+                    )
+                    with ui.row().classes('w-full justify-end gap-2'):
+                        ui.button('Cancelar', on_click=confirm_dialog.close).props('flat').style('color: #666;')
+
+                        def executar_exclusao():
+                            auth_db.excluir_usuario(user_id)
+                            confirm_dialog.close()
+                            renderizar_lista()
+                            ui.notification(f'Usuário "{user_nome}" excluído.', type='warning', timeout=3)
+
+                        ui.button('Excluir', on_click=executar_exclusao).style(
+                            'background-color: #f44336; color: white;'
+                        )
+                confirm_dialog.open()
+
+            # Formulário para novo usuário
+            def abrir_form_novo_usuario():
+                with ui.dialog() as form_dialog, ui.card().style(
+                    'min-width: 400px; max-width: 450px; padding: 25px;'
+                ):
+                    ui.label('Novo Usuário').style(
+                        'font-size: 20px; font-weight: bold; color: #1976d2; margin-bottom: 15px;'
+                    )
+                    nome_input = ui.input('Nome').props('outlined dense').classes('w-full').style('margin-bottom: 8px;')
+                    sobrenome_input = ui.input('Sobrenome').props('outlined dense').classes('w-full').style('margin-bottom: 8px;')
+                    email_input = ui.input('E-mail').props('outlined dense').classes('w-full').style('margin-bottom: 8px;')
+                    senha_input = ui.input('Senha').props('outlined dense type=password').classes('w-full').style('margin-bottom: 8px;')
+                    admin_check = ui.checkbox('Administrador').style('margin-bottom: 10px;')
+                    erro_label = ui.label('').style('color: #f44336; font-size: 13px; display: none; margin-bottom: 8px;')
+
+                    def salvar_usuario():
+                        nome = nome_input.value.strip() if nome_input.value else ''
+                        sobrenome = sobrenome_input.value.strip() if sobrenome_input.value else ''
+                        email = email_input.value.strip() if email_input.value else ''
+                        senha = senha_input.value if senha_input.value else ''
+
+                        if not all([nome, sobrenome, email, senha]):
+                            erro_label.set_text('Preencha todos os campos.')
+                            erro_label.style('display: block;')
+                            return
+
+                        if len(senha) < 4:
+                            erro_label.set_text('Senha deve ter pelo menos 4 caracteres.')
+                            erro_label.style('display: block;')
+                            return
+
+                        ok = auth_db.criar_usuario(nome, sobrenome, email, senha, is_admin=admin_check.value)
+                        if not ok:
+                            erro_label.set_text('E-mail já cadastrado.')
+                            erro_label.style('display: block;')
+                            return
+
+                        form_dialog.close()
+                        renderizar_lista()
+                        ui.notification(f'Usuário "{nome}" criado!', type='positive', timeout=3)
+
+                    with ui.row().classes('w-full justify-end gap-2'):
+                        ui.button('Cancelar', on_click=form_dialog.close).props('flat').style('color: #666;')
+                        ui.button('Salvar', on_click=salvar_usuario).style(
+                            'background-color: #1976d2; color: white;'
+                        )
+                form_dialog.open()
+
+            renderizar_lista()
+
+            ui.separator().style('margin: 10px 0;')
+
+            ui.button('➕ Novo Usuário', on_click=abrir_form_novo_usuario).style(
+                'background-color: #1976d2; color: white; font-weight: bold;'
+            )
+
+        dialog.open()
     
     def body(self):
         """Corpo principal com grid de obras"""
