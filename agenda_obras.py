@@ -17,6 +17,7 @@ from config import VERSION
 from error_logger import log_error
 from auth_middleware import obter_usuario_logado, atualizar_usuario_sessao
 from auth_database import AuthDatabase
+from contratos_database import ContratosDatabase
 
 # Valores de status padrão (usado tanto no banco quanto na interface)
 STATUS_OPTIONS = ['Não Iniciada', 'Em Andamento', 'Atrasada', 'Concluída']
@@ -30,6 +31,7 @@ class AgendaObras:
         
         # Inicializa banco de dados
         self.db = Database()
+        self.contratos_db = ContratosDatabase()
         self.helper = ObrasHelper()
         
         # Inicializa serviços
@@ -740,7 +742,7 @@ class AgendaObras:
                     with ui.column().classes('w-full gap-2'):
                         with ui.row().classes('items-center'):
                             ui.icon('business').style('color: #666; font-size: 16px;')
-                            ui.label(f'Cliente: {obra["cliente"]}').style('color: #666; font-size: 13px;')
+                            ui.label(f'Contrato: {obra["cliente"]}').style('color: #666; font-size: 13px;')
                         
                         with ui.row().classes('items-center'):
                             ui.icon('attach_money').style('color: #666; font-size: 16px;')
@@ -889,7 +891,11 @@ class AgendaObras:
             
             # Campos básicos
             nome_input = ui.input(label='Nome do Contrato *').classes('w-full').props('outlined')
-            cliente_input = ui.input(label='Cliente *').classes('w-full').props('outlined')
+            contratos_disponiveis = self.contratos_db.listar_contratos()
+            contrato_input = ui.select(contratos_disponiveis, label='Contrato *').classes('w-full').props('outlined')
+
+            if not contratos_disponiveis:
+                ui.label('⚠️ Nenhum contrato disponível em contratos.db').style('color: #f44336; font-size: 12px;')
             
             with ui.row().classes('w-full gap-2'):
                 contrato_ic_input = ui.input(label='Contrato (IC)').classes('w-full').props('outlined')
@@ -972,7 +978,7 @@ class AgendaObras:
             with ui.row().classes('w-full justify-end gap-2'):
                 ui.button('Cancelar', on_click=dialog.close).props('flat')
                 ui.button('💾 Salvar Obra', on_click=lambda: self.salvar_obra(
-                    dialog, nome_input.value, cliente_input.value, 
+                    dialog, nome_input.value, contrato_input.value,
                     valor_input.value, data_input.value, status_input.value,
                     contrato_ic=contrato_ic_input.value or None,
                     pedido_sap=pedido_sap_input.value or None,
@@ -995,7 +1001,7 @@ class AgendaObras:
         """Salva nova obra no banco de dados"""
         # Validações
         if not nome or not cliente:
-            self.notificar('⚠️ Nome do contrato e cliente são obrigatórios!', tipo='warning')
+            self.notificar('⚠️ Nome do contrato e Contrato são obrigatórios!', tipo='warning')
             return
         
         if not valor or valor <= 0:
@@ -1051,10 +1057,24 @@ class AgendaObras:
             
             # ===== SEÇÃO 1: Informações Básicas =====
             ui.label('📋 Informações Básicas').style('font-size: 16px; font-weight: bold; margin-top: 10px; color: #1976d2;')
+
+            contratos_disponiveis = self.contratos_db.listar_contratos()
+            contrato_obra_atual = obra.get('cliente') or ''
+            contrato_fora_da_lista = bool(contrato_obra_atual) and contrato_obra_atual not in contratos_disponiveis
+            valor_inicial_contrato = None if contrato_fora_da_lista else contrato_obra_atual
             
             with ui.column().classes('w-full gap-3'):
                 nome_input = ui.input(label='Nome do Contrato', value=obra['nome_contrato']).classes('w-1/2').props('outlined')
-                cliente_input = ui.input(label='Cliente', value=obra['cliente']).classes('w-full').props('outlined')
+                contrato_input = ui.select(
+                    contratos_disponiveis,
+                    label='Contrato *',
+                    value=valor_inicial_contrato
+                ).classes('w-full').props('outlined')
+
+                if not contratos_disponiveis:
+                    ui.label('⚠️ Nenhum contrato disponível em contratos.db').style('color: #f44336; font-size: 12px;')
+                elif contrato_fora_da_lista:
+                    ui.label('⚠️ O contrato atual não existe na lista. Selecione um contrato válido para salvar.').style('color: #f44336; font-size: 12px;')
                 
                 with ui.row().classes('w-full gap-2'):
                     contrato_ic_input = ui.input(label='Contrato (IC)', value=obra.get('contrato_ic') or '').classes('w-full').props('outlined')
@@ -1159,7 +1179,7 @@ class AgendaObras:
                 with ui.row().classes('gap-2'):
                     ui.button('Cancelar', on_click=lambda: [dialog.close(), self.renderizar_obras()]).props('flat')
                     ui.button('💾 Salvar Alterações', on_click=lambda: self.atualizar_obra_dialog(
-                        dialog, obra_id, nome_input.value, cliente_input.value,
+                        dialog, obra_id, nome_input.value, contrato_input.value,
                         valor_input.value, data_input.value, status_input.value, checklist_estados,
                         checklist_container,  # << PASSA O CONTAINER
                         contrato_ic=contrato_ic_input.value,
@@ -1177,6 +1197,9 @@ class AgendaObras:
                     )).props('color=primary')
         
         dialog.open()
+
+        if contrato_fora_da_lista:
+            self.notificar('⚠️ Selecione um contrato da lista para continuar.', tipo='warning')
         
         # Verifica se há datas críticas pendentes (tarefas concluídas mas datas não preenchidas)
         datas_pendentes = {}
@@ -1532,7 +1555,7 @@ class AgendaObras:
                             checklist_container = None, **kwargs):
         """Atualiza obra e checklist a partir do dialog de detalhes"""
         if not nome or not cliente:
-            self.notificar('⚠️ Nome e cliente são obrigatórios!', tipo='warning')
+            self.notificar('⚠️ Nome e Contrato são obrigatórios!', tipo='warning')
             return
         
         if not valor or valor <= 0:
