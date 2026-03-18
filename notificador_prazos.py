@@ -38,7 +38,7 @@ class NotificadorPrazos:
                 name=EMAIL_DISPARO_TIMEZONE,
             )
             print(
-                f"⚠️ Timezone '{EMAIL_DISPARO_TIMEZONE}' indisponível no sistema. "
+                f"[AVISO] Timezone '{EMAIL_DISPARO_TIMEZONE}' indisponivel no sistema. "
                 "Usando fallback fixo UTC-03:00."
             )
 
@@ -57,12 +57,20 @@ class NotificadorPrazos:
             
             _notificador_ativo = True
             self.executando = True
-            thread = threading.Thread(target=self._verificar_loop, daemon=True)
-            thread.start()
+            
+            agora = self._agora_referencia()
+            hoje = agora.date()
+            horario_alvo = self._horario_alvo_no_dia(hoje)
+            ja_executou = self._ja_executou_hoje(hoje)
+            eh_dia_util = self._eh_dia_util(hoje)
+            
             print(
                 "🔔 Sistema de notificação de prazos iniciado "
                 f"({self.hora_disparo:02d}:{self.minuto_disparo:02d}, seg-sex, tz={self._nome_fuso_horario()})!"
             )
+            
+            thread = threading.Thread(target=self._verificar_loop, daemon=True)
+            thread.start()
     
     def verificar_agora(self, forcar: bool = False):
         """Executa verificação manual de prazos
@@ -168,25 +176,26 @@ class NotificadorPrazos:
         """Loop principal: executa em dias úteis às 08:00 (timezone configurada)."""
         while self.executando:
             agora = self._agora_referencia()
+            hoje = agora.date()
+            horario_alvo = self._horario_alvo_no_dia(hoje)
 
             if self._deve_executar_neste_momento(agora):
-                horario_alvo = self._horario_alvo_no_dia(agora.date())
                 origem = 'catch-up' if agora > horario_alvo else 'agendado'
                 if origem == 'catch-up':
-                    print(
-                        f"⏩ Executando catch-up diário às {agora.strftime('%H:%M:%S')} "
-                        f"({self._nome_fuso_horario()})"
-                    )
+                    print(f"[CATCH-UP] Executando em modo catch-up às {agora.strftime('%H:%M:%S')} (horário alvo: {horario_alvo.strftime('%H:%M:%S')})")
                 self._executar_ciclo_diario(origem=origem)
                 continue
 
             proximo_horario = self._proximo_horario_execucao(agora)
+            
+            if self._ja_executou_hoje(hoje):
+                print(f"[JA EXECUTOU] Verificacao realizada em {hoje.strftime('%d/%m/%Y')}")
+                print(f"[PRÓX. EXEC] {proximo_horario.strftime('%d/%m/%Y %H:%M:%S')}")
+            else:
+                print(f"[PRÓX. EXEC] {proximo_horario.strftime('%d/%m/%Y %H:%M:%S')}")
+            
             segundos = int((proximo_horario - agora).total_seconds())
             if segundos > 0:
-                print(
-                    "⏳ Próxima verificação automática em "
-                    f"{proximo_horario.strftime('%d/%m/%Y %H:%M:%S')} ({self._nome_fuso_horario()})"
-                )
                 self._aguardar_ate(proximo_horario)
     
     def _verificar_prazos(self) -> int:
