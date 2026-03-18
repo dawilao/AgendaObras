@@ -29,6 +29,13 @@ Acesse em: `http://localhost:8080`
 - **Tarefas Recorrentes**: Geração automática de tarefas periódicas
 - **Sistema de Versão**: Validação automática de atualizações
 
+## ⏰ Agendamento de e-mails (24/7)
+
+- O disparo automático roda **às 08:00** em **dias úteis (segunda a sexta)**.
+- Timezone de referência: **America/Sao_Paulo**.
+- Se o servidor voltar após 08:00 em um dia útil e ainda não tiver executado no dia, o sistema faz **catch-up imediato** (execução única).
+- Sábados e domingos são ignorados no disparo automático.
+
 ## ⚙️ Configuração
 
 ### Email (Opcional)

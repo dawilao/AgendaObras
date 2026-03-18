@@ -43,7 +43,13 @@ from error_logger import log_error
 
 
 # ========== Informações do Sistema ========== #
-VERSION = '1.2.0'
+VERSION = '2.0.0'
+
+# ========== Agendamento de Notificações ========== #
+EMAIL_DISPARO_HORA = 8
+EMAIL_DISPARO_MINUTO = 0
+EMAIL_DISPARO_TIMEZONE = 'America/Sao_Paulo'
+EMAIL_DISPARO_CATCHUP = True
 
 # URL do repositório no GitHub
 GITHUB_REPO_URL = "https://github.com/dawilao/AgendaObras"

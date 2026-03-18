@@ -44,6 +44,7 @@ def logout():
 if __name__ in {"__main__", "__mp_main__"}:
     ui.run(
         title='AgendaObras - Rastreador de Obras',
+        host='0.0.0.0',
         port=8080,
         native=False,
         reload=False,

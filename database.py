@@ -11,6 +11,8 @@ from error_logger import log_error
 
 CAMINHO_DB = r'G:\Meu Drive\17 - MODELOS\PROGRAMAS\AgendaObras\app\db\agendaobras.db'
 
+TAREFAS_COM_DIAS_UTEIS = {'ANÁLISE', 'ANÁLISE - GESTOR'}
+
 class Database:
     def __init__(self, db_name: str = CAMINHO_DB):
         self.db_name = db_name
@@ -26,6 +28,28 @@ class Database:
         conn.execute('PRAGMA journal_mode=WAL')
         conn.execute('PRAGMA busy_timeout=30000')  # 30 segundos
         return conn
+
+    def _adicionar_dias_uteis(self, data_base: datetime.datetime, dias: int) -> datetime.datetime:
+        """Adiciona dias úteis (ignora sábado e domingo) a partir da data base."""
+        if dias == 0:
+            return data_base
+
+        passo = 1 if dias > 0 else -1
+        restantes = abs(dias)
+        data_resultado = data_base
+
+        while restantes > 0:
+            data_resultado += datetime.timedelta(days=passo)
+            if data_resultado.weekday() < 5:
+                restantes -= 1
+
+        return data_resultado
+
+    def _calcular_data_limite(self, data_base: datetime.datetime, prazo_dias: int, descricao: Optional[str] = None) -> datetime.datetime:
+        """Calcula a data limite com regra especial para tarefas em dias úteis."""
+        if descricao in TAREFAS_COM_DIAS_UTEIS:
+            return self._adicionar_dias_uteis(data_base, prazo_dias)
+        return data_base + datetime.timedelta(days=prazo_dias)
     
     def init_database(self):
         """Inicializa o banco de dados com as tabelas necessárias"""
@@ -371,7 +395,7 @@ class Database:
                 if tarefa_dep and tarefa_dep['concluido']:
                     data_base = tarefa_dep['data_conclusao']
                     data_obj = datetime.datetime.strptime(data_base, '%Y-%m-%d')
-                    data_limite = data_obj + datetime.timedelta(days=template['prazo_dias'])
+                    data_limite = self._calcular_data_limite(data_obj, template['prazo_dias'], template['nome'])
                     
                     cursor.execute('''
                         UPDATE obra_checklist 
@@ -706,7 +730,7 @@ class Database:
             
             # Desbloqueia tarefas dependentes
             cursor.execute('''
-                SELECT id, prazo_dias FROM obra_checklist 
+                SELECT id, prazo_dias, descricao FROM obra_checklist 
                 WHERE depende_item_id = ? AND concluido = 0
             ''', (item_id,))
             
@@ -714,7 +738,7 @@ class Database:
             for dep in dependentes:
                 # Calcula nova data_limite baseada na data de conclusão
                 data_obj = datetime.datetime.strptime(data_conclusao, '%Y-%m-%d')
-                nova_data_limite = data_obj + datetime.timedelta(days=dep['prazo_dias'])
+                nova_data_limite = self._calcular_data_limite(data_obj, dep['prazo_dias'], dep['descricao'])
                 
                 cursor.execute('''
                     UPDATE obra_checklist 

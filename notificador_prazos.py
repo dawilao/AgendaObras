@@ -8,7 +8,14 @@ import time
 import datetime
 import sqlite3
 from typing import Dict
+from zoneinfo import ZoneInfo
 from error_logger import log_error
+from config import (
+    EMAIL_DISPARO_HORA,
+    EMAIL_DISPARO_MINUTO,
+    EMAIL_DISPARO_TIMEZONE,
+    EMAIL_DISPARO_CATCHUP,
+)
 
 # Flag global para controlar se o notificador já está executando
 _notificador_ativo = False
@@ -20,6 +27,24 @@ class NotificadorPrazos:
         self.email_service = email_service
         self.gerador_recorrentes = gerador_recorrentes
         self.executando = False
+        self.hora_disparo = EMAIL_DISPARO_HORA
+        self.minuto_disparo = EMAIL_DISPARO_MINUTO
+        self.habilitar_catchup = EMAIL_DISPARO_CATCHUP
+        try:
+            self.fuso_horario = ZoneInfo(EMAIL_DISPARO_TIMEZONE)
+        except Exception as e:
+            self.fuso_horario = datetime.timezone(
+                datetime.timedelta(hours=-3),
+                name=EMAIL_DISPARO_TIMEZONE,
+            )
+            print(
+                f"⚠️ Timezone '{EMAIL_DISPARO_TIMEZONE}' indisponível no sistema. "
+                "Usando fallback fixo UTC-03:00."
+            )
+
+    def _nome_fuso_horario(self) -> str:
+        """Retorna nome amigável da timezone atual."""
+        return getattr(self.fuso_horario, 'key', self.fuso_horario.tzname(None) or str(self.fuso_horario))
     
     def iniciar_verificacao(self):
         """Inicia thread de verificação periódica de prazos (singleton global)"""
@@ -34,7 +59,10 @@ class NotificadorPrazos:
             self.executando = True
             thread = threading.Thread(target=self._verificar_loop, daemon=True)
             thread.start()
-            print("🔔 Sistema de notificação de prazos iniciado!")
+            print(
+                "🔔 Sistema de notificação de prazos iniciado "
+                f"({self.hora_disparo:02d}:{self.minuto_disparo:02d}, seg-sex, tz={self._nome_fuso_horario()})!"
+            )
     
     def verificar_agora(self, forcar: bool = False):
         """Executa verificação manual de prazos
@@ -44,58 +72,122 @@ class NotificadorPrazos:
         """
         if forcar:
             print("🔄 Verificação manual FORÇADA de prazos...")
-            try:
-                self.gerador_recorrentes.gerar_tarefas_mensais()
-                alertas = self._verificar_prazos()
-                self._registrar_execucao(alertas, 'concluida')
-                print("✅ Verificação manual concluída!")
-                return True
-            except Exception as e:
-                print(f"❌ Erro na verificação manual: {e}")
-                self._registrar_execucao(0, 'erro', str(e))
-                return False
+            return self._executar_ciclo_diario(origem='manual-forcada')
         else:
-            if self._ja_executou_hoje():
+            if self._ja_executou_hoje(self._hoje_referencia()):
                 print("ℹ️ Verificação já foi executada hoje. Use forcar=True para executar de qualquer forma.")
                 return False
-            else:
-                print("🔄 Executando verificação manual de prazos...")
-                try:
-                    self.gerador_recorrentes.gerar_tarefas_mensais()
-                    alertas = self._verificar_prazos()
-                    self._registrar_execucao(alertas, 'concluida')
-                    print("✅ Verificação manual concluída!")
-                    return True
-                except Exception as e:
-                    print(f"❌ Erro na verificação manual: {e}")
-                    self._registrar_execucao(0, 'erro', str(e))
-                    return False
+            print("🔄 Executando verificação manual de prazos...")
+            return self._executar_ciclo_diario(origem='manual')
+
+    def _agora_referencia(self) -> datetime.datetime:
+        """Retorna data/hora atual timezone-aware da operação de notificações."""
+        return datetime.datetime.now(self.fuso_horario)
+
+    def _hoje_referencia(self) -> datetime.date:
+        """Retorna data atual da timezone de referência."""
+        return self._agora_referencia().date()
+
+    def _eh_dia_util(self, data: datetime.date) -> bool:
+        """Retorna True para segunda a sexta-feira."""
+        return data.weekday() < 5
+
+    def _horario_alvo_no_dia(self, data: datetime.date) -> datetime.datetime:
+        """Retorna datetime timezone-aware do horário alvo no dia informado."""
+        return datetime.datetime.combine(
+            data,
+            datetime.time(self.hora_disparo, self.minuto_disparo),
+            tzinfo=self.fuso_horario,
+        )
+
+    def _proximo_horario_execucao(self, agora: datetime.datetime = None) -> datetime.datetime:
+        """Calcula próximo horário útil de execução (seg-sex às HH:MM)."""
+        agora = agora or self._agora_referencia()
+        alvo_hoje = self._horario_alvo_no_dia(agora.date())
+
+        if self._eh_dia_util(agora.date()) and agora < alvo_hoje:
+            return alvo_hoje
+
+        proxima_data = agora.date() + datetime.timedelta(days=1)
+        while not self._eh_dia_util(proxima_data):
+            proxima_data += datetime.timedelta(days=1)
+
+        return self._horario_alvo_no_dia(proxima_data)
+
+    def _deve_executar_neste_momento(self, agora: datetime.datetime = None) -> bool:
+        """Decide se o ciclo diário deve rodar agora."""
+        agora = agora or self._agora_referencia()
+        hoje = agora.date()
+
+        if not self._eh_dia_util(hoje):
+            return False
+
+        if self._ja_executou_hoje(hoje):
+            return False
+
+        horario_alvo = self._horario_alvo_no_dia(hoje)
+        if agora < horario_alvo:
+            return False
+
+        if agora > horario_alvo and not self.habilitar_catchup:
+            return False
+
+        return True
+
+    def _aguardar_ate(self, instante_alvo: datetime.datetime):
+        """Aguarda até o instante informado com interrupções curtas."""
+        while self.executando:
+            agora = self._agora_referencia()
+            segundos_restantes = (instante_alvo - agora).total_seconds()
+            if segundos_restantes <= 0:
+                return
+
+            intervalo = min(60, int(segundos_restantes))
+            if intervalo <= 0:
+                intervalo = 1
+            time.sleep(intervalo)
+
+    def _executar_ciclo_diario(self, origem: str = 'agendado') -> bool:
+        """Executa ciclo diário completo de geração, verificação e registro."""
+        try:
+            self.gerador_recorrentes.gerar_tarefas_mensais()
+        except Exception as e:
+            print(f"❌ Erro ao gerar tarefas recorrentes ({origem}): {e}")
+
+        try:
+            alertas = self._verificar_prazos()
+            self._registrar_execucao(alertas, 'concluida')
+            print(f"✅ Verificação diária concluída ({origem}).")
+            return True
+        except Exception as e:
+            print(f"❌ Erro ao verificar prazos ({origem}): {e}")
+            self._registrar_execucao(0, 'erro', str(e))
+            return False
     
     def _verificar_loop(self):
-        """Loop de verificação (executa a cada 24 horas)"""
+        """Loop principal: executa em dias úteis às 08:00 (timezone configurada)."""
         while self.executando:
-            # Verifica se já executou hoje
-            if self._ja_executou_hoje():
-                print("ℹ️  Verificação de prazos já executada hoje. Aguardando próximo ciclo...")
-                time.sleep(3600)  # Verifica a cada 1 hora se mudou o dia
+            agora = self._agora_referencia()
+
+            if self._deve_executar_neste_momento(agora):
+                horario_alvo = self._horario_alvo_no_dia(agora.date())
+                origem = 'catch-up' if agora > horario_alvo else 'agendado'
+                if origem == 'catch-up':
+                    print(
+                        f"⏩ Executando catch-up diário às {agora.strftime('%H:%M:%S')} "
+                        f"({self._nome_fuso_horario()})"
+                    )
+                self._executar_ciclo_diario(origem=origem)
                 continue
-            
-            # Gera tarefas mensais recorrentes
-            try:
-                self.gerador_recorrentes.gerar_tarefas_mensais()
-            except Exception as e:
-                print(f"❌ Erro ao gerar tarefas recorrentes: {e}")
-            
-            # Verifica prazos e envia alertas
-            try:
-                alertas = self._verificar_prazos()
-                # Registra que executou hoje
-                self._registrar_execucao(alertas, 'concluida')
-            except Exception as e:
-                print(f"❌ Erro ao verificar prazos: {e}")
-                self._registrar_execucao(0, 'erro', str(e))
-            
-            time.sleep(3600)  # Verifica a cada 1 hora se mudou o dia
+
+            proximo_horario = self._proximo_horario_execucao(agora)
+            segundos = int((proximo_horario - agora).total_seconds())
+            if segundos > 0:
+                print(
+                    "⏳ Próxima verificação automática em "
+                    f"{proximo_horario.strftime('%d/%m/%Y %H:%M:%S')} ({self._nome_fuso_horario()})"
+                )
+                self._aguardar_ate(proximo_horario)
     
     def _verificar_prazos(self) -> int:
         """Verifica tarefas atrasadas e envia alertas agrupados por obra. Retorna total de alertas enviados."""
@@ -107,7 +199,7 @@ class NotificadorPrazos:
                 conn = self.database.get_connection()
                 cursor = conn.cursor()
                 
-                hoje = datetime.date.today().strftime('%Y-%m-%d')
+                hoje = self._hoje_referencia().strftime('%Y-%m-%d')
                 
                 # Busca tarefas não concluídas e não bloqueadas
                 cursor.execute('''
@@ -219,9 +311,10 @@ class NotificadorPrazos:
         if dias_diff < 0:
             return None
         
-        hoje_str = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-        hoje_data_str = datetime.date.today().strftime('%Y-%m-%d')
-        hoje_obj = datetime.date.today()
+        agora = self._agora_referencia()
+        hoje_str = agora.strftime('%Y-%m-%d %H:%M:%S')
+        hoje_data_str = agora.strftime('%Y-%m-%d')
+        hoje_obj = agora.date()
         
         # Verifica se já enviou hoje (compara apenas a data)
         if ultima_notif:
@@ -296,8 +389,9 @@ class NotificadorPrazos:
             Dict com dados do alerta se deve enviar, None caso contrário
         """
         ultima_notif = tarefa['ultima_notificacao']
-        hoje_str = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-        hoje_data_str = datetime.date.today().strftime('%Y-%m-%d')
+        agora = self._agora_referencia()
+        hoje_str = agora.strftime('%Y-%m-%d %H:%M:%S')
+        hoje_data_str = agora.strftime('%Y-%m-%d')
         
         # Verifica se já enviou hoje (compara apenas a data)
         if ultima_notif:
@@ -417,13 +511,14 @@ class NotificadorPrazos:
             print(f"❌ Erro ao enviar email agrupado para obra {obra_info['nome_contrato']}: {e}")
             return False
     
-    def _ja_executou_hoje(self) -> bool:
-        """Verifica se a verificação de prazos já foi executada hoje"""
+    def _ja_executou_hoje(self, data_referencia: datetime.date = None) -> bool:
+        """Verifica se a verificação de prazos já foi executada na data de referência."""
         try:
             conn = self.database.get_connection()
             cursor = conn.cursor()
             
-            hoje = datetime.date.today().strftime('%Y-%m-%d')
+            data_referencia = data_referencia or self._hoje_referencia()
+            hoje = data_referencia.strftime('%Y-%m-%d')
             cursor.execute('''
                 SELECT COUNT(*) FROM verificacoes_prazos 
                 WHERE data_verificacao = ? AND status = 'concluida'
@@ -438,13 +533,14 @@ class NotificadorPrazos:
             return False
     
     def _registrar_execucao(self, alertas_enviados: int = 0, status: str = 'concluida', mensagem_erro: str = None):
-        """Registra que a verificação foi executada hoje"""
+        """Registra a execução na data da timezone de referência."""
         try:
             conn = self.database.get_connection()
             cursor = conn.cursor()
             
-            hoje = datetime.date.today().strftime('%Y-%m-%d')
-            agora = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            agora_ref = self._agora_referencia()
+            hoje = agora_ref.strftime('%Y-%m-%d')
+            agora = agora_ref.strftime('%Y-%m-%d %H:%M:%S')
             
             # Conta tarefas verificadas
             cursor.execute('''
@@ -524,7 +620,7 @@ class NotificadorPrazos:
                 conn = self.database.get_connection()
                 cursor = conn.cursor()
                 
-                data_envio = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                data_envio = self._agora_referencia().strftime('%Y-%m-%d %H:%M:%S')
                 
                 # Converte a lista de destinatários em string para armazenamento (se for lista)
                 if isinstance(destinatarios, list):

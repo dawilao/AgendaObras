@@ -37,6 +37,30 @@ class ObrasHelper:
         except Exception as e:
             log_error(e, "obras_helper", f"Calcular dias restantes - data_limite: {data_limite}")
             return 0
+
+    @staticmethod
+    def calcular_dias_uteis_restantes(data_limite: str) -> int:
+        """Calcula dias úteis restantes até o prazo (ignora sábados e domingos)."""
+        try:
+            data_limite_obj = datetime.datetime.strptime(data_limite, '%Y-%m-%d').date()
+            hoje = datetime.date.today()
+
+            if data_limite_obj == hoje:
+                return 0
+
+            passo = 1 if data_limite_obj > hoje else -1
+            data_cursor = hoje
+            dias_uteis = 0
+
+            while data_cursor != data_limite_obj:
+                data_cursor += datetime.timedelta(days=passo)
+                if data_cursor.weekday() < 5:
+                    dias_uteis += passo
+
+            return dias_uteis
+        except Exception as e:
+            log_error(e, "obras_helper", f"Calcular dias úteis restantes - data_limite: {data_limite}")
+            return 0
     
     @staticmethod
     def obter_status_visual(obra: Dict, checklist: List[Dict]) -> tuple:

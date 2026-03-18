@@ -7,7 +7,7 @@ from nicegui import ui, app
 import datetime
 from secrets import randbelow
 from typing import Dict, List
-from database import Database
+from database import Database, TAREFAS_COM_DIAS_UTEIS
 from email_service import EmailService
 from obras_helper import ObrasHelper
 from gerador_tarefas_recorrentes import GeradorTarefasRecorrentes
@@ -62,6 +62,21 @@ class AgendaObras:
         except RuntimeError:
             # Ignora erro de contexto deletado
             pass
+
+    def calcular_dias_restantes_exibicao(self, item: Dict) -> int:
+        """Calcula dias restantes/atraso para exibição, respeitando tarefas em dias úteis."""
+        data_limite = item.get('data_limite')
+        if not data_limite:
+            return 0
+
+        if item.get('descricao') in TAREFAS_COM_DIAS_UTEIS:
+            return self.helper.calcular_dias_uteis_restantes(data_limite)
+
+        return self.helper.calcular_dias_restantes(data_limite)
+
+    def usa_dias_uteis_exibicao(self, item: Dict) -> bool:
+        """Indica se a tarefa deve exibir contagem em dias úteis."""
+        return item.get('descricao') in TAREFAS_COM_DIAS_UTEIS
     
     def formatar_info_reiteracao(self, item: Dict) -> str:
         """Formata informações de reiteração para exibição"""
@@ -95,16 +110,41 @@ class AgendaObras:
         else:
             # A partir da 3ª tentativa = alertas críticos diários
             return f'🆘 Alertas críticos diários (última em {data_notif_formatada})'
+
+    def _normalizar_valor_data(self, valor) -> str:
+        """Normaliza valor de data para string (suporta tipos retornados pelo NiceGUI)."""
+        if valor is None:
+            return ''
+
+        if isinstance(valor, datetime.datetime):
+            return valor.strftime('%Y-%m-%d')
+
+        if isinstance(valor, datetime.date):
+            return valor.strftime('%Y-%m-%d')
+
+        if isinstance(valor, (list, tuple)):
+            if not valor:
+                return ''
+            # Em componentes que retornam múltiplos valores (ex.: range), usa o primeiro
+            valor = valor[0]
+
+        if isinstance(valor, dict):
+            valor = valor.get('from') or valor.get('to') or ''
+
+        if not isinstance(valor, str):
+            valor = str(valor)
+
+        return valor.strip()
     
     def converter_data_para_iso(self, data_str: str) -> str:
         """Converte data de dd/mm/aaaa para aaaa-mm-dd (formato ISO)
         Retorna string vazia se data_str for vazio
         Retorna a data original se já estiver no formato correto
         """
-        if not data_str or not data_str.strip():
+        data_str = self._normalizar_valor_data(data_str)
+
+        if not data_str:
             return ''
-        
-        data_str = data_str.strip()
         
         # Verifica se já está no formato ISO (aaaa-mm-dd)
         if '-' in data_str:
@@ -130,10 +170,10 @@ class AgendaObras:
         Retorna string vazia se data_str for vazio
         Aceita tanto formato ISO quanto brasileiro
         """
-        if not data_str or not data_str.strip():
+        data_str = self._normalizar_valor_data(data_str)
+
+        if not data_str:
             return ''
-        
-        data_str = data_str.strip()
         
         # Tenta formato ISO (aaaa-mm-dd)
         if '-' in data_str:
@@ -756,7 +796,8 @@ class AgendaObras:
                                 ui.label(proxima_tarefa['descricao']).style('font-size: 12px; color: #333; font-weight: 500;')
                             
                             if proxima_tarefa['data_limite']:
-                                dias_restantes = self.helper.calcular_dias_restantes(proxima_tarefa['data_limite'])
+                                dias_restantes = self.calcular_dias_restantes_exibicao(proxima_tarefa)
+                                sufixo_dias = ' dias úteis' if self.usa_dias_uteis_exibicao(proxima_tarefa) else ' dias'
                                 data_formatada_prazo = self.formatar_data_exibicao(proxima_tarefa['data_limite'])
                                 cor_prazo = 'red' if dias_restantes < 0 else 'orange' if dias_restantes <= 3 else 'green'
                                 
@@ -765,7 +806,7 @@ class AgendaObras:
                                         f'font-size: 11px; color: {cor_prazo}; margin-left: 20px;'
                                     )
                                 else:
-                                    ui.label(f'⏰ Prazo: {data_formatada_prazo} ({abs(dias_restantes)} dia{"s" if abs(dias_restantes) != 1 else ""} {"atrasado" if dias_restantes < 0 else "restante" if dias_restantes > 0 else "hoje"})').style(
+                                    ui.label(f'⏰ Prazo: {data_formatada_prazo} ({abs(dias_restantes)}{sufixo_dias} {"atrasado" if dias_restantes < 0 else "restante" if dias_restantes > 0 else "hoje"})').style(
                                     f'font-size: 11px; color: {cor_prazo}; margin-left: 20px;'
                                 )
                 
@@ -794,10 +835,11 @@ class AgendaObras:
                                 else:
                                     tooltip_text = '🔒 Tarefa bloqueada'
                             elif item.get('data_limite'):
-                                dias_restantes = self.helper.calcular_dias_restantes(item['data_limite'])
+                                dias_restantes = self.calcular_dias_restantes_exibicao(item)
+                                sufixo_dias = ' dias úteis' if self.usa_dias_uteis_exibicao(item) else ' dias'
                                 data_formatada = self.formatar_data_exibicao(item['data_limite'])
                                 if dias_restantes < 0:
-                                    tooltip_text = f"⚠️ Atrasada: {abs(dias_restantes)} dias - Prazo: {data_formatada}"
+                                    tooltip_text = f"⚠️ Atrasada: {abs(dias_restantes)}{sufixo_dias} - Prazo: {data_formatada}"
                                     # Adiciona info de reiteração se houver
                                     info_reiteracao = self.formatar_info_reiteracao(item)
                                     if info_reiteracao:
@@ -805,7 +847,7 @@ class AgendaObras:
                                 elif dias_restantes == 0:
                                     tooltip_text = f"Prazo: {data_formatada} (HOJE!)"
                                 else:
-                                    tooltip_text = f"Prazo: {data_formatada} ({dias_restantes} dias restantes)"
+                                    tooltip_text = f"Prazo: {data_formatada} ({dias_restantes}{sufixo_dias} restantes)"
                             else:
                                 tooltip_text = "Tarefa pendente"
                             
@@ -830,7 +872,7 @@ class AgendaObras:
                                         ui.label(item['descricao']).style('font-size: 11px; color: #666;')
                                         # Mostra info de reiteração se tarefa atrasada
                                         if item.get('data_limite'):
-                                            dias_restantes = self.helper.calcular_dias_restantes(item['data_limite'])
+                                            dias_restantes = self.calcular_dias_restantes_exibicao(item)
                                             if dias_restantes < 0:
                                                 info_reiteracao = self.formatar_info_reiteracao(item)
                                                 if info_reiteracao:
@@ -1173,7 +1215,7 @@ class AgendaObras:
         
         # Calcula dias restantes (se tiver data_limite)
         if item['data_limite'] and not bloqueado:
-            dias_restantes = self.helper.calcular_dias_restantes(item['data_limite'])
+            dias_restantes = self.calcular_dias_restantes_exibicao(item)
         else:
             dias_restantes = None
         
@@ -1185,18 +1227,19 @@ class AgendaObras:
             cor_status = 'green'
             texto_status = '✓ Concluída'
         elif dias_restantes is not None:
+            sufixo_dias = ' dias úteis' if self.usa_dias_uteis_exibicao(item) else ' dias'
             if dias_restantes < 0:
                 cor_status = 'red'
-                texto_status = f'⚠️ {abs(dias_restantes)} dias em atraso'
+                texto_status = f'⚠️ {abs(dias_restantes)}{sufixo_dias} em atraso'
             elif dias_restantes == 0:
                 cor_status = 'orange'
                 texto_status = f'⏰ Prazo é hoje!'
             elif dias_restantes <= 3:
                 cor_status = 'orange'
-                texto_status = f'⏰ {dias_restantes} dias restantes'
+                texto_status = f'⏰ {dias_restantes}{sufixo_dias} restantes'
             else:
                 cor_status = 'gray'
-                texto_status = f'📅 {dias_restantes} dias restantes'
+                texto_status = f'📅 {dias_restantes}{sufixo_dias} restantes'
         else:
             cor_status = 'gray'
             texto_status = 'Sem prazo definido'
