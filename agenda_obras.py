@@ -540,16 +540,38 @@ class AgendaObras:
                                 user_email = u['email']
 
                                 with ui.row().classes('items-center gap-1'):
+                                    if not u['is_admin']:
+                                        ui.button(
+                                            '⭐',
+                                            on_click=lambda uid=user_id, un=user_nome: promover_usuario_admin(uid, un)
+                                        ).props('flat dense round').style('color: #ff9800;').tooltip('Promover usuário para administrador')
+
                                     ui.button(
                                         '🔑',
                                         on_click=lambda uid=user_id, un=user_nome, ue=user_email: redefinir_senha_usuario(uid, un, ue)
-                                    ).props('flat dense round').style('color: #1976d2;')
+                                    ).props('flat dense round').style('color: #1976d2;').tooltip('Redefinir senha do usuário')
 
                                     if pode_excluir:
                                         ui.button(
                                             '🗑️',
                                             on_click=lambda uid=user_id, un=user_nome: confirmar_exclusao(uid, un)
-                                        ).props('flat dense round').style('color: #f44336;')
+                                        ).props('flat dense round').style('color: #f44336;').tooltip('Excluir usuário')
+
+            def promover_usuario_admin(user_id: int, user_nome: str):
+                usuario_logado = obter_usuario_logado()
+                if not usuario_logado.get('is_admin'):
+                    ui.notification('Apenas administradores podem promover usuários.', type='negative', timeout=3)
+                    return
+
+                try:
+                    promovido = auth_db.promover_para_admin(user_id)
+                    if promovido:
+                        renderizar_lista()
+                        ui.notification(f'Usuário "{user_nome}" promovido para administrador.', type='positive', timeout=3)
+                    else:
+                        ui.notification(f'"{user_nome}" já é administrador.', type='info', timeout=3)
+                except Exception:
+                    ui.notification('Erro ao promover usuário.', type='negative', timeout=3)
 
             def redefinir_senha_usuario(user_id: int, user_nome: str, user_email: str):
                 nova_senha = f'{randbelow(1_000_000):06d}'

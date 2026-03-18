@@ -10,6 +10,12 @@ from typing import List
 from error_logger import log_error
 
 
+# Caminho padrão: mesmo diretório do banco principal (Google Drive)
+_CAMINHO_DRIVE = r'G:\Meu Drive\17 - MODELOS\PROGRAMAS\AgendaObras\app\db'
+# Caminho fallback: diretório local junto ao código
+_CAMINHO_LOCAL = os.path.dirname(os.path.abspath(__file__))
+
+
 CONTRATOS_SEED = [
     'C.E.F BAHIA - 4922.2024',
     'C.E.F MANAUS - 4569.2024',
@@ -24,9 +30,11 @@ CONTRATOS_SEED = [
 
 
 def _resolver_caminho_contratos_db() -> str:
-    """Resolve o caminho do banco de contratos no diretório do projeto."""
-    caminho_local = os.path.dirname(os.path.abspath(__file__))
-    return os.path.join(caminho_local, 'contratos.db')
+    """Resolve o caminho do banco de contratos.
+    Tenta usar o diretório do Google Drive; se não existir, usa local."""
+    if os.path.isdir(_CAMINHO_DRIVE):
+        return os.path.join(_CAMINHO_DRIVE, 'contratos.db')
+    return os.path.join(_CAMINHO_LOCAL, 'contratos.db')
 
 
 class ContratosDatabase:

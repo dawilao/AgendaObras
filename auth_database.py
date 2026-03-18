@@ -224,6 +224,22 @@ class AuthDatabase:
         finally:
             conn.close()
 
+    def promover_para_admin(self, user_id: int) -> bool:
+        """Promove um usuário para administrador."""
+        conn = self.get_connection()
+        try:
+            cursor = conn.execute(
+                'UPDATE usuarios SET is_admin = 1 WHERE id = ? AND is_admin = 0',
+                (user_id,),
+            )
+            conn.commit()
+            return cursor.rowcount > 0
+        except Exception as e:
+            log_error(e, "auth_database", f"Promover usuário {user_id} para admin")
+            return False
+        finally:
+            conn.close()
+
     def contar_admins(self) -> int:
         """Retorna a quantidade de administradores cadastrados."""
         conn = self.get_connection()
