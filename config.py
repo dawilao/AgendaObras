@@ -34,12 +34,146 @@ ORDEM DE BUSCA DO ARQUIVO:
 3. Diretório do arquivo config.py
 4. Caminhos alternativos adicionados
 5. Variáveis de ambiente do sistema (fallback)
+
+MODO PRODUÇÃO (VPS):
+- Se AMBIENTE="producao" ou arquivo /etc/production existe
+- NÃO buscar arquivo de configuração (use variáveis de ambiente)
+- Registrar tentativas de acesso a arquivos .env em log
 """
 import json
 import os
 from typing import Optional, Dict, List
 from dataclasses import dataclass, field
 from error_logger import log_error
+
+
+def _limpar_valor_env(valor: Optional[str]) -> str:
+    """Normaliza valor de variável de ambiente removendo ruídos comuns."""
+    if valor is None:
+        return ""
+
+    valor_limpo = str(valor).strip()
+
+    if len(valor_limpo) >= 2 and (
+        (valor_limpo[0] == '"' and valor_limpo[-1] == '"')
+        or (valor_limpo[0] == "'" and valor_limpo[-1] == "'")
+    ):
+        valor_limpo = valor_limpo[1:-1].strip()
+    else:
+        valor_limpo = valor_limpo.strip('"').strip("'").strip()
+
+    if valor_limpo.endswith('>') and '<' not in valor_limpo:
+        valor_limpo = valor_limpo[:-1].strip()
+
+    return valor_limpo
+
+
+def _carregar_etc_environment(variaveis_interesse: Optional[List[str]] = None) -> Dict[str, str]:
+    """Lê variáveis do /etc/environment quando não estiverem no processo."""
+    if os.name == 'nt':
+        return {}
+
+    caminho = '/etc/environment'
+    if not os.path.exists(caminho):
+        return {}
+
+    variaveis = {}
+    try:
+        with open(caminho, 'r', encoding='utf-8') as arquivo:
+            for linha in arquivo:
+                linha = linha.strip()
+                if not linha or linha.startswith('#') or '=' not in linha:
+                    continue
+
+                chave, valor = linha.split('=', 1)
+                chave = chave.strip()
+
+                if variaveis_interesse and chave not in variaveis_interesse:
+                    continue
+
+                variaveis[chave] = _limpar_valor_env(valor)
+    except Exception as erro:
+        log_error(erro, 'config', 'Ler /etc/environment')
+
+    return variaveis
+
+
+def _obter_variavel_ambiente(
+    nome: str,
+    padrao: Optional[str] = None,
+    variaveis_etc: Optional[Dict[str, str]] = None
+) -> str:
+    """Obtém variável do ambiente do processo com fallback para /etc/environment."""
+    valor = os.getenv(nome)
+    if valor is not None and str(valor).strip():
+        return _limpar_valor_env(valor)
+
+    if variaveis_etc and nome in variaveis_etc:
+        return _limpar_valor_env(variaveis_etc.get(nome))
+
+    return _limpar_valor_env(padrao)
+
+
+def _parsear_destinatarios_env(valor: Optional[str]) -> List[str]:
+    """Converte EMAIL_DESTINATARIOS em lista limpa de emails."""
+    valor_limpo = _limpar_valor_env(valor)
+    if not valor_limpo:
+        return []
+
+    destinatarios = []
+    for item in valor_limpo.split(','):
+        email = _limpar_valor_env(item).strip().strip('"').strip("'").strip('<>').strip()
+        if email:
+            destinatarios.append(email)
+    return destinatarios
+
+
+def _parsear_bool_env(valor: Optional[str], padrao: bool) -> bool:
+    """Converte string de ambiente para bool."""
+    valor_limpo = _limpar_valor_env(valor)
+    if not valor_limpo:
+        return padrao
+    return valor_limpo.lower() in ['true', '1', 'yes', 'sim', 'on']
+
+
+# ========== Detecção de Ambiente ========== #
+def _esta_em_producao() -> bool:
+    """
+    Detecta se a aplicação está rodando em ambiente de produção.
+    
+    Sinais de produção:
+    - Variável AMBIENTE="producao"
+    - Arquivo /etc/production ou /etc/hostname contém 'vps'
+    - Variável DEPLOY_ENV="prod" ou "production"
+    """
+    variaveis_etc = _carregar_etc_environment(['AMBIENTE', 'DEPLOY_ENV'])
+
+    # 1. Verificar variável AMBIENTE
+    ambiente = _obter_variavel_ambiente('AMBIENTE', '', variaveis_etc).lower()
+    if ambiente in ['producao', 'production', 'prod']:
+        return True
+    
+    # 2. Verificar variável DEPLOY_ENV
+    deploy_env = _obter_variavel_ambiente('DEPLOY_ENV', '', variaveis_etc).lower()
+    if deploy_env in ['production', 'prod']:
+        return True
+    
+    # 3. Verificar arquivos do sistema Linux
+    if os.path.exists('/etc/production'):
+        return True
+    
+    # 4. Verificar hostname
+    try:
+        with open('/etc/hostname', 'r') as f:
+            hostname = f.read().strip().lower()
+            if any(x in hostname for x in ['vps', 'prod', 'server', 'cloud']):
+                return True
+    except:
+        pass
+    
+    return False
+
+AMBIENTE_PRODUCAO = _esta_em_producao()
 
 
 # ========== Informações do Sistema ========== #
@@ -73,7 +207,10 @@ class EmailConfig:
     
     def _buscar_arquivo_env(self, nome_arquivo: str = "email_config.env") -> Optional[str]:
         """
-        Busca o arquivo .env nos caminhos configurados
+        Busca o arquivo .env nos caminhos configurados.
+        
+        NOTA: Em ambiente de produção, IGNORA arquivos e busca apenas
+        variáveis de ambiente do sistema operacional.
         
         Args:
             nome_arquivo: Nome do arquivo a buscar (padrão: email_config.env)
@@ -81,6 +218,12 @@ class EmailConfig:
         Returns:
             Caminho completo do arquivo se encontrado, None caso contrário
         """
+        # ⭐ SEGURANÇA: Não buscar arquivos em produção
+        if AMBIENTE_PRODUCAO:
+            print("⚠️  Ambiente de PRODUÇÃO ativado - ignorando busca de arquivos de configuração")
+            print("   ℹ️ Use variáveis de ambiente do sistema para credenciais")
+            return None
+        
         # Lista de caminhos para buscar (em ordem de prioridade)
         caminhos = [
             r'G:\Meu Drive\17 - MODELOS\PROGRAMAS\AgendaObras\app\email_config.env',
@@ -115,6 +258,10 @@ class EmailConfig:
         """
         Configura email a partir de arquivo .env JSON ou variáveis de ambiente
         
+        Em ambiente de PRODUÇÃO:
+        - Será ignorar arquivos locais
+        - Buscará APENAS variáveis de ambiente do sistema
+        
         Args:
             caminho_config: Caminho específico do arquivo de configuração
             caminhos_extras: Lista de caminhos adicionais para buscar o arquivo .env
@@ -129,7 +276,8 @@ class EmailConfig:
         arquivo_encontrado = None
         
         # 1. Se um caminho específico foi fornecido, tentar usá-lo primeiro
-        if caminho_config and os.path.exists(caminho_config):
+        # (mas ignorar se em produção)
+        if caminho_config and os.path.exists(caminho_config) and not AMBIENTE_PRODUCAO:
             arquivo_encontrado = caminho_config
         else:
             # 2. Buscar arquivo .env nos caminhos configurados
@@ -152,31 +300,52 @@ class EmailConfig:
                     return True
             except Exception as e:
                 print(f"Erro ao configurar email a partir do arquivo: {e}")
-                log_error(e, "config", f"Configurar email a partir do arquivo: {caminho_encontrado}")
+                log_error(e, "config", f"Configurar email a partir do arquivo: {arquivo_encontrado}")
         
         # 4. Fallback: Tentar configurar a partir de variáveis de ambiente do sistema
-        print("⚠ Arquivo .env não encontrado. Tentando variáveis de ambiente do sistema...")
-        self.smtp_server = os.getenv('SMTP_SERVER', self.smtp_server)
-        smtp_port_env = os.getenv('SMTP_PORT')
+        if AMBIENTE_PRODUCAO:
+            print("📋 Carregando credenciais das VARIÁVEIS DE AMBIENTE (modo produção)...")
+        else:
+            print("⚠ Arquivo .env não encontrado. Tentando variáveis de ambiente do sistema...")
+
+        variaveis_interesse = [
+            'SMTP_SERVER', 'SMTP_PORT', 'SMTP_USER', 'SMTP_PASSWORD', 'EMAIL_REMETENTE',
+            'EMAIL_DESTINATARIOS', 'EMAIL_CRITICO', 'USAR_TLS'
+        ]
+        variaveis_etc = _carregar_etc_environment(variaveis_interesse)
+        if variaveis_etc:
+            print("✓ Fallback /etc/environment carregado")
+        
+        self.smtp_server = _obter_variavel_ambiente('SMTP_SERVER', self.smtp_server, variaveis_etc)
+        smtp_port_env = _obter_variavel_ambiente('SMTP_PORT', '', variaveis_etc)
         if smtp_port_env:
             try:
                 self.smtp_port = int(smtp_port_env)
             except ValueError:
                 print(f"⚠ Valor inválido para SMTP_PORT: {smtp_port_env}")
-        self.smtp_user = os.getenv('SMTP_USER', self.smtp_user)
-        self.smtp_password = os.getenv('SMTP_PASSWORD', self.smtp_password)
-        self.email_remetente = os.getenv('EMAIL_REMETENTE', self.email_remetente)
-        self.email_destinatarios = os.getenv('EMAIL_DESTINATARIOS', '').split(',') if os.getenv('EMAIL_DESTINATARIOS') else []
-        self.email_critico = os.getenv('EMAIL_CRITICO', '')
-        usar_tls_env = os.getenv('USAR_TLS')
-        if usar_tls_env is not None:
-            self.usar_tls = usar_tls_env.lower() in ['true', '1', 'yes']
+        self.smtp_user = _obter_variavel_ambiente('SMTP_USER', self.smtp_user, variaveis_etc)
+        self.smtp_password = _obter_variavel_ambiente('SMTP_PASSWORD', self.smtp_password, variaveis_etc)
+        self.email_remetente = _obter_variavel_ambiente('EMAIL_REMETENTE', self.email_remetente, variaveis_etc)
+        self.email_destinatarios = _parsear_destinatarios_env(
+            _obter_variavel_ambiente('EMAIL_DESTINATARIOS', '', variaveis_etc)
+        )
+        self.email_critico = _obter_variavel_ambiente('EMAIL_CRITICO', '', variaveis_etc)
+        usar_tls_env = _obter_variavel_ambiente('USAR_TLS', '', variaveis_etc)
+        self.usar_tls = _parsear_bool_env(usar_tls_env, self.usar_tls)
         
         if self.is_configured():
-            print("✓ Configurações de email carregadas das variáveis de ambiente")
+            print("✓ Configurações de email carregadas com sucesso")
+            if AMBIENTE_PRODUCAO:
+                print("✓ Modo PRODUÇÃO ativado - credenciais seguras de variáveis de ambiente")
             return True
         else:
-            print("✗ Não foi possível configurar o email. Verifique o arquivo .env ou variáveis de ambiente")
+            print("✗ Não foi possível configurar o email.")
+            if AMBIENTE_PRODUCAO:
+                print("✗ Em PRODUÇÃO, defina as variáveis de ambiente: SMTP_SERVER, SMTP_PORT, SMTP_USER, SMTP_PASSWORD, EMAIL_REMETENTE")
+                log_error(Exception("Variáveis de ambiente SMTP não definidas"), 
+                         "config", "Email não configurado em ambiente de produção")
+            else:
+                print("✗ Verifique o arquivo email_config.env ou as variáveis de ambiente")
             return False
 
     def adicionar_caminho_busca(self, caminho: str) -> None:

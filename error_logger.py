@@ -18,7 +18,13 @@ from typing import Optional
 
 
 # Caminho padrão para salvar logs de erros
-ERRO_DIR = r"G:\Meu Drive\17 - MODELOS\PROGRAMAS\AgendaObras\app\erros"
+# Usa diretório relativo ao projeto para facilitar deploy em VPS
+_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+ERRO_DIR = os.path.join(_SCRIPT_DIR, "erros")
+
+# Fallback para variável de ambiente se definida (útil para VPS com permissões específicas)
+if os.getenv('AGENDAOBRAS_ERRO_DIR'):
+    ERRO_DIR = os.getenv('AGENDAOBRAS_ERRO_DIR')
 
 
 def log_error(e: Exception, modulo: str, contexto: str = "") -> None:
