@@ -33,12 +33,12 @@ ORDEM DE BUSCA DO ARQUIVO:
 2. Diretório atual
 3. Diretório do arquivo config.py
 4. Caminhos alternativos adicionados
-5. Variáveis de ambiente do sistema (fallback)
+5. Variáveis de ambiente do processo (fallback)
 
 MODO PRODUÇÃO (VPS):
 - Se AMBIENTE="producao" ou arquivo /etc/production existe
-- NÃO buscar arquivo de configuração (use variáveis de ambiente)
-- Registrar tentativas de acesso a arquivos .env em log
+- Buscar email_config.env no diretório local e, se não encontrar,
+  usar variáveis de ambiente do processo
 """
 import json
 import os
@@ -68,48 +68,14 @@ def _limpar_valor_env(valor: Optional[str]) -> str:
     return valor_limpo
 
 
-def _carregar_etc_environment(variaveis_interesse: Optional[List[str]] = None) -> Dict[str, str]:
-    """Lê variáveis do /etc/environment quando não estiverem no processo."""
-    if os.name == 'nt':
-        return {}
-
-    caminho = '/etc/environment'
-    if not os.path.exists(caminho):
-        return {}
-
-    variaveis = {}
-    try:
-        with open(caminho, 'r', encoding='utf-8') as arquivo:
-            for linha in arquivo:
-                linha = linha.strip()
-                if not linha or linha.startswith('#') or '=' not in linha:
-                    continue
-
-                chave, valor = linha.split('=', 1)
-                chave = chave.strip()
-
-                if variaveis_interesse and chave not in variaveis_interesse:
-                    continue
-
-                variaveis[chave] = _limpar_valor_env(valor)
-    except Exception as erro:
-        log_error(erro, 'config', 'Ler /etc/environment')
-
-    return variaveis
-
-
 def _obter_variavel_ambiente(
     nome: str,
-    padrao: Optional[str] = None,
-    variaveis_etc: Optional[Dict[str, str]] = None
+    padrao: Optional[str] = None
 ) -> str:
-    """Obtém variável do ambiente do processo com fallback para /etc/environment."""
+    """Obtém variável do ambiente do processo."""
     valor = os.getenv(nome)
     if valor is not None and str(valor).strip():
         return _limpar_valor_env(valor)
-
-    if variaveis_etc and nome in variaveis_etc:
-        return _limpar_valor_env(variaveis_etc.get(nome))
 
     return _limpar_valor_env(padrao)
 
@@ -146,15 +112,13 @@ def _esta_em_producao() -> bool:
     - Arquivo /etc/production ou /etc/hostname contém 'vps'
     - Variável DEPLOY_ENV="prod" ou "production"
     """
-    variaveis_etc = _carregar_etc_environment(['AMBIENTE', 'DEPLOY_ENV'])
-
     # 1. Verificar variável AMBIENTE
-    ambiente = _obter_variavel_ambiente('AMBIENTE', '', variaveis_etc).lower()
+    ambiente = _obter_variavel_ambiente('AMBIENTE', '').lower()
     if ambiente in ['producao', 'production', 'prod']:
         return True
     
     # 2. Verificar variável DEPLOY_ENV
-    deploy_env = _obter_variavel_ambiente('DEPLOY_ENV', '', variaveis_etc).lower()
+    deploy_env = _obter_variavel_ambiente('DEPLOY_ENV', '').lower()
     if deploy_env in ['production', 'prod']:
         return True
     
@@ -209,8 +173,8 @@ class EmailConfig:
         """
         Busca o arquivo .env nos caminhos configurados.
         
-        NOTA: Em ambiente de produção, IGNORA arquivos e busca apenas
-        variáveis de ambiente do sistema operacional.
+        NOTA: Busca primeiro no diretório local da execução e no diretório
+        deste arquivo.
         
         Args:
             nome_arquivo: Nome do arquivo a buscar (padrão: email_config.env)
@@ -218,15 +182,8 @@ class EmailConfig:
         Returns:
             Caminho completo do arquivo se encontrado, None caso contrário
         """
-        # ⭐ SEGURANÇA: Não buscar arquivos em produção
-        if AMBIENTE_PRODUCAO:
-            print("⚠️  Ambiente de PRODUÇÃO ativado - ignorando busca de arquivos de configuração")
-            print("   ℹ️ Use variáveis de ambiente do sistema para credenciais")
-            return None
-        
         # Lista de caminhos para buscar (em ordem de prioridade)
         caminhos = [
-            r'G:\Meu Drive\17 - MODELOS\PROGRAMAS\AgendaObras\app\email_config.env',
             nome_arquivo,
             os.path.join(os.path.dirname(os.path.abspath(__file__)), nome_arquivo),
             *[os.path.join(caminho, nome_arquivo) for caminho in self.caminhos_alternativos],
@@ -240,18 +197,63 @@ class EmailConfig:
         return None
     
     def _carregar_json_env(self, caminho: str) -> Dict:
-        """Carrega arquivo JSON .env"""
+        """Carrega email_config.env em JSON ou formato .env (CHAVE=VALOR)."""
         try:
             with open(caminho, 'r', encoding='utf-8') as f:
-                return json.load(f)
-        except json.JSONDecodeError as e:
-            print(f"Erro ao decodificar JSON do arquivo {caminho}: {e}")
-            log_error(e, "config", f"Decodificar JSON em: {caminho}")
-            return {}
+                conteudo = f.read()
         except Exception as e:
             print(f"Erro ao ler arquivo {caminho}: {e}")
             log_error(e, "config", f"Ler arquivo de configuração: {caminho}")
             return {}
+
+        # 1) Tenta JSON
+        try:
+            data_json = json.loads(conteudo)
+            if isinstance(data_json, dict):
+                return data_json
+        except json.JSONDecodeError:
+            pass
+
+        # 2) Tenta .env (CHAVE=VALOR)
+        data_env: Dict[str, object] = {}
+        for linha in conteudo.splitlines():
+            linha = linha.strip()
+            if not linha or linha.startswith('#') or '=' not in linha:
+                continue
+
+            chave, valor = linha.split('=', 1)
+            chave = chave.strip().lower()
+            valor_limpo = _limpar_valor_env(valor)
+
+            if chave == 'smtp_port':
+                try:
+                    data_env[chave] = int(valor_limpo)
+                except ValueError:
+                    data_env[chave] = valor_limpo
+            elif chave == 'usar_tls':
+                data_env[chave] = _parsear_bool_env(valor_limpo, True)
+            elif chave == 'email_destinatarios':
+                data_env[chave] = _parsear_destinatarios_env(valor_limpo)
+            else:
+                data_env[chave] = valor_limpo
+
+        # 3) Normaliza aliases comuns em maiúsculas
+        aliases = {
+            'SMTP_SERVER': 'smtp_server',
+            'SMTP_PORT': 'smtp_port',
+            'SMTP_USER': 'smtp_user',
+            'SMTP_PASSWORD': 'smtp_password',
+            'EMAIL_REMETENTE': 'email_remetente',
+            'EMAIL_DESTINATARIOS': 'email_destinatarios',
+            'EMAIL_CRITICO': 'email_critico',
+            'USAR_TLS': 'usar_tls',
+        }
+        for origem, destino in aliases.items():
+            origem_lower = origem.lower()
+            if origem_lower in data_env and destino not in data_env:
+                data_env[destino] = data_env[origem_lower]
+
+        return data_env
 
     def config_email(self, caminho_config: Optional[str] = None, 
                      caminhos_extras: Optional[List[str]] = None) -> bool:
@@ -259,8 +261,8 @@ class EmailConfig:
         Configura email a partir de arquivo .env JSON ou variáveis de ambiente
         
         Em ambiente de PRODUÇÃO:
-        - Será ignorar arquivos locais
-        - Buscará APENAS variáveis de ambiente do sistema
+        - Tentará carregar email_config.env local
+        - Se não encontrar, usará variáveis de ambiente do processo
         
         Args:
             caminho_config: Caminho específico do arquivo de configuração
@@ -276,8 +278,7 @@ class EmailConfig:
         arquivo_encontrado = None
         
         # 1. Se um caminho específico foi fornecido, tentar usá-lo primeiro
-        # (mas ignorar se em produção)
-        if caminho_config and os.path.exists(caminho_config) and not AMBIENTE_PRODUCAO:
+        if caminho_config and os.path.exists(caminho_config):
             arquivo_encontrado = caminho_config
         else:
             # 2. Buscar arquivo .env nos caminhos configurados
@@ -303,34 +304,23 @@ class EmailConfig:
                 log_error(e, "config", f"Configurar email a partir do arquivo: {arquivo_encontrado}")
         
         # 4. Fallback: Tentar configurar a partir de variáveis de ambiente do sistema
-        if AMBIENTE_PRODUCAO:
-            print("📋 Carregando credenciais das VARIÁVEIS DE AMBIENTE (modo produção)...")
-        else:
-            print("⚠ Arquivo .env não encontrado. Tentando variáveis de ambiente do sistema...")
+        print("⚠ Arquivo .env não encontrado ou inválido. Tentando variáveis de ambiente do processo...")
 
-        variaveis_interesse = [
-            'SMTP_SERVER', 'SMTP_PORT', 'SMTP_USER', 'SMTP_PASSWORD', 'EMAIL_REMETENTE',
-            'EMAIL_DESTINATARIOS', 'EMAIL_CRITICO', 'USAR_TLS'
-        ]
-        variaveis_etc = _carregar_etc_environment(variaveis_interesse)
-        if variaveis_etc:
-            print("✓ Fallback /etc/environment carregado")
-        
-        self.smtp_server = _obter_variavel_ambiente('SMTP_SERVER', self.smtp_server, variaveis_etc)
-        smtp_port_env = _obter_variavel_ambiente('SMTP_PORT', '', variaveis_etc)
+        self.smtp_server = _obter_variavel_ambiente('SMTP_SERVER', self.smtp_server)
+        smtp_port_env = _obter_variavel_ambiente('SMTP_PORT', '')
         if smtp_port_env:
             try:
                 self.smtp_port = int(smtp_port_env)
             except ValueError:
                 print(f"⚠ Valor inválido para SMTP_PORT: {smtp_port_env}")
-        self.smtp_user = _obter_variavel_ambiente('SMTP_USER', self.smtp_user, variaveis_etc)
-        self.smtp_password = _obter_variavel_ambiente('SMTP_PASSWORD', self.smtp_password, variaveis_etc)
-        self.email_remetente = _obter_variavel_ambiente('EMAIL_REMETENTE', self.email_remetente, variaveis_etc)
+        self.smtp_user = _obter_variavel_ambiente('SMTP_USER', self.smtp_user)
+        self.smtp_password = _obter_variavel_ambiente('SMTP_PASSWORD', self.smtp_password)
+        self.email_remetente = _obter_variavel_ambiente('EMAIL_REMETENTE', self.email_remetente)
         self.email_destinatarios = _parsear_destinatarios_env(
-            _obter_variavel_ambiente('EMAIL_DESTINATARIOS', '', variaveis_etc)
+            _obter_variavel_ambiente('EMAIL_DESTINATARIOS', '')
         )
-        self.email_critico = _obter_variavel_ambiente('EMAIL_CRITICO', '', variaveis_etc)
-        usar_tls_env = _obter_variavel_ambiente('USAR_TLS', '', variaveis_etc)
+        self.email_critico = _obter_variavel_ambiente('EMAIL_CRITICO', '')
+        usar_tls_env = _obter_variavel_ambiente('USAR_TLS', '')
         self.usar_tls = _parsear_bool_env(usar_tls_env, self.usar_tls)
         
         if self.is_configured():

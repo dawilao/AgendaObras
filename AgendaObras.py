@@ -4,6 +4,8 @@ from login_page import LoginPage
 from auth_middleware import configurar_middleware, verificar_autenticacao, fazer_logout
 import sys
 import os
+import json
+from dotenv import load_dotenv
 
 # Corrige paths quando executável
 if getattr(sys, 'frozen', False):
@@ -11,8 +13,46 @@ if getattr(sys, 'frozen', False):
 else:
     application_path = os.path.dirname(os.path.abspath(__file__))
 
+
+def _carregar_storage_secret() -> str:
+    """Carrega NICEGUI_STORAGE_SECRET do email_config.env (JSON/.env) com fallback para ambiente."""
+    caminhos_env = [
+        os.path.join(application_path, 'email_config.env'),
+        os.path.join(os.getcwd(), 'email_config.env'),
+    ]
+
+    for caminho in caminhos_env:
+        if os.path.exists(caminho):
+            try:
+                with open(caminho, 'r', encoding='utf-8') as arquivo:
+                    conteudo = arquivo.read()
+
+                # 1) Tenta formato JSON
+                try:
+                    data = json.loads(conteudo)
+                    if isinstance(data, dict):
+                        secret_json = data.get('NICEGUI_STORAGE_SECRET') or data.get('nicegui_storage_secret')
+                        if secret_json:
+                            return str(secret_json).strip().strip('"').strip("'")
+                except json.JSONDecodeError:
+                    pass
+            except Exception:
+                pass
+
+            # 2) Tenta formato .env (CHAVE=VALOR)
+            load_dotenv(caminho, override=False)
+            secret_env_file = os.getenv('NICEGUI_STORAGE_SECRET', '')
+            if secret_env_file:
+                return secret_env_file.strip().strip('"').strip("'")
+
+    return os.getenv('NICEGUI_STORAGE_SECRET', '').strip().strip('"').strip("'")
+
+
+NICEGUI_STORAGE_SECRET = _carregar_storage_secret()
+
 # Registra middleware de autenticação
 configurar_middleware()
+
 
 
 @ui.page('/login')
@@ -51,5 +91,5 @@ if __name__ in {"__main__", "__mp_main__"}:
         language='pt-BR',
         favicon='🏗️',
         binding_refresh_interval=0.1,
-        storage_secret='agendaobras-secret-key-2026',
+        storage_secret=NICEGUI_STORAGE_SECRET,
     )
