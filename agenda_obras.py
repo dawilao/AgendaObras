@@ -195,6 +195,32 @@ class AgendaObras:
         
         # Se não conseguiu converter, retorna original
         return data_str
+
+    def _obter_permissoes_usuario(self) -> Dict:
+        """Obtém permissões de visualização de contratos para o usuário logado."""
+        usuario = obter_usuario_logado()
+        is_admin = bool(usuario.get('is_admin'))
+        user_id = usuario.get('id')
+
+        contratos_vinculados = []
+        if not is_admin and user_id:
+            contratos_vinculados = self.contratos_db.listar_contratos_usuario(user_id)
+
+        return {
+            'usuario': usuario,
+            'is_admin': is_admin,
+            'user_id': user_id,
+            'contratos_vinculados': contratos_vinculados,
+        }
+
+    def _usuario_pode_acessar_contrato(self, contrato_nome: str) -> bool:
+        """Valida se o usuário logado pode acessar um contrato específico."""
+        permissoes = self._obter_permissoes_usuario()
+        if permissoes['is_admin']:
+            return True
+
+        contrato_normalizado = (contrato_nome or '').strip()
+        return contrato_normalizado in set(permissoes['contratos_vinculados'])
     
     def verificar_atualizacao(self):
         """Verifica se há atualização disponível e exige atualização se necessário"""
@@ -487,8 +513,12 @@ class AgendaObras:
 
     def abrir_gerenciar_usuarios(self):
         """Abre diálogo de gerenciamento de usuários."""
+        usuario_logado = obter_usuario_logado()
+        if not usuario_logado.get('is_admin'):
+            self.notificar('⛔ Apenas administradores podem gerenciar usuários.', tipo='negative')
+            return
+
         auth_db = AuthDatabase()
-        usuarios = auth_db.listar_usuarios()
 
         with ui.dialog() as dialog, ui.card().style(
             'min-width: 650px; max-width: 800px; padding: 25px;'
@@ -505,9 +535,52 @@ class AgendaObras:
             # Container da lista de usuários
             lista_container = ui.column().classes('w-full')
 
+            def abrir_vinculos_usuario(user_id: int, user_nome: str, is_admin_usuario: bool = False):
+                contratos_disponiveis = self.contratos_db.listar_contratos()
+                vinculados = set(contratos_disponiveis) if is_admin_usuario else set(self.contratos_db.listar_contratos_usuario(user_id))
+
+                with ui.dialog() as vinculo_dialog, ui.card().style('min-width: 500px; max-width: 700px; padding: 20px;'):
+                    ui.label(f'🔗 Contratos de {user_nome}').style('font-size: 20px; font-weight: bold; color: #1976d2;')
+                    ui.label('Selecione os contratos que este usuário poderá visualizar.').style('font-size: 13px; color: #666; margin-bottom: 10px;')
+                    if is_admin_usuario:
+                        ui.label('Este usuário é administrador e vê todos os contratos automaticamente.').style('font-size: 12px; color: #999; margin-bottom: 10px;')
+
+                    if not contratos_disponiveis:
+                        ui.label('⚠️ Nenhum contrato cadastrado em contratos.db').style('color: #f44336; font-size: 13px;')
+                    else:
+                        checkboxes = {}
+                        with ui.column().classes('w-full').style('max-height: 350px; overflow-y: auto; border: 1px solid #e0e0e0; padding: 10px; border-radius: 6px;'):
+                            for contrato_nome in contratos_disponiveis:
+                                checkboxes[contrato_nome] = ui.checkbox(
+                                    contrato_nome,
+                                    value=contrato_nome in vinculados,
+                                )
+
+                        def salvar_vinculos():
+                            selecionados = contratos_disponiveis if is_admin_usuario else [nome for nome, cb in checkboxes.items() if cb.value]
+                            ok = self.contratos_db.substituir_vinculos_usuario(user_id, selecionados)
+                            if not ok:
+                                ui.notification('Erro ao salvar vínculos de contrato.', type='negative', timeout=3)
+                                return
+
+                            ui.notification('Vínculos de contratos atualizados.', type='positive', timeout=3)
+                            vinculo_dialog.close()
+                            renderizar_lista()
+
+                        with ui.row().classes('w-full justify-end gap-2').style('margin-top: 12px;'):
+                            ui.button('Cancelar', on_click=vinculo_dialog.close).props('flat').style('color: #666;')
+                            ui.button('Salvar Vínculos', on_click=salvar_vinculos).style(
+                                'background-color: #1976d2; color: white; font-weight: bold;'
+                            )
+
+                vinculo_dialog.open()
+
             def renderizar_lista():
                 lista_container.clear()
                 lista_atualizada = auth_db.listar_usuarios()
+                contagem_vinculos = self.contratos_db.contar_contratos_por_usuario()
+                usuario_logado = obter_usuario_logado()
+                total_admins = auth_db.contar_admins()
 
                 with lista_container:
                     if not lista_atualizada:
@@ -527,12 +600,16 @@ class AgendaObras:
                                         if u['is_admin']:
                                             ui.badge('Admin', color='blue').style('font-size: 10px;')
                                     ui.label(u['email']).style('color: #666; font-size: 13px;')
+                                    if u['is_admin']:
+                                        ui.label('Acesso: todos os contratos').style('color: #999; font-size: 12px;')
+                                    else:
+                                        total_contratos = contagem_vinculos.get(u['id'], 0)
+                                        ui.label(f'Contratos vinculados: {total_contratos}').style('color: #999; font-size: 12px;')
 
                                 # Não permite excluir a si mesmo nem o último admin
-                                usuario_logado = obter_usuario_logado()
                                 pode_excluir = (
                                     u['id'] != usuario_logado.get('id')
-                                    and not (u['is_admin'] and auth_db.contar_admins() <= 1)
+                                    and not (u['is_admin'] and total_admins <= 1)
                                 )
 
                                 user_id = u['id']
@@ -540,6 +617,11 @@ class AgendaObras:
                                 user_email = u['email']
 
                                 with ui.row().classes('items-center gap-1'):
+                                    ui.button(
+                                        '🔗',
+                                            on_click=lambda uid=user_id, un=user_nome, admin=u['is_admin']: abrir_vinculos_usuario(uid, un, admin)
+                                    ).props('flat dense round').style('color: #1976d2;').tooltip('Vincular contratos ao usuário')
+
                                     if not u['is_admin']:
                                         ui.button(
                                             '⭐',
@@ -613,10 +695,17 @@ class AgendaObras:
                         ui.button('Cancelar', on_click=confirm_dialog.close).props('flat').style('color: #666;')
 
                         def executar_exclusao():
-                            auth_db.excluir_usuario(user_id)
+                            self.contratos_db.remover_todos_vinculos_usuario(user_id)
+                            excluido = auth_db.excluir_usuario(user_id)
+
+                            if not excluido:
+                                ui.notification('Erro ao excluir usuário.', type='negative', timeout=3)
+                                return
+
+                            # Notifica antes de fechar o diálogo para evitar contexto de slot já removido.
+                            ui.notification(f'Usuário "{user_nome}" excluído.', type='warning', timeout=3)
                             confirm_dialog.close()
                             renderizar_lista()
-                            ui.notification(f'Usuário "{user_nome}" excluído.', type='warning', timeout=3)
 
                         ui.button('Excluir', on_click=executar_exclusao).style(
                             'background-color: #f44336; color: white;'
@@ -706,7 +795,15 @@ class AgendaObras:
                             ui.label(f'Pesquisando por: "{self.filtro_pesquisa}"').style('color: #1976d2; font-weight: bold;')
                         ui.button('✕ Limpar pesquisa', on_click=self.atualizar_dados).props('flat').style('color: #1976d2;')
             
-            obras = self.db.listar_obras(self.filtro_pesquisa if self.filtro_pesquisa else None)
+            permissoes = self._obter_permissoes_usuario()
+
+            if permissoes['is_admin']:
+                obras = self.db.listar_obras(self.filtro_pesquisa if self.filtro_pesquisa else None)
+            else:
+                obras = self.db.listar_obras_por_contratos(
+                    permissoes['contratos_vinculados'],
+                    self.filtro_pesquisa if self.filtro_pesquisa else None,
+                )
             
             if not obras:
                 with ui.card().classes('w-full').style('padding: 40px; text-align: center;'):
@@ -716,8 +813,12 @@ class AgendaObras:
                         ui.label(f'Não há obras que correspondam a "{self.filtro_pesquisa}"').style('font-size: 14px; color: #bbb;')
                         ui.button('Limpar pesquisa', on_click=self.atualizar_dados).props('outlined').style('margin-top: 15px;')
                     else:
-                        ui.label('Nenhuma obra cadastrada').style('font-size: 18px; color: #999;')
-                        ui.label('Clique em "Nova Obra" para começar').style('font-size: 14px; color: #bbb;')
+                        if not permissoes['is_admin'] and not permissoes['contratos_vinculados']:
+                            ui.label('Nenhum contrato vinculado ao seu usuário').style('font-size: 18px; color: #999;')
+                            ui.label('Solicite a um administrador o vínculo com um contrato.').style('font-size: 14px; color: #bbb;')
+                        else:
+                            ui.label('Nenhuma obra cadastrada').style('font-size: 18px; color: #999;')
+                            ui.label('Clique em "Nova Obra" para começar').style('font-size: 14px; color: #bbb;')
             else:
                 # Contador de resultados
                 total = len(obras)
@@ -905,6 +1006,8 @@ class AgendaObras:
     # ========== Dialogs ========== #
     def nova_entrada(self):
         """Dialog para adicionar nova obra"""
+        permissoes = self._obter_permissoes_usuario()
+
         with ui.dialog() as dialog, ui.card().style('min-width: 700px; max-width: 900px; padding: 20px; max-height: 90vh; overflow-y: auto;'):
             ui.label('➕ Nova Obra').style('font-size: 22px; font-weight: bold; margin-bottom: 15px;')
             
@@ -914,10 +1017,18 @@ class AgendaObras:
             # Campos básicos
             nome_input = ui.input(label='Nome do Contrato *').classes('w-full').props('outlined')
             contratos_disponiveis = self.contratos_db.listar_contratos()
+            if not permissoes['is_admin']:
+                contratos_disponiveis = [
+                    contrato for contrato in contratos_disponiveis
+                    if contrato in set(permissoes['contratos_vinculados'])
+                ]
             contrato_input = ui.select(contratos_disponiveis, label='Contrato *').classes('w-full').props('outlined')
 
             if not contratos_disponiveis:
-                ui.label('⚠️ Nenhum contrato disponível em contratos.db').style('color: #f44336; font-size: 12px;')
+                if permissoes['is_admin']:
+                    ui.label('⚠️ Nenhum contrato disponível em contratos.db').style('color: #f44336; font-size: 12px;')
+                else:
+                    ui.label('⚠️ Seu usuário não possui contratos vinculados.').style('color: #f44336; font-size: 12px;')
             
             with ui.row().classes('w-full gap-2'):
                 contrato_ic_input = ui.input(label='Contrato (IC)').classes('w-full').props('outlined')
@@ -1025,6 +1136,10 @@ class AgendaObras:
         if not nome or not cliente:
             self.notificar('⚠️ Nome do contrato e Contrato são obrigatórios!', tipo='warning')
             return
+
+        if not self._usuario_pode_acessar_contrato(cliente):
+            self.notificar('⛔ Você não possui permissão para criar obra neste contrato.', tipo='negative')
+            return
         
         if not valor or valor <= 0:
             self.notificar('⚠️ Valor do contrato deve ser maior que zero!', tipo='warning')
@@ -1057,6 +1172,14 @@ class AgendaObras:
     def abrir_detalhes_obra(self, obra_id: int):
         """Dialog para visualizar e editar obra com checklist"""
         obra = self.db.obter_obra(obra_id)
+        if not obra:
+            self.notificar('⚠️ Obra não encontrada.', tipo='warning')
+            return
+
+        if not self._usuario_pode_acessar_contrato(obra.get('cliente')):
+            self.notificar('⛔ Você não tem acesso a este contrato.', tipo='negative')
+            return
+
         checklist = self.db.obter_checklist(obra_id)
 
         # Verificar se tarefas críticas estão concluídas para habilitar campos
@@ -1080,7 +1203,13 @@ class AgendaObras:
             # ===== SEÇÃO 1: Informações Básicas =====
             ui.label('📋 Informações Básicas').style('font-size: 16px; font-weight: bold; margin-top: 10px; color: #1976d2;')
 
+            permissoes = self._obter_permissoes_usuario()
             contratos_disponiveis = self.contratos_db.listar_contratos()
+            if not permissoes['is_admin']:
+                contratos_disponiveis = [
+                    contrato for contrato in contratos_disponiveis
+                    if contrato in set(permissoes['contratos_vinculados'])
+                ]
             contrato_obra_atual = obra.get('cliente') or ''
             contrato_fora_da_lista = bool(contrato_obra_atual) and contrato_obra_atual not in contratos_disponiveis
             valor_inicial_contrato = None if contrato_fora_da_lista else contrato_obra_atual
@@ -1582,6 +1711,10 @@ class AgendaObras:
         
         if not valor or valor <= 0:
             self.notificar('⚠️ Valor deve ser maior que zero!', tipo='warning')
+            return
+
+        if not self._usuario_pode_acessar_contrato(cliente):
+            self.notificar('⛔ Você não possui permissão para alterar para este contrato.', tipo='negative')
             return
         
         try:

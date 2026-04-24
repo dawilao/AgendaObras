@@ -7,9 +7,11 @@ import threading
 import time
 import datetime
 import sqlite3
-from typing import Dict
+from typing import Dict, List
 from zoneinfo import ZoneInfo
 from error_logger import log_error
+from auth_database import AuthDatabase
+from contratos_database import ContratosDatabase
 from config import (
     EMAIL_DISPARO_HORA,
     EMAIL_DISPARO_MINUTO,
@@ -41,6 +43,71 @@ class NotificadorPrazos:
                 f"[AVISO] Timezone '{EMAIL_DISPARO_TIMEZONE}' indisponivel no sistema. "
                 "Usando fallback fixo UTC-03:00."
             )
+
+    def _obter_destinatarios_por_contrato(self, contrato_nome: str, tem_critico: bool = False) -> List[str]:
+        """Resolve destinatários por regra de acesso:
+        - Admin recebe alertas de todos os contratos
+        - Não-admin recebe apenas alertas dos contratos vinculados
+        - Se não houver base de usuários disponível, usa fallback da configuração de email
+        """
+        fallback = list(getattr(self.email_service.config, 'email_destinatarios', []) or [])
+        destinatarios = []
+
+        try:
+            auth_db = AuthDatabase()
+            contratos_db = ContratosDatabase()
+
+            usuarios = auth_db.listar_usuarios()
+            contrato_normalizado = (contrato_nome or '').strip()
+
+            if usuarios:
+                emails = set()
+                for usuario in usuarios:
+                    email = (usuario.get('email') or '').strip().lower()
+                    if not email:
+                        continue
+
+                    if usuario.get('is_admin'):
+                        emails.add(email)
+                        continue
+
+                    user_id = usuario.get('id')
+                    if not user_id:
+                        continue
+
+                    contratos_usuario = {
+                        (c or '').strip()
+                        for c in contratos_db.listar_contratos_usuario(user_id)
+                        if (c or '').strip()
+                    }
+                    if contrato_normalizado in contratos_usuario:
+                        emails.add(email)
+
+                destinatarios = sorted(emails)
+
+            # Fallback: mantém compatibilidade quando users.db estiver ausente/incompleto
+            if not destinatarios:
+                destinatarios = fallback
+
+        except Exception as e:
+            log_error(e, "notificador_prazos", "Resolver destinatários por contrato")
+            destinatarios = fallback
+
+        if tem_critico:
+            email_critico = (getattr(self.email_service.config, 'email_critico', '') or '').strip().lower()
+            if email_critico and email_critico not in set(destinatarios):
+                destinatarios.append(email_critico)
+
+        # Remove vazios e deduplica preservando ordem
+        deduplicados = []
+        vistos = set()
+        for email in destinatarios:
+            email_limpo = (email or '').strip().lower()
+            if email_limpo and email_limpo not in vistos:
+                vistos.add(email_limpo)
+                deduplicados.append(email_limpo)
+
+        return deduplicados
 
     def _nome_fuso_horario(self) -> str:
         """Retorna nome amigável da timezone atual."""
@@ -466,13 +533,13 @@ class NotificadorPrazos:
                 tarefas_com_conteudo
             )
             
-            # Monta lista de destinatários (adiciona email_critico para alertas críticos)
-            destinatario = list(self.email_service.config.email_destinatarios)
-            if tem_critico:
-                email_critico = getattr(self.email_service.config, 'email_critico', '')
-                if email_critico and email_critico not in destinatario:
-                    destinatario.append(email_critico)
-                    print(f"📧 Email crítico: adicionando {email_critico} como destinatário")
+            # Monta lista de destinatários por vínculo de contrato.
+            # Admin recebe todos os contratos; não-admin só os contratos vinculados.
+            destinatario = self._obter_destinatarios_por_contrato(obra_info.get('cliente'), tem_critico)
+            if not destinatario:
+                print(f"⚠️ Sem destinatários para obra {obra_info['nome_contrato']} (contrato: {obra_info.get('cliente')})")
+                return False
+
             sucesso, msg = self.email_service.enviar_email(destinatario, assunto, corpo_html)
             
             if not sucesso:

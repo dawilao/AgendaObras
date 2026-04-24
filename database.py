@@ -5,11 +5,29 @@ Contém a classe Database com todas as operações CRUD para obras e checklists.
 
 import sqlite3
 import datetime
+import os
 from typing import List, Dict, Optional
 from migrations import run_migrations
 from error_logger import log_error
 
-CAMINHO_DB = r'G:\Meu Drive\17 - MODELOS\PROGRAMAS\AgendaObras\app\db\agendaobras.db'
+_CAMINHO_DRIVE = r'G:\Meu Drive\17 - MODELOS\PROGRAMAS\AgendaObras\app\db'
+_CAMINHO_LOCAL = os.path.dirname(os.path.abspath(__file__))
+
+
+def _resolver_caminho_db() -> str:
+    """Resolve o caminho do banco principal com suporte a ambiente Linux.
+    Prioriza variável de ambiente, depois Google Drive e por fim caminho local."""
+    env_path = (os.getenv('AGENDA_OBRAS_DB_PATH') or '').strip()
+    if env_path:
+        return env_path
+
+    if os.path.isdir(_CAMINHO_DRIVE):
+        return os.path.join(_CAMINHO_DRIVE, 'agendaobras.db')
+
+    return os.path.join(_CAMINHO_LOCAL, 'agendaobras.db')
+
+
+CAMINHO_DB = _resolver_caminho_db()
 
 TAREFAS_COM_DIAS_UTEIS = {'ANÁLISE', 'ANÁLISE - GESTOR'}
 
@@ -197,6 +215,9 @@ class Database:
         try:
             conn = self.get_connection()
             cursor = conn.cursor()
+
+            nome_contrato = (nome_contrato or '').strip()
+            cliente = (cliente or '').strip()
         
             # Extrai campos adicionais e converte strings vazias para None
             contrato_ic = kwargs.get('contrato_ic', None) or None
@@ -423,6 +444,32 @@ class Database:
         conn.close()
         
         return obras
+
+    def listar_obras_por_contratos(self, contratos_permitidos: List[str], filtro: str = None) -> List[Dict]:
+        """Lista obras filtrando por contratos permitidos (campo cliente)."""
+        contratos_limpos = [(c or '').strip() for c in (contratos_permitidos or []) if (c or '').strip()]
+        if not contratos_limpos:
+            return []
+
+        conn = self.get_connection()
+        cursor = conn.cursor()
+
+        placeholders = ','.join(['?'] * len(contratos_limpos))
+        params = list(contratos_limpos)
+
+        query = f'SELECT * FROM obras WHERE TRIM(cliente) IN ({placeholders})'
+
+        if filtro:
+            query += ' AND (nome_contrato LIKE ? OR cliente LIKE ? OR status LIKE ?)'
+            params.extend([f'%{filtro}%', f'%{filtro}%', f'%{filtro}%'])
+
+        query += ' ORDER BY data_inicio DESC'
+
+        cursor.execute(query, params)
+        obras = [dict(row) for row in cursor.fetchall()]
+        conn.close()
+
+        return obras
     
     def obter_obra(self, obra_id: int) -> Optional[Dict]:
         """Obtém uma obra específica por ID"""
@@ -442,6 +489,9 @@ class Database:
         try:
             conn = self.get_connection()
             cursor = conn.cursor()
+
+            nome_contrato = (nome_contrato or '').strip()
+            cliente = (cliente or '').strip()
         
             # Busca dados antigos para comparação
             cursor.execute('SELECT data_inicio, data_assinatura, data_aio, data_acionamento FROM obras WHERE id = ?', (obra_id,))

@@ -20,6 +20,10 @@ _CAMINHO_LOCAL = os.path.dirname(os.path.abspath(__file__))
 def _resolver_caminho_db() -> str:
     """Resolve o caminho do banco de usuários.
     Tenta usar o diretório do Google Drive; se não existir, usa local."""
+    env_path = (os.getenv('AGENDA_OBRAS_USERS_DB_PATH') or '').strip()
+    if env_path:
+        return env_path
+
     if os.path.isdir(_CAMINHO_DRIVE):
         return os.path.join(_CAMINHO_DRIVE, 'users.db')
     return os.path.join(_CAMINHO_LOCAL, 'users.db')
@@ -41,8 +45,8 @@ def _hash_senha(senha: str, salt: str) -> str:
 class AuthDatabase:
     """Gerencia o banco de dados de usuários (users.db)."""
 
-    def __init__(self, db_path: str = CAMINHO_USERS_DB):
-        self.db_path = db_path
+    def __init__(self, db_path: str = None):
+        self.db_path = db_path or _resolver_caminho_db()
         self._criar_tabela()
 
     # ========== Conexão ========== #
@@ -152,6 +156,21 @@ class AuthDatabase:
         except Exception as e:
             log_error(e, "auth_database", "Listar usuários")
             return []
+        finally:
+            conn.close()
+
+    def obter_usuario_por_id(self, user_id: int) -> Optional[Dict]:
+        """Retorna os dados de um usuário pelo ID, sem dados sensíveis."""
+        conn = self.get_connection()
+        try:
+            row = conn.execute(
+                'SELECT id, nome, sobrenome, email, is_admin, data_criacao FROM usuarios WHERE id = ?',
+                (user_id,),
+            ).fetchone()
+            return dict(row) if row else None
+        except Exception as e:
+            log_error(e, "auth_database", f"Obter usuário {user_id}")
+            return None
         finally:
             conn.close()
 
