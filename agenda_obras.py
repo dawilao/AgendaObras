@@ -5,8 +5,10 @@ Contém a classe AgendaObras com toda a lógica da interface gráfica usando Nic
 
 from nicegui import ui, app
 import datetime
+import os
+import sqlite3
 from secrets import randbelow
-from typing import Dict, List
+from typing import Dict, List, Optional, Tuple
 from database import Database, TAREFAS_COM_DIAS_UTEIS
 from email_service import EmailService
 from obras_helper import ObrasHelper
@@ -221,6 +223,240 @@ class AgendaObras:
 
         contrato_normalizado = (contrato_nome or '').strip()
         return contrato_normalizado in set(permissoes['contratos_vinculados'])
+
+    def _normalizar_nome_contrato(self, nome: str) -> str:
+        return (nome or '').strip()
+
+    def _conexao_obras_contratos(self) -> sqlite3.Connection:
+        conn = sqlite3.connect(self.db.db_name, timeout=30.0, check_same_thread=False)
+        conn.row_factory = sqlite3.Row
+        conn.execute('PRAGMA journal_mode=WAL')
+        conn.execute('PRAGMA busy_timeout=30000')
+        return conn
+
+    def _contrato_existe_catalogo(self, nome: str) -> bool:
+        nome = self._normalizar_nome_contrato(nome)
+        if not nome:
+            return False
+        return nome in set(self.contratos_db.listar_contratos())
+
+    def _contar_uso_contrato_catalogo(self, contrato_nome: str) -> Dict[str, int]:
+        contrato_nome = self._normalizar_nome_contrato(contrato_nome)
+
+        conn_contratos = None
+        conn_obras = None
+        try:
+            conn_contratos = self.contratos_db.get_connection()
+            cursor_contratos = conn_contratos.cursor()
+            cursor_contratos.execute(
+                'SELECT COUNT(*) AS total FROM contrato_usuarios WHERE contrato_nome = ?',
+                (contrato_nome,),
+            )
+            vinculos_usuarios = int(cursor_contratos.fetchone()['total'])
+
+            obras_cliente = 0
+            if os.path.exists(self.db.db_name):
+                conn_obras = self._conexao_obras_contratos()
+                cursor_obras = conn_obras.cursor()
+                cursor_obras.execute(
+                    'SELECT COUNT(*) AS total FROM obras WHERE cliente = ?',
+                    (contrato_nome,),
+                )
+                obras_cliente = int(cursor_obras.fetchone()['total'])
+
+            return {
+                'vinculos_usuarios': vinculos_usuarios,
+                'obras_cliente': obras_cliente,
+                'total': vinculos_usuarios + obras_cliente,
+            }
+        finally:
+            if conn_contratos:
+                conn_contratos.close()
+            if conn_obras:
+                conn_obras.close()
+
+    def _adicionar_contrato_catalogo(self, nome: str) -> Tuple[bool, str]:
+        nome = self._normalizar_nome_contrato(nome)
+        if not nome:
+            return False, 'Nome do contrato é obrigatório.'
+
+        if self._contrato_existe_catalogo(nome):
+            return False, f'Contrato já existe: "{nome}"'
+
+        conn = None
+        try:
+            conn = self.contratos_db.get_connection()
+            cursor = conn.cursor()
+            cursor.execute('INSERT INTO contratos (nome) VALUES (?)', (nome,))
+            conn.commit()
+            return True, f'Contrato "{nome}" adicionado com sucesso.'
+        except sqlite3.IntegrityError:
+            return False, f'Contrato já existe: "{nome}"'
+        except Exception as e:
+            if conn:
+                conn.rollback()
+            log_error(e, 'agenda_obras', f'Adicionar contrato via UI: {nome}')
+            return False, f'Erro ao adicionar contrato: {e}'
+        finally:
+            if conn:
+                conn.close()
+
+    def _editar_contrato_catalogo(self, old_nome: str, new_nome: str) -> Tuple[bool, str]:
+        old_nome = self._normalizar_nome_contrato(old_nome)
+        new_nome = self._normalizar_nome_contrato(new_nome)
+
+        if not old_nome or not new_nome:
+            return False, 'Informe nomes válidos para edição do contrato.'
+
+        if old_nome == new_nome:
+            return True, 'Nome antigo e novo são iguais. Nenhuma alteração necessária.'
+
+        if not self._contrato_existe_catalogo(old_nome):
+            return False, f'Contrato não encontrado: "{old_nome}"'
+
+        if self._contrato_existe_catalogo(new_nome):
+            return False, f'Já existe outro contrato com o nome de destino: "{new_nome}"'
+
+        conn_contratos = None
+        conn_obras = None
+        try:
+            conn_contratos = self.contratos_db.get_connection()
+            cursor_contratos = conn_contratos.cursor()
+
+            cursor_contratos.execute(
+                'UPDATE contratos SET nome = ? WHERE nome = ?',
+                (new_nome, old_nome),
+            )
+            cursor_contratos.execute(
+                'UPDATE contrato_usuarios SET contrato_nome = ? WHERE contrato_nome = ?',
+                (new_nome, old_nome),
+            )
+
+            obras_alteradas = 0
+            if os.path.exists(self.db.db_name):
+                conn_obras = self._conexao_obras_contratos()
+                cursor_obras = conn_obras.cursor()
+                cursor_obras.execute(
+                    'UPDATE obras SET cliente = ? WHERE cliente = ?',
+                    (new_nome, old_nome),
+                )
+                obras_alteradas = cursor_obras.rowcount
+
+            conn_contratos.commit()
+            if conn_obras:
+                conn_obras.commit()
+
+            return True, f'Contrato renomeado para "{new_nome}". Obras atualizadas: {obras_alteradas}.'
+        except sqlite3.IntegrityError as e:
+            if conn_contratos:
+                conn_contratos.rollback()
+            if conn_obras:
+                conn_obras.rollback()
+            log_error(e, 'agenda_obras', f'Editar contrato via UI (integridade): {old_nome} -> {new_nome}')
+            return False, 'Falha de integridade ao renomear contrato. Verifique duplicidade de vínculos.'
+        except Exception as e:
+            if conn_contratos:
+                conn_contratos.rollback()
+            if conn_obras:
+                conn_obras.rollback()
+            log_error(e, 'agenda_obras', f'Editar contrato via UI: {old_nome} -> {new_nome}')
+            return False, f'Erro ao editar contrato: {e}'
+        finally:
+            if conn_contratos:
+                conn_contratos.close()
+            if conn_obras:
+                conn_obras.close()
+
+    def _remover_contrato_catalogo(self, nome: str, replace_with: Optional[str] = None) -> Tuple[bool, str]:
+        nome = self._normalizar_nome_contrato(nome)
+        replace_with = self._normalizar_nome_contrato(replace_with) if replace_with else ''
+
+        if not nome:
+            return False, 'Nome do contrato é obrigatório para remoção.'
+
+        if not self._contrato_existe_catalogo(nome):
+            return False, f'Contrato não encontrado: "{nome}"'
+
+        if replace_with:
+            if replace_with == nome:
+                return False, '--replace-with deve ser diferente do contrato removido.'
+            if not self._contrato_existe_catalogo(replace_with):
+                return False, f'Contrato de substituição não existe: "{replace_with}"'
+
+        uso = self._contar_uso_contrato_catalogo(nome)
+        if uso['total'] > 0 and not replace_with:
+            return (
+                False,
+                f'Contrato em uso: {uso["vinculos_usuarios"]} vínculos de usuários e {uso["obras_cliente"]} obras. '
+                'Selecione um contrato substituto para remover.',
+            )
+
+        conn_contratos = None
+        conn_obras = None
+        try:
+            conn_contratos = self.contratos_db.get_connection()
+            cursor_contratos = conn_contratos.cursor()
+
+            if replace_with:
+                cursor_contratos.execute(
+                    '''
+                    DELETE FROM contrato_usuarios
+                    WHERE contrato_nome = ?
+                      AND usuario_id IN (
+                          SELECT usuario_id FROM contrato_usuarios WHERE contrato_nome = ?
+                      )
+                    ''',
+                    (replace_with, nome),
+                )
+                cursor_contratos.execute(
+                    'UPDATE contrato_usuarios SET contrato_nome = ? WHERE contrato_nome = ?',
+                    (replace_with, nome),
+                )
+
+            obras_alteradas = 0
+            if os.path.exists(self.db.db_name):
+                conn_obras = self._conexao_obras_contratos()
+                cursor_obras = conn_obras.cursor()
+                if replace_with:
+                    cursor_obras.execute(
+                        'UPDATE obras SET cliente = ? WHERE cliente = ?',
+                        (replace_with, nome),
+                    )
+                    obras_alteradas = cursor_obras.rowcount
+
+            cursor_contratos.execute('DELETE FROM contratos WHERE nome = ?', (nome,))
+
+            conn_contratos.commit()
+            if conn_obras:
+                conn_obras.commit()
+
+            if replace_with:
+                return (
+                    True,
+                    f'Contrato "{nome}" removido com migração para "{replace_with}". '
+                    f'Obras migradas: {obras_alteradas}.',
+                )
+
+            return True, f'Contrato "{nome}" removido com sucesso.'
+        except sqlite3.IntegrityError as e:
+            if conn_contratos:
+                conn_contratos.rollback()
+            if conn_obras:
+                conn_obras.rollback()
+            log_error(e, 'agenda_obras', f'Remover contrato via UI (integridade): {nome} -> {replace_with}')
+            return False, 'Falha de integridade ao remover contrato. Verifique vínculos existentes.'
+        except Exception as e:
+            if conn_contratos:
+                conn_contratos.rollback()
+            if conn_obras:
+                conn_obras.rollback()
+            log_error(e, 'agenda_obras', f'Remover contrato via UI: {nome} -> {replace_with}')
+            return False, f'Erro ao remover contrato: {e}'
+        finally:
+            if conn_contratos:
+                conn_contratos.close()
+            if conn_obras:
+                conn_obras.close()
     
     def verificar_atualizacao(self):
         """Verifica se há atualização disponível e exige atualização se necessário"""
@@ -339,6 +575,9 @@ class AgendaObras:
             # Gerenciar usuários (apenas admin)
             if usuario.get('is_admin'):
                 ui.button('👥 Usuários', on_click=self.abrir_gerenciar_usuarios).props('flat text-color=white').style(
+                    'font-weight: bold; margin-left: 5px; font-size: 14px;'
+                )
+                ui.button('📄 Contratos', on_click=self.abrir_gerenciar_contratos).props('flat text-color=white').style(
                     'font-weight: bold; margin-left: 5px; font-size: 14px;'
                 )
 
@@ -765,6 +1004,205 @@ class AgendaObras:
             ui.separator().style('margin: 10px 0;')
 
             ui.button('➕ Novo Usuário', on_click=abrir_form_novo_usuario).style(
+                'background-color: #1976d2; color: white; font-weight: bold;'
+            )
+
+        dialog.open()
+
+    # ========== Gerenciamento de Contratos (Admin) ========== #
+
+    def abrir_gerenciar_contratos(self):
+        """Abre diálogo de gerenciamento de contratos."""
+        usuario_logado = obter_usuario_logado()
+        if not usuario_logado.get('is_admin'):
+            self.notificar('⛔ Apenas administradores podem gerenciar contratos.', tipo='negative')
+            return
+
+        with ui.dialog() as dialog, ui.card().style(
+            'min-width: 650px; max-width: 800px; padding: 25px;'
+        ):
+            with ui.row().classes('w-full items-center justify-between'):
+                ui.label('📄 Gerenciar Contratos').style(
+                    'font-size: 22px; font-weight: bold; color: #1976d2;'
+                )
+                ui.button('✕', on_click=dialog.close).props('flat dense round').style('color: #666;')
+
+            ui.separator().style('margin: 10px 0;')
+            lista_container = ui.column().classes('w-full')
+
+            def renderizar_lista():
+                lista_container.clear()
+                contratos = self.contratos_db.listar_contratos()
+
+                with lista_container:
+                    if not contratos:
+                        ui.label('Nenhum contrato cadastrado.').style('color: #999;')
+                        return
+
+                    for contrato_nome in contratos:
+                        uso = self._contar_uso_contrato_catalogo(contrato_nome)
+
+                        with ui.card().classes('w-full').style(
+                            'padding: 12px 15px; margin-bottom: 8px; background-color: #fafafa;'
+                        ):
+                            with ui.row().classes('w-full items-center justify-between'):
+                                with ui.column().style('gap: 2px;'):
+                                    ui.label(contrato_nome).style('font-weight: bold; font-size: 15px;')
+                                    ui.label(
+                                        f'Vínculos de usuários: {uso["vinculos_usuarios"]} • Obras vinculadas: {uso["obras_cliente"]}'
+                                    ).style('color: #999; font-size: 12px;')
+
+                                with ui.row().classes('items-center gap-1'):
+                                    ui.button(
+                                        '✏️',
+                                        on_click=lambda nome=contrato_nome: abrir_form_editar_contrato(nome)
+                                    ).props('flat dense round').style('color: #1976d2;').tooltip('Renomear contrato')
+
+                                    ui.button(
+                                        '🗑️',
+                                        on_click=lambda nome=contrato_nome: confirmar_exclusao_contrato(nome)
+                                    ).props('flat dense round').style('color: #f44336;').tooltip('Excluir contrato')
+
+            def abrir_form_novo_contrato():
+                with ui.dialog() as form_dialog, ui.card().style(
+                    'min-width: 420px; max-width: 500px; padding: 25px;'
+                ):
+                    ui.label('Novo Contrato').style(
+                        'font-size: 20px; font-weight: bold; color: #1976d2; margin-bottom: 15px;'
+                    )
+
+                    nome_input = ui.input('Nome do Contrato').props('outlined dense').classes('w-full')
+                    erro_label = ui.label('').style(
+                        'color: #f44336; font-size: 13px; display: none; margin-top: 8px;'
+                    )
+
+                    def salvar_contrato():
+                        ok, mensagem = self._adicionar_contrato_catalogo(nome_input.value)
+                        if not ok:
+                            erro_label.set_text(f'❌ {mensagem}')
+                            erro_label.style('display: block;')
+                            return
+
+                        form_dialog.close()
+                        renderizar_lista()
+                        self.renderizar_obras()
+                        ui.notification(f'✅ {mensagem}', type='positive', timeout=3)
+
+                    with ui.row().classes('w-full justify-end gap-2').style('margin-top: 12px;'):
+                        ui.button('Cancelar', on_click=form_dialog.close).props('flat').style('color: #666;')
+                        ui.button('Salvar', on_click=salvar_contrato).style(
+                            'background-color: #1976d2; color: white;'
+                        )
+
+                form_dialog.open()
+
+            def abrir_form_editar_contrato(nome_atual: str):
+                with ui.dialog() as form_dialog, ui.card().style(
+                    'min-width: 420px; max-width: 520px; padding: 25px;'
+                ):
+                    ui.label('Renomear Contrato').style(
+                        'font-size: 20px; font-weight: bold; color: #1976d2; margin-bottom: 10px;'
+                    )
+                    ui.label(f'Atual: {nome_atual}').style('font-size: 13px; color: #666; margin-bottom: 10px;')
+
+                    novo_nome_input = ui.input('Novo Nome').props('outlined dense').classes('w-full')
+                    novo_nome_input.value = nome_atual
+                    erro_label = ui.label('').style(
+                        'color: #f44336; font-size: 13px; display: none; margin-top: 8px;'
+                    )
+
+                    def salvar_edicao():
+                        ok, mensagem = self._editar_contrato_catalogo(nome_atual, novo_nome_input.value)
+                        if not ok:
+                            erro_label.set_text(f'❌ {mensagem}')
+                            erro_label.style('display: block;')
+                            return
+
+                        form_dialog.close()
+                        renderizar_lista()
+                        self.renderizar_obras()
+                        ui.notification(f'✅ {mensagem}', type='positive', timeout=3)
+
+                    with ui.row().classes('w-full justify-end gap-2').style('margin-top: 12px;'):
+                        ui.button('Cancelar', on_click=form_dialog.close).props('flat').style('color: #666;')
+                        ui.button('Salvar', on_click=salvar_edicao).style(
+                            'background-color: #1976d2; color: white;'
+                        )
+
+                form_dialog.open()
+
+            def confirmar_exclusao_contrato(nome_contrato: str):
+                uso = self._contar_uso_contrato_catalogo(nome_contrato)
+                contratos_disponiveis = [
+                    nome for nome in self.contratos_db.listar_contratos()
+                    if nome != nome_contrato
+                ]
+
+                with ui.dialog() as confirm_dialog, ui.card().style('padding: 25px; min-width: 500px; max-width: 650px;'):
+                    ui.label(f'Deseja excluir o contrato "{nome_contrato}"?').style(
+                        'font-size: 16px; margin-bottom: 8px;'
+                    )
+
+                    ui.label(
+                        f'Vínculos de usuários: {uso["vinculos_usuarios"]} • Obras vinculadas: {uso["obras_cliente"]}'
+                    ).style('font-size: 13px; color: #666; margin-bottom: 10px;')
+
+                    substituto_select = None
+                    erro_label = ui.label('').style(
+                        'color: #f44336; font-size: 13px; display: none; margin-bottom: 8px;'
+                    )
+
+                    if uso['total'] > 0:
+                        ui.label(
+                            'Este contrato está em uso. Selecione um contrato substituto para migrar referências antes de excluir.'
+                        ).style('font-size: 12px; color: #f44336; margin-bottom: 8px;')
+
+                        substituto_select = ui.select(
+                            contratos_disponiveis,
+                            label='Contrato substituto *',
+                        ).classes('w-full').props('outlined dense')
+
+                        if not contratos_disponiveis:
+                            ui.label(
+                                'Não há outro contrato disponível para substituição. Cadastre outro contrato antes de excluir este.'
+                            ).style('font-size: 12px; color: #f44336; margin-top: 8px;')
+
+                    def executar_exclusao():
+                        replace_with = ''
+                        if uso['total'] > 0:
+                            if not contratos_disponiveis:
+                                erro_label.set_text('❌ Não há contrato substituto disponível para migração.')
+                                erro_label.style('display: block;')
+                                return
+                            replace_with = (substituto_select.value or '').strip() if substituto_select else ''
+                            if not replace_with:
+                                erro_label.set_text('❌ Selecione um contrato substituto para prosseguir.')
+                                erro_label.style('display: block;')
+                                return
+
+                        ok, mensagem = self._remover_contrato_catalogo(nome_contrato, replace_with)
+                        if not ok:
+                            erro_label.set_text(f'❌ {mensagem}')
+                            erro_label.style('display: block;')
+                            return
+
+                        confirm_dialog.close()
+                        renderizar_lista()
+                        self.renderizar_obras()
+                        ui.notification(f'✅ {mensagem}', type='positive', timeout=3)
+
+                    with ui.row().classes('w-full justify-end gap-2').style('margin-top: 12px;'):
+                        ui.button('Cancelar', on_click=confirm_dialog.close).props('flat').style('color: #666;')
+                        ui.button('Excluir', on_click=executar_exclusao).style(
+                            'background-color: #f44336; color: white;'
+                        )
+
+                confirm_dialog.open()
+
+            renderizar_lista()
+
+            ui.separator().style('margin: 10px 0;')
+            ui.button('➕ Novo Contrato', on_click=abrir_form_novo_contrato).style(
                 'background-color: #1976d2; color: white; font-weight: bold;'
             )
 
