@@ -1,6 +1,11 @@
 # Configurações sensíveis do projeto
 email_config.env
 
+# Arquivos de bancos de dados
+*.db
+*.db-journal
+*.env
+
 # Arquivos desnecessários
 commit.txt
 new.txt
