@@ -50,11 +50,46 @@ class AgendaObras:
         
         # Verifica atualização antes de construir UI
         self.verificar_atualizacao()
+
+        # Ajustes globais de responsividade
+        self.configurar_layout_responsivo()
         
         # Construção da UI
         self.header()
         self.body()
         self.footer()
+
+    def configurar_layout_responsivo(self):
+        """Injeta ajustes CSS para melhorar a experiência em celular e notebook."""
+        ui.add_head_html('''
+        <style>
+            .responsive-dialog {
+                width: min(96vw, 900px) !important;
+                max-width: 96vw !important;
+            }
+
+            .responsive-dialog-sm {
+                width: min(96vw, 560px) !important;
+                max-width: 96vw !important;
+            }
+
+            .responsive-dialog-lg {
+                width: min(96vw, 980px) !important;
+                max-width: 96vw !important;
+            }
+
+            @media (max-width: 768px) {
+                .agenda-header {
+                    padding: 10px !important;
+                }
+
+                .agenda-title {
+                    margin-right: 8px !important;
+                    font-size: 22px !important;
+                }
+            }
+        </style>
+        ''')
     
     # ========== Métodos Auxiliares ========== #
     def notificar(self, mensagem: str, tipo: str = 'info', timeout: int = None):
@@ -481,7 +516,7 @@ class AgendaObras:
         release_notes = info.get('release_notes', '')
         changelog = info.get('changelog', [])
         
-        with ui.dialog().props('persistent' if force_update else '') as dialog, ui.card().style('min-width: 500px; max-width: 600px;'):
+        with ui.dialog().props('persistent' if force_update else '') as dialog, ui.card().classes('responsive-dialog-sm').style('padding: 20px;'):
             # Cabeçalho
             with ui.row().classes('w-full items-center'):
                 if force_update:
@@ -550,49 +585,85 @@ class AgendaObras:
         """Cabeçalho da aplicação"""
         usuario = obter_usuario_logado()
 
-        with ui.header().classes('items-center').style('background-color: #1976d2; padding: 15px;'):
-            ui.label('🏗️ AgendaObras').style(
-                'font-size: 28px; color: white; font-weight: bold; margin-right: 30px;'
-            )
-            
-            ui.button('➕ Nova Obra', on_click=self.nova_entrada).props('flat text-color=white').style(
-                'font-weight: bold; margin-right: 10px; font-size: 14px;'
-            )
-            
-            # Campo de pesquisa
-            self.input_pesquisa = ui.input(placeholder='🔍 Pesquisar obras...').props('outlined dense').style(
-                'background-color: white; border-radius: 4px; margin-right: 10px; width: 300px;'
-            )
-            self.input_pesquisa.on('input', lambda: self.pesquisa(self.input_pesquisa.value))
-            self.input_pesquisa.on('keydown.enter', lambda: self.pesquisa(self.input_pesquisa.value))
-            
-            ui.space()
-            
-            ui.button('🔄 Atualizar', on_click=self.atualizar_dados).props('flat text-color=white').style(
-                'font-weight: bold; font-size: 14px;'
+        with ui.header().classes('items-center agenda-header').style('background-color: #1976d2; padding: 15px; gap: 8px; flex-wrap: nowrap;'):
+            ui.label('🏗️ AgendaObras').classes('agenda-title').style(
+                'font-size: clamp(22px, 2.4vw, 28px); color: white; font-weight: bold; margin-right: 10px;'
             )
 
-            # Gerenciar usuários (apenas admin)
-            if usuario.get('is_admin'):
-                ui.button('👥 Usuários', on_click=self.abrir_gerenciar_usuarios).props('flat text-color=white').style(
-                    'font-weight: bold; margin-left: 5px; font-size: 14px;'
-                )
-                ui.button('📄 Contratos', on_click=self.abrir_gerenciar_contratos).props('flat text-color=white').style(
-                    'font-weight: bold; margin-left: 5px; font-size: 14px;'
+            # Menu mobile (hamburger)
+            with ui.dialog() as mobile_menu_dialog, ui.card().classes('responsive-dialog-sm').style('padding: 16px; max-height: 85vh; overflow-y: auto;'):
+                ui.label('Menu').style('font-size: 18px; font-weight: bold; color: #1976d2; margin-bottom: 10px;')
+
+                mobile_search_input = ui.input(placeholder='🔍 Pesquisar obras...').classes('w-full').props('outlined dense')
+                mobile_search_input.on(
+                    'keydown.enter',
+                    lambda: [self.pesquisa(mobile_search_input.value), mobile_menu_dialog.close()]
                 )
 
-            # Info do usuário logado (clicável) + ações
-            with ui.row().classes('items-center gap-2').style('margin-left: 10px;'):
-                # Armazena referência ao botão do usuário para atualização dinâmica
-                self.user_button = ui.button(
+                with ui.row().classes('w-full gap-2').style('margin-top: 8px;'):
+                    ui.button(
+                        'Pesquisar',
+                        on_click=lambda: [self.pesquisa(mobile_search_input.value), mobile_menu_dialog.close()]
+                    ).classes('w-full').props('outline color=primary')
+
+                ui.separator().style('margin: 10px 0;')
+
+                ui.button('➕ Nova Obra', on_click=lambda: [mobile_menu_dialog.close(), self.nova_entrada()]).classes('w-full').props('flat').style('justify-content: flex-start;')
+                ui.button('🔄 Atualizar', on_click=lambda: [mobile_menu_dialog.close(), self.atualizar_dados()]).classes('w-full').props('flat').style('justify-content: flex-start;')
+
+                if usuario.get('is_admin'):
+                    ui.button('👥 Usuários', on_click=lambda: [mobile_menu_dialog.close(), self.abrir_gerenciar_usuarios()]).classes('w-full').props('flat').style('justify-content: flex-start;')
+                    ui.button('📄 Contratos', on_click=lambda: [mobile_menu_dialog.close(), self.abrir_gerenciar_contratos()]).classes('w-full').props('flat').style('justify-content: flex-start;')
+
+                ui.separator().style('margin: 10px 0;')
+                ui.button(
                     f'👤 {usuario.get("nome", "")} {usuario.get("sobrenome", "")}',
-                    on_click=self.abrir_perfil_usuario
-                ).props('flat text-color=white').style(
-                    'font-size: 14px; font-weight: 500;'
+                    on_click=lambda: [mobile_menu_dialog.close(), self.abrir_perfil_usuario()]
+                ).classes('w-full').props('flat').style('justify-content: flex-start;')
+                ui.button('Sair', on_click=lambda: [mobile_menu_dialog.close(), ui.navigate.to('/logout')]).classes('w-full').props('flat').style('justify-content: flex-start; color: #d32f2f;')
+
+            ui.button(icon='menu', on_click=mobile_menu_dialog.open).classes('sm:hidden ml-auto').props('flat round text-color=white').tooltip('Abrir menu')
+
+            # Ações desktop
+            with ui.row().classes('items-center gap-2 max-sm:hidden ml-4 flex-1 min-w-0').style('flex-wrap: nowrap;'):
+                ui.button('➕ Nova Obra', on_click=self.nova_entrada).props('flat text-color=white').style(
+                    'font-weight: bold; margin-right: 10px; font-size: 14px;'
                 )
-                ui.button('Sair', on_click=lambda: ui.navigate.to('/logout')).props('flat dense text-color=white').style(
-                    'font-size: 13px; font-weight: bold;'
+
+                # Campo de pesquisa
+                self.input_pesquisa = ui.input(placeholder='🔍 Pesquisar obras...').classes('w-80').props('outlined dense').style(
+                    'background-color: white; border-radius: 4px; margin-right: 10px;'
                 )
+                self.input_pesquisa.on('input', lambda: self.pesquisa(self.input_pesquisa.value))
+                self.input_pesquisa.on('keydown.enter', lambda: self.pesquisa(self.input_pesquisa.value))
+
+                ui.space()
+
+                ui.button('🔄 Atualizar', on_click=self.atualizar_dados).props('flat text-color=white').style(
+                    'font-weight: bold; font-size: 14px;'
+                )
+
+                # Gerenciar usuários (apenas admin)
+                if usuario.get('is_admin'):
+                    with ui.button('⚙️ Administração').props('flat text-color=white').style(
+                        'font-weight: bold; margin-left: 5px; font-size: 14px;'
+                    ):
+                        with ui.menu():
+                            ui.menu_item('👥 Usuários', on_click=self.abrir_gerenciar_usuarios)
+                            ui.menu_item('📄 Contratos', on_click=self.abrir_gerenciar_contratos)
+
+                # Info do usuário logado (clicável) + ações
+                with ui.row().classes('items-center gap-2').style('margin-left: 10px;'):
+                    # Armazena referência ao botão do usuário para atualização dinâmica
+                    self.user_button = ui.button(
+                        f'👤 {usuario.get("nome", "")} {usuario.get("sobrenome", "")}',
+                        on_click=self.abrir_perfil_usuario
+                    ).props('flat text-color=white').style(
+                        'font-size: 14px; font-weight: 500;'
+                    )
+                    ui.button('Sair', on_click=lambda: ui.navigate.to('/logout')).props('flat dense text-color=white').style(
+                        'font-size: 13px; font-weight: bold;'
+                    )
 
     def abrir_perfil_usuario(self):
         """Abre diálogo de perfil do usuário logado com opções para editar dados pessoais e senha."""
@@ -605,7 +676,7 @@ class AgendaObras:
 
         auth_db = AuthDatabase()
 
-        with ui.dialog() as dialog, ui.card().style('min-width: 500px; max-width: 600px; padding: 25px;'):
+        with ui.dialog() as dialog, ui.card().classes('responsive-dialog-sm').style('padding: 20px; max-height: 90vh; overflow-y: auto;'):
             # Cabeçalho
             ui.label('👤 Meu Perfil').style(
                 'font-size: 24px; font-weight: bold; color: #1976d2; margin-bottom: 5px;'
@@ -759,8 +830,8 @@ class AgendaObras:
 
         auth_db = AuthDatabase()
 
-        with ui.dialog() as dialog, ui.card().style(
-            'min-width: 650px; max-width: 800px; padding: 25px;'
+        with ui.dialog() as dialog, ui.card().classes('responsive-dialog').style(
+            'padding: 20px; max-height: 90vh; overflow-y: auto;'
         ):
             # Cabeçalho
             with ui.row().classes('w-full items-center justify-between'):
@@ -778,7 +849,7 @@ class AgendaObras:
                 contratos_disponiveis = self.contratos_db.listar_contratos()
                 vinculados = set(contratos_disponiveis) if is_admin_usuario else set(self.contratos_db.listar_contratos_usuario(user_id))
 
-                with ui.dialog() as vinculo_dialog, ui.card().style('min-width: 500px; max-width: 700px; padding: 20px;'):
+                with ui.dialog() as vinculo_dialog, ui.card().classes('responsive-dialog-sm').style('padding: 20px; max-height: 90vh; overflow-y: auto;'):
                     ui.label(f'🔗 Contratos de {user_nome}').style('font-size: 20px; font-weight: bold; color: #1976d2;')
                     ui.label('Selecione os contratos que este usuário poderá visualizar.').style('font-size: 13px; color: #666; margin-bottom: 10px;')
                     if is_admin_usuario:
@@ -902,7 +973,7 @@ class AgendaObras:
                     ui.notification('Erro ao redefinir senha.', type='negative', timeout=3)
                     return
 
-                with ui.dialog() as senha_dialog, ui.card().style('min-width: 420px; padding: 25px;'):
+                with ui.dialog() as senha_dialog, ui.card().classes('responsive-dialog-sm').style('padding: 20px;'):
                     ui.label('🔑 Senha redefinida com sucesso').style(
                         'font-size: 20px; font-weight: bold; color: #1976d2; margin-bottom: 10px;'
                     )
@@ -953,8 +1024,8 @@ class AgendaObras:
 
             # Formulário para novo usuário
             def abrir_form_novo_usuario():
-                with ui.dialog() as form_dialog, ui.card().style(
-                    'min-width: 400px; max-width: 450px; padding: 25px;'
+                with ui.dialog() as form_dialog, ui.card().classes('responsive-dialog-sm').style(
+                    'padding: 20px;'
                 ):
                     ui.label('Novo Usuário').style(
                         'font-size: 20px; font-weight: bold; color: #1976d2; margin-bottom: 15px;'
@@ -1018,8 +1089,8 @@ class AgendaObras:
             self.notificar('⛔ Apenas administradores podem gerenciar contratos.', tipo='negative')
             return
 
-        with ui.dialog() as dialog, ui.card().style(
-            'min-width: 650px; max-width: 800px; padding: 25px;'
+        with ui.dialog() as dialog, ui.card().classes('responsive-dialog').style(
+            'padding: 20px; max-height: 90vh; overflow-y: auto;'
         ):
             with ui.row().classes('w-full items-center justify-between'):
                 ui.label('📄 Gerenciar Contratos').style(
@@ -1064,8 +1135,8 @@ class AgendaObras:
                                     ).props('flat dense round').style('color: #f44336;').tooltip('Excluir contrato')
 
             def abrir_form_novo_contrato():
-                with ui.dialog() as form_dialog, ui.card().style(
-                    'min-width: 420px; max-width: 500px; padding: 25px;'
+                with ui.dialog() as form_dialog, ui.card().classes('responsive-dialog-sm').style(
+                    'padding: 20px;'
                 ):
                     ui.label('Novo Contrato').style(
                         'font-size: 20px; font-weight: bold; color: #1976d2; margin-bottom: 15px;'
@@ -1097,8 +1168,8 @@ class AgendaObras:
                 form_dialog.open()
 
             def abrir_form_editar_contrato(nome_atual: str):
-                with ui.dialog() as form_dialog, ui.card().style(
-                    'min-width: 420px; max-width: 520px; padding: 25px;'
+                with ui.dialog() as form_dialog, ui.card().classes('responsive-dialog-sm').style(
+                    'padding: 20px;'
                 ):
                     ui.label('Renomear Contrato').style(
                         'font-size: 20px; font-weight: bold; color: #1976d2; margin-bottom: 10px;'
@@ -1138,7 +1209,7 @@ class AgendaObras:
                     if nome != nome_contrato
                 ]
 
-                with ui.dialog() as confirm_dialog, ui.card().style('padding: 25px; min-width: 500px; max-width: 650px;'):
+                with ui.dialog() as confirm_dialog, ui.card().classes('responsive-dialog-sm').style('padding: 20px;'):
                     ui.label(f'Deseja excluir o contrato "{nome_contrato}"?').style(
                         'font-size: 16px; margin-bottom: 8px;'
                     )
@@ -1266,7 +1337,7 @@ class AgendaObras:
                     )
                 
                 # Grid responsivo de 4 colunas (ajustado para cards mais compactos)
-                with ui.grid(columns='repeat(auto-fit, minmax(330px, 1fr))').classes('w-full gap-4'):
+                with ui.grid(columns='repeat(auto-fit, minmax(min(100%, 280px), 1fr))').classes('w-full gap-4'):
                     for obra in obras:
                         self.criar_card_obra(obra)
     
@@ -1282,7 +1353,7 @@ class AgendaObras:
         
         # Card da obra
         with ui.card().classes('hover:shadow-lg transition-shadow').style(
-            f'border-left: 5px solid {cor}; min-height: 250px; max-height: 400px;'
+            f'border-left: 5px solid {cor}; min-height: 250px;'
         ):
             
             # Cabeçalho do card (clicável)
@@ -1446,7 +1517,7 @@ class AgendaObras:
         """Dialog para adicionar nova obra"""
         permissoes = self._obter_permissoes_usuario()
 
-        with ui.dialog() as dialog, ui.card().style('min-width: 700px; max-width: 900px; padding: 20px; max-height: 90vh; overflow-y: auto;'):
+        with ui.dialog() as dialog, ui.card().classes('responsive-dialog-lg').style('padding: 20px; max-height: 90vh; overflow-y: auto;'):
             ui.label('➕ Nova Obra').style('font-size: 22px; font-weight: bold; margin-bottom: 15px;')
             
             # ===== SEÇÃO 1: Informações Básicas =====
@@ -1468,7 +1539,7 @@ class AgendaObras:
                 else:
                     ui.label('⚠️ Seu usuário não possui contratos vinculados.').style('color: #f44336; font-size: 12px;')
             
-            with ui.row().classes('w-full gap-2'):
+            with ui.row().classes('w-full gap-2 flex-wrap'):
                 contrato_ic_input = ui.input(label='Contrato (IC)').classes('w-full').props('outlined')
                 pedido_sap_input = ui.input(label='Pedido SAP').classes('w-full').props('outlined')
                 prefixo_agencia_input = ui.input(label='Prefixo Agência').classes('w-full').props('outlined')
@@ -1490,10 +1561,10 @@ class AgendaObras:
             # ===== SEÇÃO 2: Valores Financeiros =====
             ui.label('💰 Valores Financeiros').style('font-size: 16px; font-weight: bold; color: #1976d2;')
             
-            with ui.row().classes('w-full gap-2'):
-                valor_input = ui.number(label='Valor do Contrato (R$) *', min=0, step=0.01, format='%.2f').classes('w-1/3').props('outlined')
-                valor_parceiro_input = ui.number(label='Valor Parceiro (R$)', min=0, step=0.01, format='%.2f').classes('w-1/3').props('outlined')
-                valor_percentual_input = ui.number(label='Valor % (%)', min=0, max=100, step=0.01, format='%.2f').classes('w-1/3').props('outlined')
+            with ui.row().classes('w-full gap-2 flex-wrap'):
+                valor_input = ui.number(label='Valor do Contrato (R$) *', min=0, step=0.01, format='%.2f').classes('w-full sm:w-[32%]').props('outlined')
+                valor_parceiro_input = ui.number(label='Valor Parceiro (R$)', min=0, step=0.01, format='%.2f').classes('w-full sm:w-[32%]').props('outlined')
+                valor_percentual_input = ui.number(label='Valor % (%)', min=0, max=100, step=0.01, format='%.2f').classes('w-full sm:w-[32%]').props('outlined')
             
             total_obra_input = ui.number(label='Total da Obra (R$)', min=0, step=0.01, format='%.2f').classes('w-full').props('outlined')
             
@@ -1502,11 +1573,11 @@ class AgendaObras:
             # ===== SEÇÃO 3: Prazos e Datas =====
             ui.label('📅 Prazos e Datas').style('font-size: 16px; font-weight: bold; color: #1976d2;')
             
-            with ui.row().classes('w-full gap-2'):
+            with ui.row().classes('w-full gap-2 flex-wrap'):
                 meses = ['Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho', 
                         'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro']
-                mes_execucao_input = ui.select(meses, label='Mês de Execução').classes('w-1/2').props('outlined')
-                ano_execucao_input = ui.number(label='Ano', value=datetime.date.today().year, min=2020, max=2050, step=1).classes('w-1/2').props('outlined')
+                mes_execucao_input = ui.select(meses, label='Mês de Execução').classes('w-full sm:w-[49%]').props('outlined')
+                ano_execucao_input = ui.number(label='Ano', value=datetime.date.today().year, min=2020, max=2050, step=1).classes('w-full sm:w-[49%]').props('outlined')
             
             # Date picker - Data de início da obra
             with ui.input('Data de início da obra', value='', placeholder='dd/mm/aaaa').classes('w-full').props('outlined').tooltip('📅 Data em que a obra deve começar. Este campo será preenchido pelo coordenador.') as data_input:
@@ -1630,7 +1701,7 @@ class AgendaObras:
             for item in checklist
         )
 
-        with ui.dialog() as dialog, ui.card().style('min-width: 700px; max-width: 900px; padding: 20px; max-height: 90vh; overflow-y: auto;'):
+        with ui.dialog() as dialog, ui.card().classes('responsive-dialog-lg').style('padding: 20px; max-height: 90vh; overflow-y: auto;'):
             # Cabeçalho
             with ui.row().classes('w-full items-center justify-between'):
                 ui.label(f'🏗️ {obra["nome_contrato"]}').style('font-size: 22px; font-weight: bold;')
@@ -1653,7 +1724,7 @@ class AgendaObras:
             valor_inicial_contrato = None if contrato_fora_da_lista else contrato_obra_atual
             
             with ui.column().classes('w-full gap-3'):
-                nome_input = ui.input(label='Nome do Contrato', value=obra['nome_contrato']).classes('w-1/2').props('outlined')
+                nome_input = ui.input(label='Nome do Contrato', value=obra['nome_contrato']).classes('w-full sm:w-1/2').props('outlined')
                 contrato_input = ui.select(
                     contratos_disponiveis,
                     label='Contrato *',
@@ -1665,7 +1736,7 @@ class AgendaObras:
                 elif contrato_fora_da_lista:
                     ui.label('⚠️ O contrato atual não existe na lista. Selecione um contrato válido para salvar.').style('color: #f44336; font-size: 12px;')
                 
-                with ui.row().classes('w-full gap-2'):
+                with ui.row().classes('w-full gap-2 flex-wrap'):
                     contrato_ic_input = ui.input(label='Contrato (IC)', value=obra.get('contrato_ic') or '').classes('w-full').props('outlined')
                     pedido_sap_input = ui.input(label='Pedido SAP', value=obra.get('pedido_sap') or '').classes('w-full').props('outlined')
                     prefixo_agencia_input = ui.input(label='Prefixo Agência', value=obra.get('prefixo_agencia') or '').classes('w-full').props('outlined')
@@ -1687,10 +1758,10 @@ class AgendaObras:
             # ===== SEÇÃO 2: Valores Financeiros =====
             ui.label('💰 Valores Financeiros').style('font-size: 16px; font-weight: bold; color: #1976d2;')
             
-            with ui.row().classes('w-full gap-2'):
-                valor_input = ui.number(label='Valor do Contrato (R$)', value=obra['valor_contrato'], min=0, step=0.01, format='%.2f').classes('w-1/3').props('outlined')
-                valor_parceiro_input = ui.number(label='Valor Parceiro (R$)', value=obra.get('valor_parceiro') or 0, min=0, step=0.01, format='%.2f').classes('w-1/3').props('outlined')
-                valor_percentual_input = ui.number(label='Valor % (%)', value=obra.get('valor_percentual') or 0, min=0, max=100, step=0.01, format='%.2f').classes('w-1/3').props('outlined')
+            with ui.row().classes('w-full gap-2 flex-wrap'):
+                valor_input = ui.number(label='Valor do Contrato (R$)', value=obra['valor_contrato'], min=0, step=0.01, format='%.2f').classes('w-full sm:w-[32%]').props('outlined')
+                valor_parceiro_input = ui.number(label='Valor Parceiro (R$)', value=obra.get('valor_parceiro') or 0, min=0, step=0.01, format='%.2f').classes('w-full sm:w-[32%]').props('outlined')
+                valor_percentual_input = ui.number(label='Valor % (%)', value=obra.get('valor_percentual') or 0, min=0, max=100, step=0.01, format='%.2f').classes('w-full sm:w-[32%]').props('outlined')
             
             total_obra_input = ui.number(label='Total da Obra (R$)', value=obra.get('total_obra') or 0, min=0, step=0.01, format='%.2f').classes('w-full').props('outlined')
             
@@ -1699,11 +1770,11 @@ class AgendaObras:
             # ===== SEÇÃO 3: Prazos e Datas =====
             ui.label('📅 Prazos e Datas').style('font-size: 16px; font-weight: bold; color: #1976d2;')
             
-            with ui.row().classes('w-full gap-2'):
+            with ui.row().classes('w-full gap-2 flex-wrap'):
                 meses = ['Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho', 
                         'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro']
-                mes_execucao_input = ui.select(meses, label='Mês de Execução', value=obra.get('mes_execucao')).classes('w-1/2').props('outlined')
-                ano_execucao_input = ui.number(label='Ano', value=obra.get('ano_execucao') or datetime.date.today().year, min=2020, max=2050, step=1).classes('w-1/2').props('outlined')
+                mes_execucao_input = ui.select(meses, label='Mês de Execução', value=obra.get('mes_execucao')).classes('w-full sm:w-[49%]').props('outlined')
+                ano_execucao_input = ui.number(label='Ano', value=obra.get('ano_execucao') or datetime.date.today().year, min=2020, max=2050, step=1).classes('w-full sm:w-[49%]').props('outlined')
             
             with ui.input('Data de início da obra', value=self.formatar_data_exibicao(obra.get('data_inicio') or ''), placeholder='dd/mm/aaaa').classes('w-full').props('outlined').tooltip('📅 Data em que a obra deve começar. Este campo será preenchido pelo coordenador.') as data_input:
                 with ui.menu().props('no-parent-event') as menu:
@@ -1958,7 +2029,7 @@ class AgendaObras:
     
     def abrir_dialog_datas_criticas_consolidado(self, obra_id: int, datas_pendentes: Dict[str, str], atualizar_checklist_fn=None):
         """Abre dialog consolidado para preencher múltiplas datas críticas de uma vez."""
-        with ui.dialog() as dialog_data, ui.card().style('min-width: 450px; max-width: 550px; padding: 25px;'):
+        with ui.dialog() as dialog_data, ui.card().classes('responsive-dialog-sm').style('padding: 20px;'):
             ui.label('⏰ Datas Críticas Pendentes').style('font-size: 20px; font-weight: bold; margin-bottom: 10px;')
             ui.label('Complete as informações para que os prazos das tarefas possam ser calculados corretamente:').style(
                 'color: #666; margin-bottom: 15px; font-size: 14px;'
@@ -2055,7 +2126,7 @@ class AgendaObras:
 
         titulo, descricao = labels.get(campo, ('Preencher Data', 'Informe a data solicitada:'))
 
-        with ui.dialog() as dialog_data, ui.card().style('min-width: 400px; padding: 20px;'):
+        with ui.dialog() as dialog_data, ui.card().classes('responsive-dialog-sm').style('padding: 20px;'):
             ui.label(titulo).style('font-size: 18px; font-weight: bold; margin-bottom: 10px;')
             ui.label(descricao).style('color: #666; margin-bottom: 15px;')
 
