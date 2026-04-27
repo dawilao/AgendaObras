@@ -1833,8 +1833,15 @@ class AgendaObras:
             ui.separator()
             
             # Botões de ação
+            pode_excluir = permissoes['is_admin']
             with ui.row().classes('w-full justify-between'):
-                ui.button('🗑️ Excluir Obra', on_click=lambda: self.confirmar_exclusao(dialog, obra_id)).props('color=negative flat')
+                botao_excluir = ui.button(
+                    '🗑️ Excluir Obra',
+                    on_click=(lambda: self.confirmar_exclusao(dialog, obra_id)) if pode_excluir else None,
+                ).props('color=negative flat' + ('' if pode_excluir else ' disable'))
+
+                if not pode_excluir:
+                    botao_excluir.tooltip('Somente administradores podem excluir cards/obras.')
                 
                 with ui.row().classes('gap-2'):
                     ui.button('Cancelar', on_click=lambda: [dialog.close(), self.renderizar_obras()]).props('flat')
