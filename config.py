@@ -470,6 +470,9 @@ TEMPLATE_EMAIL_ALERTA_A = """
         .info {{ margin: 10px 0; }}
         .info strong {{ color: #1976d2; }}
         .reiteracao {{ background-color: #ffebee; padding: 10px; border-radius: 4px; margin: 10px 0; }}
+        .observacoes-box {{ background-color: #f7f7f7; border-left: 4px solid #ccc; padding: 12px; margin: 18px 0 6px 0; }}
+        .observacoes-titulo {{ margin: 0 0 6px 0; color: #555; }}
+        .observacoes-texto {{ margin: 0; white-space: normal; }}
     </style>
 </head>
 <body>
@@ -496,6 +499,7 @@ TEMPLATE_EMAIL_ALERTA_A = """
             </div>
             
             <p>Por favor, tome as providências necessárias para conclusão desta tarefa.</p>
+            {secao_observacoes}
         </div>
         <div class="footer">
             AgendaObras - Sistema de Rastreamento de Obras<br>
@@ -520,6 +524,9 @@ TEMPLATE_EMAIL_ALERTA_B = """
         .critical-box {{ background-color: #ffebee; border-left: 4px solid #f44336; padding: 15px; margin: 15px 0; }}
         .info {{ margin: 10px 0; }}
         .info strong {{ color: #1976d2; }}
+        .observacoes-box {{ background-color: #f7f7f7; border-left: 4px solid #ccc; padding: 12px; margin: 18px 0 6px 0; }}
+        .observacoes-titulo {{ margin: 0 0 6px 0; color: #555; }}
+        .observacoes-texto {{ margin: 0; white-space: normal; }}
     </style>
 </head>
 <body>
@@ -541,6 +548,7 @@ TEMPLATE_EMAIL_ALERTA_B = """
             </div>
             
             <p><strong>Ação imediata requerida!</strong></p>
+            {secao_observacoes}
         </div>
         <div class="footer">
             AgendaObras - Sistema de Rastreamento de Obras<br>
@@ -566,6 +574,9 @@ TEMPLATE_EMAIL_CRITICO_ATRASADO = """
         .info {{ margin: 10px 0; }}
         .info strong {{ color: #1976d2; }}
         .atrasado {{ background-color: #b71c1c; color: white; padding: 10px; border-radius: 4px; margin: 10px 0; text-align: center; }}
+        .observacoes-box {{ background-color: #f7f7f7; border-left: 4px solid #ccc; padding: 12px; margin: 18px 0 6px 0; }}
+        .observacoes-titulo {{ margin: 0 0 6px 0; color: #555; }}
+        .observacoes-texto {{ margin: 0; white-space: normal; }}
     </style>
 </head>
 <body>
@@ -590,6 +601,7 @@ TEMPLATE_EMAIL_CRITICO_ATRASADO = """
             </div>
             
             <p><strong>URGENTE: Providências imediatas necessárias!</strong></p>
+            {secao_observacoes}
         </div>
         <div class="footer">
             AgendaObras - Sistema de Rastreamento de Obras<br>
@@ -673,6 +685,9 @@ TEMPLATE_EMAIL_AGRUPADO_POR_OBRA = """
         .cta-box {{ margin: 25px 0 15px 0; padding: 20px; background: linear-gradient(135deg, #e3f2fd 0%, #bbdefb 100%); border-radius: 6px; border: 1px solid #90caf9; }}
         .cta-titulo {{ font-size: 16px; font-weight: 600; color: #1565c0; margin: 0 0 10px 0; }}
         .cta-texto {{ color: #424242; margin: 0; font-size: 14px; line-height: 1.6; }}
+        .observacoes-box {{ background-color: #f7f7f7; border-left: 4px solid #ccc; padding: 12px; margin: 0 0 18px 0; }}
+        .observacoes-titulo {{ margin: 0 0 6px 0; color: #555; }}
+        .observacoes-texto {{ margin: 0; white-space: normal; font-size: 13px; color: #333; }}
         
         /* Footer */
         .footer {{ background-color: #263238; color: white; padding: 20px; text-align: center; }}
@@ -716,6 +731,8 @@ TEMPLATE_EMAIL_AGRUPADO_POR_OBRA = """
         <div class="content">
             {secoes_conteudo}
         </div>
+
+        {secao_observacoes}
         
         <!-- Rodapé -->
         <div class="footer">

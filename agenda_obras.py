@@ -1443,6 +1443,27 @@ class AgendaObras:
                                     ui.label(f'⏰ Prazo: {data_formatada_prazo} ({abs(dias_restantes)}{sufixo_dias} {"atrasado" if dias_restantes < 0 else "restante" if dias_restantes > 0 else "hoje"})').style(
                                     f'font-size: 11px; color: {cor_prazo}; margin-left: 20px;'
                                 )
+
+                        observacoes_texto = (obra.get('observacoes') or '').strip()
+                        obs_usuario = (obra.get('obs_usuario') or '').strip()
+                        obs_data = (obra.get('obs_data') or '').strip()
+
+                        obs_data_fmt = ''
+                        if obs_data:
+                            try:
+                                dt = datetime.datetime.strptime(obs_data, '%Y-%m-%d %H:%M:%S')
+                                obs_data_fmt = dt.strftime('%d/%m/%Y %H:%M')
+                            except Exception:
+                                obs_data_fmt = obs_data
+
+                        with ui.card().classes('w-full').style('background-color: #f8f9fa; border-left: 4px solid #ccc; padding: 8px; margin-top: 8px;'):
+                            ui.label('📝 Observações').style('font-size: 12px; font-weight: bold; color: #666;')
+                            ui.label(observacoes_texto if observacoes_texto else 'Sem observações cadastradas.').style(
+                                'font-size: 11px; color: #333; white-space: pre-line; '
+                                'display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;'
+                            )
+                            if obs_usuario and obs_data_fmt:
+                                ui.label(f'Atualizado por {obs_usuario} em {obs_data_fmt}').style('font-size: 10px; color: #777;')
                 
                 # Aba de Checklist
                 with ui.tab_panel(tab_checklist).style('max-height: 250px; overflow-y: auto;'):
@@ -1702,10 +1723,10 @@ class AgendaObras:
         )
 
         with ui.dialog() as dialog, ui.card().classes('responsive-dialog-lg').style('padding: 20px; max-height: 90vh; overflow-y: auto;'):
-            # Cabeçalho
+            # Cabeçalho dos cards
             with ui.row().classes('w-full items-center justify-between'):
-                ui.label(f'🏗️ {obra["nome_contrato"]}').style('font-size: 22px; font-weight: bold;')
-                ui.button(icon='close', on_click=lambda: [dialog.close(), self.renderizar_obras()]).props('flat round')
+                ui.label(f'{obra["nome_contrato"]}').style('font-size: 22px; font-weight: bold;')
+                ui.button(icon='close', on_click=lambda: fechar_dialog_com_autosalvamento()).props('flat round')
             
             ui.separator()
             
@@ -1806,6 +1827,22 @@ class AgendaObras:
                 label='Status',
                 value=obra['status'] or 'Não Iniciada'
             ).classes('w-full').props('outlined')
+
+            ui.label('📝 Observações').style('font-size: 16px; font-weight: bold; color: #1976d2; margin-top: 10px;')
+            observacoes_input = ui.textarea(
+                label='Observações da Obra',
+                value=obra.get('observacoes') or '',
+                placeholder='Digite observações da obra...'
+            ).classes('w-full').props('outlined autogrow rows=4')
+
+            obs_usuario = (obra.get('obs_usuario') or '').strip()
+            obs_data = (obra.get('obs_data') or '').strip()
+            if obs_usuario and obs_data:
+                try:
+                    obs_data_fmt = datetime.datetime.strptime(obs_data, '%Y-%m-%d %H:%M:%S').strftime('%d/%m/%Y %H:%M')
+                except Exception:
+                    obs_data_fmt = obs_data
+                ui.label(f'Última atualização: {obs_usuario} em {obs_data_fmt}').style('font-size: 11px; color: #777;')
             
             ui.separator()
             
@@ -1816,6 +1853,52 @@ class AgendaObras:
             checklist_estados = {}
             
             checklist_container = ui.column().classes('w-full gap-2')
+
+            autosave_em_execucao = {'ativo': False}
+
+            def autosalvar_ao_sair():
+                """Salva observações pendentes ao sair do diálogo de edição."""
+                if autosave_em_execucao['ativo']:
+                    return
+                autosave_em_execucao['ativo'] = True
+                try:
+                    observacoes_nova = (observacoes_input.value or '').strip()
+                    observacoes_antiga = (obra.get('observacoes') or '').strip()
+
+                    if observacoes_nova != observacoes_antiga:
+                        usuario = obter_usuario_logado() or {}
+                        nome_usuario = ' '.join([
+                            (usuario.get('nome') or '').strip(),
+                            (usuario.get('sobrenome') or '').strip(),
+                        ]).strip() or (usuario.get('email') or '').strip() or 'Sistema'
+
+                        obs_data = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S') if observacoes_nova else None
+                        obs_usuario = nome_usuario if observacoes_nova else None
+
+                        sucesso = self.db.atualizar_observacoes_obra(
+                            obra_id,
+                            observacoes_nova,
+                            obs_usuario,
+                            obs_data,
+                        )
+
+                        if sucesso:
+                            obra['observacoes'] = observacoes_nova
+                            obra['obs_usuario'] = obs_usuario or ''
+                            obra['obs_data'] = obs_data or ''
+                        else:
+                            self.notificar('⚠️ Não foi possível salvar automaticamente as observações.', tipo='warning')
+                except Exception as e:
+                    log_error(e, "agenda_obras", f"Auto-save ao sair do diálogo da obra - ID: {obra_id}")
+                finally:
+                    autosave_em_execucao['ativo'] = False
+
+            def fechar_dialog_com_autosalvamento():
+                autosalvar_ao_sair()
+                dialog.close()
+                
+
+            dialog.on('hide', lambda e: [autosalvar_ao_sair(), self.renderizar_obras()])
             
             def atualizar_checklist():
                 """Recarrega todos os itens do checklist a partir do banco"""
@@ -1844,7 +1927,7 @@ class AgendaObras:
                     botao_excluir.tooltip('Somente administradores podem excluir cards/obras.')
                 
                 with ui.row().classes('gap-2'):
-                    ui.button('Cancelar', on_click=lambda: [dialog.close(), self.renderizar_obras()]).props('flat')
+                    ui.button('Cancelar', on_click=lambda: fechar_dialog_com_autosalvamento()).props('flat')
                     ui.button('💾 Salvar Alterações', on_click=lambda: self.atualizar_obra_dialog(
                         dialog, obra_id, nome_input.value, contrato_input.value,
                         valor_input.value, data_input.value, status_input.value, checklist_estados,
@@ -1860,7 +1943,8 @@ class AgendaObras:
                         ano_execucao=int(ano_execucao_input.value) if ano_execucao_input.value else None,
                         data_assinatura=data_assinatura_input.value if data_assinatura_input.value else None,
                         data_aio=data_aio_input.value if data_aio_input.value else None,
-                        data_acionamento=data_acionamento_input.value if data_acionamento_input.value else None
+                        data_acionamento=data_acionamento_input.value if data_acionamento_input.value else None,
+                        observacoes=observacoes_input.value
                     )).props('color=primary')
         
         dialog.open()
@@ -2244,12 +2328,35 @@ class AgendaObras:
                 kwargs['data_conclusao'] = self.converter_data_para_iso(kwargs['data_conclusao'])
             if 'data_acionamento' in kwargs:
                 kwargs['data_acionamento'] = self.converter_data_para_iso(kwargs['data_acionamento'])
+
+            observacoes_nova = (kwargs.pop('observacoes', '') or '').strip()
             
             # Busca dados antigos para comparação
             obra_antiga = self.db.obter_obra(obra_id)
             
             # Atualiza dados da obra com todos os campos
             requer_recalculo = self.db.atualizar_obra(obra_id, nome, cliente, valor, data_inicio, status, **kwargs)
+
+            observacoes_antiga = ((obra_antiga or {}).get('observacoes') or '').strip()
+            if observacoes_nova != observacoes_antiga:
+                usuario = obter_usuario_logado() or {}
+                nome_usuario = ' '.join([
+                    (usuario.get('nome') or '').strip(),
+                    (usuario.get('sobrenome') or '').strip(),
+                ]).strip() or (usuario.get('email') or '').strip() or 'Sistema'
+
+                obs_data = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S') if observacoes_nova else None
+                obs_usuario = nome_usuario if observacoes_nova else None
+
+                sucesso_obs = self.db.atualizar_observacoes_obra(
+                    obra_id,
+                    observacoes_nova,
+                    obs_usuario,
+                    obs_data,
+                )
+
+                if not sucesso_obs:
+                    self.notificar('⚠️ Obra salva, mas houve erro ao atualizar observações.', tipo='warning')
             
             # Verifica se precisa recalcular datas
             recalculou = False

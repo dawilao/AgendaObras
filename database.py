@@ -96,7 +96,10 @@ class Database:
                 data_conclusao TEXT,
                 data_assinatura TEXT,
                 data_aio TEXT,
-                data_acionamento TEXT
+                data_acionamento TEXT,
+                observacoes TEXT,
+                obs_usuario TEXT,
+                obs_data TEXT
             )
         ''')
         
@@ -750,6 +753,35 @@ class Database:
         cursor.execute(f'UPDATE obras SET {campo} = ? WHERE id = ?', (data or None, obra_id))
         conn.commit()
         conn.close()
+
+    def atualizar_observacoes_obra(self, obra_id: int, observacoes: Optional[str],
+                                   obs_usuario: Optional[str], obs_data: Optional[str]) -> bool:
+        """Atualiza observações e metadados de edição da obra."""
+        try:
+            conn = self.get_connection()
+            cursor = conn.cursor()
+
+            observacoes = (observacoes or '').strip() or None
+            obs_usuario = (obs_usuario or '').strip() or None
+            obs_data = (obs_data or '').strip() or None
+
+            cursor.execute('''
+                UPDATE obras
+                SET observacoes = ?, obs_usuario = ?, obs_data = ?
+                WHERE id = ?
+            ''', (observacoes, obs_usuario, obs_data, obra_id))
+
+            conn.commit()
+            conn.close()
+            return True
+        except Exception as e:
+            log_error(e, "database", f"Atualizar observações da obra - ID: {obra_id}")
+            if 'conn' in locals():
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+            return False
     
     def marcar_item_checklist(self, item_id: int, concluido: bool) -> Optional[str]:
         """Marca/desmarca um item do checklist. Retorna trigger_ui se houver"""

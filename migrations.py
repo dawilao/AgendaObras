@@ -132,6 +132,14 @@ class MigrationManager:
             upgrade=self._migration_009_add_data_acionamento,
             downgrade=None
         ))
+
+        # Migração 10: Adicionar colunas de observações na obra
+        self.migrations.append(Migration(
+            version=10,
+            description="Adicionar colunas observacoes, obs_usuario e obs_data na tabela obras",
+            upgrade=self._migration_010_add_observacoes,
+            downgrade=None
+        ))
     
     def _migration_001_add_tipo_recorrencia(self, conn: sqlite3.Connection):
         """Adiciona coluna tipo_recorrencia à tabela checklist_templates"""
@@ -571,6 +579,28 @@ class MigrationManager:
         else:
             print("    ⏭️  Coluna data_acionamento já existe, pulando...")
         
+        conn.commit()
+
+    def _migration_010_add_observacoes(self, conn: sqlite3.Connection):
+        """Adiciona colunas de observações e metadados na tabela obras"""
+        cursor = conn.cursor()
+
+        cursor.execute("PRAGMA table_info(obras)")
+        columns = [row[1] for row in cursor.fetchall()]
+
+        colunas = [
+            ('observacoes', 'TEXT'),
+            ('obs_usuario', 'TEXT'),
+            ('obs_data', 'TEXT'),
+        ]
+
+        for nome_coluna, tipo_coluna in colunas:
+            if nome_coluna not in columns:
+                cursor.execute(f'ALTER TABLE obras ADD COLUMN {nome_coluna} {tipo_coluna}')
+                print(f"    ✅ Coluna {nome_coluna} adicionada à tabela obras")
+            else:
+                print(f"    ⏭️  Coluna {nome_coluna} já existe, pulando...")
+
         conn.commit()
     
     def _get_applied_versions(self) -> List[int]:

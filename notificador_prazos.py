@@ -279,7 +279,7 @@ class NotificadorPrazos:
                 
                 # Busca tarefas não concluídas e não bloqueadas
                 cursor.execute('''
-                    SELECT oc.*, o.nome_contrato, o.cliente, ct.possui_reiteracao, ct.tipo_recorrencia
+                    SELECT oc.*, o.nome_contrato, o.cliente, o.observacoes, ct.possui_reiteracao, ct.tipo_recorrencia
                     FROM obra_checklist oc
                     JOIN obras o ON oc.obra_id = o.id 
                     LEFT JOIN checklist_templates ct ON oc.template_id = ct.id
@@ -316,7 +316,8 @@ class NotificadorPrazos:
                                 alertas_por_obra[obra_id] = {
                                     'info': {
                                         'nome_contrato': tarefa['nome_contrato'],
-                                        'cliente': tarefa['cliente']
+                                        'cliente': tarefa['cliente'],
+                                        'observacoes': tarefa.get('observacoes')
                                     },
                                     'tarefas': {
                                         'reiteracao_1': [],
