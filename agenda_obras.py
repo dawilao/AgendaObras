@@ -12,7 +12,6 @@ from typing import Dict, List, Optional, Tuple
 from database import Database, TAREFAS_COM_DIAS_UTEIS
 from email_service import EmailService
 from obras_helper import ObrasHelper
-from gerador_tarefas_recorrentes import GeradorTarefasRecorrentes
 from notificador_prazos import NotificadorPrazos
 from version_checker import VersionChecker
 from config import VERSION
@@ -23,6 +22,57 @@ from contratos_database import ContratosDatabase
 
 # Valores de status padrão (usado tanto no banco quanto na interface)
 STATUS_OPTIONS = ['Não Iniciada', 'Em Andamento', 'Atrasada', 'Concluída']
+STATUS_VISUAL_EDICAO_OPTIONS = [
+    'Não Iniciada',
+    'Em Andamento',
+    'Atrasada',
+    'Pronta para concluir',
+    'Concluído',
+    'Concluída com Pendências',
+]
+
+
+def datas_iguais_normalizadas(valor_antigo, valor_novo) -> bool:
+    """Compara datas tratando None e string vazia como equivalentes."""
+    return (valor_antigo or '').strip() == (valor_novo or '').strip()
+
+
+def rotulo_alterar_medicoes(quantidade: int, habilitado: bool = True) -> str:
+    """Retorna o rótulo do botão de configuração de medições."""
+    if not habilitado:
+        return 'Alterar medições'
+    quantidade_normalizada = max(0, int(quantidade or 0))
+    return f'Alterar medições ({quantidade_normalizada}/6)'
+
+
+def obra_tem_medicoes_concluidas(db, obra_id: int) -> bool:
+    """Indica se a obra já concluiu todas as medições/confirmacões e ainda não foi finalizada."""
+    obra = db.obter_obra(obra_id) or {}
+    status_conclusao = (obra.get('status_conclusao_obra') or '').strip().lower()
+    if status_conclusao in {'sem_pendencias', 'com_pendencias'}:
+        return False
+    return db.verificar_todas_medicoes_concluidas(obra_id)
+
+
+def status_visual_para_edicao(obra: Dict, checklist: List[Dict]) -> str:
+    """Converte o status visual do card para o valor exibido no select de edição."""
+    _, _, status_texto = ObrasHelper.obter_status_visual(obra, checklist)
+    if status_texto in STATUS_VISUAL_EDICAO_OPTIONS:
+        return status_texto
+
+    status_salvo = (obra.get('status') or '').strip()
+    if status_salvo in STATUS_VISUAL_EDICAO_OPTIONS:
+        return status_salvo
+
+    return 'Não Iniciada'
+
+
+def status_edicao_para_banco(status: str) -> str:
+    """Normaliza o valor do select de edição para o formato persistido no banco."""
+    status_normalizado = (status or '').strip()
+    if status_normalizado in {'Concluído', 'Pronta para concluir', 'Concluída com Pendências'}:
+        return 'Concluída'
+    return status_normalizado
 
 
 class AgendaObras:
@@ -38,10 +88,9 @@ class AgendaObras:
         
         # Inicializa serviços
         self.email_service = EmailService(self.db)
-        self.gerador_recorrentes = GeradorTarefasRecorrentes(self.db)
         
         # Inicializa notificador de prazos
-        self.notificador = NotificadorPrazos(self.db, self.email_service, self.gerador_recorrentes)
+        self.notificador = NotificadorPrazos(self.db, self.email_service)
         self.notificador.iniciar_verificacao()
         
         # Container do body (para atualização dinâmica)
@@ -1466,7 +1515,7 @@ class AgendaObras:
                                 ui.label(f'Atualizado por {obs_usuario} em {obs_data_fmt}').style('font-size: 10px; color: #777;')
                 
                 # Aba de Checklist
-                with ui.tab_panel(tab_checklist).style('max-height: 250px; overflow-y: auto;'):
+                with ui.tab_panel(tab_checklist).style('max-height: 370px; overflow-y: auto;'):
                     with ui.column().classes('w-full gap-1'):
                         tarefas_concluidas = sum(1 for item in checklist if item['concluido'])
                         ui.label(f'Total: {tarefas_concluidas}/{len(checklist)} tarefas concluídas').style(
@@ -1711,6 +1760,8 @@ class AgendaObras:
             return
 
         checklist = self.db.obter_checklist(obra_id)
+        status_conclusao = (obra.get('status_conclusao_obra') or '').strip().lower()
+        status_visual_edicao = status_visual_para_edicao(obra, checklist)
 
         # Verificar se tarefas críticas estão concluídas para habilitar campos
         contrato_assinado_concluido = any(
@@ -1727,6 +1778,27 @@ class AgendaObras:
             with ui.row().classes('w-full items-center justify-between'):
                 ui.label(f'{obra["nome_contrato"]}').style('font-size: 22px; font-weight: bold;')
                 ui.button(icon='close', on_click=lambda: fechar_dialog_com_autosalvamento()).props('flat round')
+
+            if status_conclusao == 'com_pendencias':
+                with ui.card().classes('w-full').style('background: #fff8e1; border-left: 4px solid #f57c00; padding: 12px; margin-top: 10px;'):
+                    ui.label('⚠️ Esta obra foi concluída com pendências.').style('font-size: 13px; font-weight: bold; color: #f57c00;')
+                    ui.label('Use este botão somente quando todas as pendências já tiverem sido resolvidas.').style('font-size: 12px; color: #8a5a00;')
+
+                    def resolver_pendencias_obra():
+                        try:
+                            self.db.registrar_finalizacao_obra(obra_id, 'sem_pendencias')
+                            obra['status_conclusao_obra'] = 'sem_pendencias'
+                            self.notificar('✅ Pendências resolvidas. O card agora será exibido como Concluído.', tipo='positive')
+                            try:
+                                dialog.close()
+                            except Exception:
+                                pass
+                            ui.timer(0.05, self.renderizar_obras, once=True)
+                        except Exception as e:
+                            log_error(e, 'agenda_obras', 'Resolver pendências da obra')
+                            self.notificar(f'❌ Erro ao resolver pendências: {e}', tipo='negative')
+
+                    ui.button('✅ Marcar pendências como resolvidas', on_click=resolver_pendencias_obra).props('color=positive')
             
             ui.separator()
             
@@ -1823,10 +1895,11 @@ class AgendaObras:
             self._data_aio_input = data_aio_input
 
             status_input = ui.select(
-                STATUS_OPTIONS,
+                STATUS_VISUAL_EDICAO_OPTIONS,
                 label='Status',
-                value=obra['status'] or 'Não Iniciada'
+                value=status_visual_edicao
             ).classes('w-full').props('outlined')
+            self._status_input_atual = status_input
 
             ui.label('📝 Observações').style('font-size: 16px; font-weight: bold; color: #1976d2; margin-top: 10px;')
             observacoes_input = ui.textarea(
@@ -1834,6 +1907,9 @@ class AgendaObras:
                 value=obra.get('observacoes') or '',
                 placeholder='Digite observações da obra...'
             ).classes('w-full').props('outlined autogrow rows=4')
+
+            # Armazena referência para uso em diálogos de conclusão
+            self._observacoes_input_atual = observacoes_input
 
             obs_usuario = (obra.get('obs_usuario') or '').strip()
             obs_data = (obra.get('obs_data') or '').strip()
@@ -1853,6 +1929,22 @@ class AgendaObras:
             checklist_estados = {}
             
             checklist_container = ui.column().classes('w-full gap-2')
+
+            medicoes_registro = self.db.obter_medicoes_obra(obra_id)
+            quantidade_medicoes = int((medicoes_registro or {}).get('quantidade') or 0)
+            data_inicio_preenchida = bool((obra.get('data_inicio') or '').strip())
+            botao_medicoes = None
+
+            with ui.row().classes('w-full items-center justify-between gap-2'):
+                ui.label('Configuração de medições').style('font-size: 12px; color: #666; font-weight: bold;')
+                if data_inicio_preenchida:
+                    botao_medicoes = ui.button(
+                        rotulo_alterar_medicoes(quantidade_medicoes, True),
+                        on_click=lambda: self.abrir_dialog_selecionar_medicoes(obra_id, atualizar_checklist, botao_medicoes)
+                    )
+                    botao_medicoes.props('flat color=primary size=sm')
+                else:
+                    ui.button('Alterar medições', on_click=None).props('flat color=primary size=sm disable').tooltip('Preencha a Data de início da obra para configurar as medições.')
 
             autosave_em_execucao = {'ativo': False}
 
@@ -1908,6 +2000,14 @@ class AgendaObras:
                 with checklist_container:
                     for it in checklist_atualizado:
                         self.criar_item_checklist_editavel(it, checklist_estados, obra_id, atualizar_checklist)
+
+                obra_atualizada = self.db.obter_obra(obra_id) or obra
+                novo_status = status_visual_para_edicao(obra_atualizada, checklist_atualizado)
+                try:
+                    status_input.value = novo_status
+                    status_input.update()
+                except Exception:
+                    pass
             
             with checklist_container:
                 for item in checklist:
@@ -2034,10 +2134,19 @@ class AgendaObras:
                     
                     # Evento: ao marcar/desmarcar, salva e atualiza TODO o checklist
                     if not bloqueado:
-                        def on_change(e, item_id=item['id']):
+                        def on_change(e, item_id=item['id'], item_descricao=item.get('descricao', '')):
                             novo_valor = bool(e.value)
                             # Salva no banco imediatamente
                             trigger_ui = self.db.marcar_item_checklist(item_id, novo_valor)
+
+                            # Se concluiu uma CONFIRMAÇÃO DE MEDIÇÃO e não há decisão de finalização, abre o diálogo automaticamente
+                            if novo_valor and item_descricao.startswith('CONFIRMAÇÃO DE MEDIÇÃO'):
+                                try:
+                                    if obra_tem_medicoes_concluidas(self.db, obra_id):
+                                        self.abrir_dialog_conclusao_obra(obra_id, atualizar_checklist_fn, self._observacoes_input_atual)
+                                        return
+                                except Exception as e:
+                                    log_error(e, 'agenda_obras', f'Checar finalizacao da obra - item {item_id}')
                             
                             # Se marcou como concluído e há trigger_ui, abre dialog de data crítica
                             # Neste caso, o próprio dialog cuidará de atualizar o checklist
@@ -2111,7 +2220,9 @@ class AgendaObras:
                 if item['data_limite'] and not bloqueado:
                     data_formatada = self.formatar_data_exibicao(item['data_limite'])
                     
-                    if data_formatada == datetime.datetime.today().strftime('%d/%m/%Y'):
+                    if item['concluido']:
+                        ui.label(f'Prazo: {data_formatada}').style('font-size: 12px; color: #666; text-decoration: line-through;')
+                    elif data_formatada == datetime.datetime.today().strftime('%d/%m/%Y'):
                         ui.label(f'⏰ Prazo: {data_formatada} (HOJE!)').style('font-size: 12px; color: red; font-weight: bold;')
                     else:
                         ui.label(f'Prazo: {data_formatada}').style('font-size: 12px; color: #666;')
@@ -2300,6 +2411,182 @@ class AgendaObras:
         except Exception as e:
             log_error(e, "agenda_obras", f"Salvar data crítica - campo: {campo}")
             self.notificar(f'❌ Erro ao salvar: {str(e)}', tipo='negative')
+
+    def abrir_dialog_selecionar_medicoes(self, obra_id: int, atualizar_checklist_fn=None, botao_medicoes=None):
+        """Abre diálogo para o usuário selecionar quantas medições deseja (0-6)."""
+        obra = self.db.obter_obra(obra_id)
+        if not obra:
+            self.notificar('⚠️ Obra não encontrada.', tipo='warning')
+            return
+
+        data_inicio_obra = (obra.get('data_inicio') or '').strip()
+        if not data_inicio_obra:
+            self.notificar('⚠️ Preencha a Data de início da obra antes de configurar as medições.', tipo='warning')
+            return
+
+        registro = self.db.obter_medicoes_obra(obra_id)
+        valor_atual = registro.get('quantidade') if registro else 0
+
+        with ui.dialog() as dialog_med, ui.card().classes('responsive-dialog-sm').style('padding: 20px;'):
+            ui.label('🔧 Configurar Medições').style('font-size: 18px; font-weight: bold; margin-bottom: 8px;')
+            ui.label('Selecione a quantidade de medições para este card (máx 6).').style('color: #666; margin-bottom: 10px;')
+
+            options = [str(i) for i in range(0, 7)]
+            select_input = ui.select(options, label='Medições', value=str(valor_atual or 0)).classes('w-full').props('outlined')
+
+            ui.separator()
+
+            with ui.row().classes('w-full justify-end gap-2'):
+                ui.button('Cancelar', on_click=dialog_med.close).props('flat')
+
+                def confirmar():
+                    try:
+                        qtd = int(select_input.value or 0)
+                        if qtd < 0 or qtd > 6:
+                            self.notificar('⚠️ Escolha um valor entre 0 e 6.', tipo='warning')
+                            return
+
+                        self.db.criar_medicoes_dinamicas(obra_id, qtd)
+
+                        if botao_medicoes:
+                            try:
+                                botao_medicoes.text = rotulo_alterar_medicoes(qtd, True)
+                            except Exception:
+                                pass
+
+                        if obra_tem_medicoes_concluidas(self.db, obra_id):
+                            dialog_med.close()
+                            if atualizar_checklist_fn:
+                                ui.timer(0.05, atualizar_checklist_fn, once=True)
+                            ui.timer(0.1, lambda: self.abrir_dialog_conclusao_obra(obra_id, atualizar_checklist_fn, self._observacoes_input_atual), once=True)
+                            return
+
+                        # Atualiza checklist na UI
+                        if atualizar_checklist_fn:
+                            ui.timer(0.05, atualizar_checklist_fn, once=True)
+                        else:
+                            ui.timer(0.05, self.renderizar_obras, once=True)
+
+                        dialog_med.close()
+                        self.notificar('✅ Medições configuradas com sucesso.', tipo='positive')
+                    except Exception as e:
+                        log_error(e, 'agenda_obras', 'Configurar medições')
+                        self.notificar(f'❌ Erro ao configurar medições: {e}', tipo='negative')
+
+                ui.button('Confirmar', on_click=confirmar).props('color=primary')
+
+        dialog_med.open()
+
+    def abrir_dialog_conclusao_obra(self, obra_id: int, atualizar_checklist_fn=None, observacoes_input_ref=None):
+        """Abre diálogo para confirmar a conclusão da obra após finalizar as medições."""
+        obra = self.db.obter_obra(obra_id)
+        if not obra:
+            self.notificar('⚠️ Obra não encontrada.', tipo='warning')
+            return
+
+        status_atual = (obra.get('status_conclusao_obra') or '').strip().lower()
+        if status_atual in {'sem_pendencias', 'com_pendencias'}:
+            return
+
+        observacoes = (obra.get('observacoes') or '').strip()
+
+        with ui.dialog() as dialog_finalizacao, ui.card().classes('responsive-dialog-sm').style('padding: 20px;'):
+            ui.label('Finalizar Obra').style('font-size: 18px; font-weight: bold; margin-bottom: 8px;')
+            ui.label('Todas as medições foram concluídas. Confirme como deseja encerrar este card.').style('color: #666; margin-bottom: 10px;')
+
+            if observacoes:
+                ui.label('Observações registradas:').style('font-size: 12px; color: #888; margin-top: 8px;')
+                ui.label(observacoes).style('white-space: pre-wrap; font-size: 13px; background: #f8f9fa; padding: 10px; border-radius: 6px;')
+
+            pendencias_input = ui.textarea('Pendências da obra (opcional)', value='', placeholder='Descreva aqui as pendências para manter o alerta crítico diário').classes('w-full mt-2').props('outlined autogrow')
+            pendencias_input.visible = False
+
+            ui.separator()
+
+            with ui.row().classes('w-full justify-end gap-2'):
+                ui.button('Cancelar', on_click=dialog_finalizacao.close).props('flat')
+
+                def mostrar_pendencias():
+                    pendencias_input.visible = True
+                    try:
+                        pendencias_input.update()
+                    except Exception:
+                        pass
+
+                def concluir_sem_pendencias():
+                    try:
+                        self.db.registrar_finalizacao_obra(obra_id, 'sem_pendencias')
+                        dialog_finalizacao.close()
+                        if atualizar_checklist_fn:
+                            ui.timer(0.05, atualizar_checklist_fn, once=True)
+                        else:
+                            ui.timer(0.05, self.renderizar_obras, once=True)
+                        self.notificar('✅ Obra finalizada sem pendências.', tipo='positive')
+                    except Exception as e:
+                        log_error(e, 'agenda_obras', 'Finalizar obra sem pendências')
+                        self.notificar(f'❌ Erro ao finalizar obra: {e}', tipo='negative')
+
+                def concluir_com_pendencias():
+                    try:
+                        texto_pendencias = (pendencias_input.value or '').strip()
+                        observacoes_atualizadas = observacoes
+
+                        if texto_pendencias:
+                            bloco_pendencias = f'Pendências da conclusão:\n{texto_pendencias}'
+                            if bloco_pendencias not in observacoes_atualizadas:
+                                observacoes_atualizadas = (
+                                    f'{observacoes_atualizadas}\n\n{bloco_pendencias}'
+                                    if observacoes_atualizadas
+                                    else bloco_pendencias
+                                )
+
+                        if observacoes_atualizadas != observacoes:
+                            usuario = obter_usuario_logado() or {}
+                            nome_usuario = ' '.join([
+                                (usuario.get('nome') or '').strip(),
+                                (usuario.get('sobrenome') or '').strip(),
+                            ]).strip() or (usuario.get('email') or '').strip() or 'Sistema'
+
+                            obs_data = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                            sucesso_obs = self.db.atualizar_observacoes_obra(
+                                obra_id,
+                                observacoes_atualizadas,
+                                nome_usuario,
+                                obs_data,
+                            )
+
+                            # Atualiza cópia local para refletir imediatamente na UI
+                            if sucesso_obs:
+                                try:
+                                    obra['observacoes'] = observacoes_atualizadas
+                                    obra['obs_usuario'] = nome_usuario
+                                    obra['obs_data'] = obs_data
+                                    # Atualiza observacoes_input no diálogo de edição se foi passado
+                                    if observacoes_input_ref:
+                                        try:
+                                            observacoes_input_ref.value = observacoes_atualizadas
+                                            observacoes_input_ref.update()
+                                        except Exception:
+                                            pass
+                                except Exception:
+                                    pass
+
+                        self.db.registrar_finalizacao_obra(obra_id, 'com_pendencias')
+                        dialog_finalizacao.close()
+                        if atualizar_checklist_fn:
+                            ui.timer(0.05, atualizar_checklist_fn, once=True)
+                        else:
+                            ui.timer(0.05, self.renderizar_obras, once=True)
+                        self.notificar('⚠️ Obra finalizada com pendências. Alertas críticos diários ativos.', tipo='warning')
+                    except Exception as e:
+                        log_error(e, 'agenda_obras', 'Finalizar obra com pendências')
+                        self.notificar(f'❌ Erro ao finalizar obra: {e}', tipo='negative')
+
+                ui.button('OBRA CONCLUÍDA SEM PENDÊNCIAS', on_click=concluir_sem_pendencias).props('color=positive')
+                ui.button('OBRA CONCLUÍDA COM PENDÊNCIAS', on_click=mostrar_pendencias).props('color=negative')
+                ui.button('Confirmar pendências', on_click=concluir_com_pendencias).props('color=negative flat')
+
+        dialog_finalizacao.open()
     
     def atualizar_obra_dialog(self, dialog, obra_id: int, nome: str, cliente: str,
                             valor: float, data_inicio: str, status: str, checklist_estados: Dict = None, 
@@ -2335,6 +2622,7 @@ class AgendaObras:
             obra_antiga = self.db.obter_obra(obra_id)
             
             # Atualiza dados da obra com todos os campos
+            status = status_edicao_para_banco(status)
             requer_recalculo = self.db.atualizar_obra(obra_id, nome, cliente, valor, data_inicio, status, **kwargs)
 
             observacoes_antiga = ((obra_antiga or {}).get('observacoes') or '').strip()
@@ -2362,7 +2650,8 @@ class AgendaObras:
             recalculou = False
             datas_recalculadas = []
 
-            if obra_antiga['data_inicio'] != data_inicio:
+            data_inicio_antiga = (obra_antiga or {}).get('data_inicio')
+            if not datas_iguais_normalizadas(data_inicio_antiga, data_inicio):
                 self.db.recalcular_checklist(obra_id, 'data_inicio', data_inicio)
                 datas_recalculadas.append('data de início')
                 recalculou = True
@@ -2406,8 +2695,40 @@ class AgendaObras:
                     with checklist_container:
                         for item in checklist:
                             self.criar_item_checklist_editavel(item, checklist_estados, obra_id, atualizar_checklist_local)
-                
+
+                    try:
+                        obra_atual = self.db.obter_obra(obra_id) or obra_antiga or {}
+                        novo_status = status_visual_para_edicao(obra_atual, checklist)
+                        if hasattr(self, '_status_input_atual') and self._status_input_atual:
+                            self._status_input_atual.value = novo_status
+                            self._status_input_atual.update()
+                    except Exception:
+                        pass
+
+                    # Atualiza campo de observações do diálogo com o que está no banco
+                    try:
+                        obra_atual = self.db.obter_obra(obra_id) or {}
+                        novo_obs = (obra_atual.get('observacoes') or '').strip()
+                        if 'observacoes_input' in locals():
+                            try:
+                                observacoes_input.value = novo_obs
+                                observacoes_input.update()
+                            except Exception:
+                                pass
+                    except Exception:
+                        pass
+
                 atualizar_checklist_local()
+                # Se as medições ainda não foram configuradas para esta obra, abrir diálogo de seleção
+                try:
+                    if not (data_inicio and str(data_inicio).strip()):
+                        return
+
+                    med = self.db.obter_medicoes_obra(obra_id)
+                    if not med or (med and (med.get('quantidade') is None or int(med.get('quantidade')) == 0)):
+                        ui.timer(0.05, lambda: self.abrir_dialog_selecionar_medicoes(obra_id, atualizar_checklist_local), once=True)
+                except Exception:
+                    pass
             
             # Notifica sucesso
             self.notificar('✅ Obra atualizada!', tipo='positive', timeout=3)

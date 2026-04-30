@@ -12,6 +12,8 @@ from error_logger import log_error
 
 class GeradorTarefasRecorrentes:
     """Gera tarefas mensais recorrentes dinamicamente"""
+
+    _TAREFAS_DINAMICAS_EXCLUIDAS = {'MEDIÇÃO', 'CONFIRMAÇÃO DE MEDIÇÃO'}
     
     def __init__(self, database: 'Database'):
         self.database = database
@@ -39,7 +41,11 @@ class GeradorTarefasRecorrentes:
                 SELECT * FROM checklist_templates 
                 WHERE recorrencia = 'mensal'
             ''')
-            templates_mensais = [dict(row) for row in cursor.fetchall()]
+            templates_mensais = [
+                dict(row)
+                for row in cursor.fetchall()
+                if (row['nome'] or '').strip() not in self._TAREFAS_DINAMICAS_EXCLUIDAS
+            ]
             
             for obra in obras_ativas:
                 # Desbloqueia tarefas mensais template (se ainda estiverem bloqueadas)

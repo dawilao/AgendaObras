@@ -16,6 +16,7 @@ from config import (
     TEMPLATE_EMAIL_ALERTA_A, 
     TEMPLATE_EMAIL_ALERTA_B, 
     TEMPLATE_EMAIL_CRITICO_ATRASADO,
+    TEMPLATE_EMAIL_OBRA_PENDENCIAS,
     TEMPLATE_EMAIL_AGRUPADO_POR_OBRA,
     SECAO_REITERACAO,
     SECAO_CRITICO_ATRASADO,
@@ -37,7 +38,7 @@ class EmailService:
     def enviar_email(self, destinatario: str, assunto: str, corpo_html: str) -> Tuple[bool, str]:
         """Envia email via SMTP"""
         if not self.config.is_configured():
-            return (False, "Configuração SMTP não encontrada. Configure em ⚙️ Configurações.")
+            return (False, "Configuração SMTP não encontrada.")
         
         try:
             msg = MIMEMultipart('alternative')
@@ -397,3 +398,26 @@ class EmailService:
             assunto = f"⚠️ Obra {obra_info['nome_contrato']} - {total_tarefas} {texto_tarefas} precisam de atenção"
         
         return (assunto, corpo_html, tem_critico)
+
+    def criar_email_obras_com_pendencias(self, obra_info: Dict) -> Tuple[str, str, bool]:
+        """Cria assunto e corpo HTML para obras marcadas como 'com_pendencias'.
+
+        Retorna (assunto, corpo_html, tem_critico)
+        """
+        nome_contrato = self._texto_html(obra_info.get('nome_contrato'))
+        cliente = self._texto_html(obra_info.get('cliente'))
+        secao_observacoes = self._montar_secao_observacoes_html(obra_info.get('observacoes'))
+
+        assunto = f"🆘 [CRÍTICO] Obra {obra_info.get('nome_contrato')} - Pendências"
+
+        corpo = TEMPLATE_EMAIL_OBRA_PENDENCIAS.format(
+            header_class= ' critico',
+            resumo_class= ' critico',
+            nome_contrato=nome_contrato,
+            cliente=cliente,
+            secao_observacoes=secao_observacoes,
+            data_envio=datetime.datetime.now().strftime('%d/%m/%Y %H:%M:%S')
+        )
+
+        # Sempre considerar crítico para incluir destinatário crítico
+        return (assunto, corpo, True)

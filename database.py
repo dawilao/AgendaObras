@@ -164,6 +164,29 @@ class Database:
                 FOREIGN KEY (tarefa_id) REFERENCES obra_checklist (id)
             )
         ''')
+
+        # Tabela para rastrear medições configuradas por obra (dinâmico)
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS medicoes_obra (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                obra_id INTEGER NOT NULL UNIQUE,
+                quantidade INTEGER NOT NULL DEFAULT 0,
+                data_ultima_alteracao TEXT,
+                FOREIGN KEY (obra_id) REFERENCES obras (id)
+            )
+        ''')
+        cursor.execute('PRAGMA table_info(medicoes_obra)')
+        medicoes_cols = [r[1] for r in cursor.fetchall()]
+        if 'data_ultima_alteracao' not in medicoes_cols:
+            cursor.execute('ALTER TABLE medicoes_obra ADD COLUMN data_ultima_alteracao TEXT')
+        if 'atualizado_em' not in medicoes_cols:
+            cursor.execute('ALTER TABLE medicoes_obra ADD COLUMN atualizado_em TEXT')
+
+        # Garante coluna de status de conclusão específica para a obra
+        cursor.execute("PRAGMA table_info(obras)")
+        cols = [r[1] for r in cursor.fetchall()]
+        if 'status_conclusao_obra' not in cols:
+            cursor.execute("ALTER TABLE obras ADD COLUMN status_conclusao_obra TEXT DEFAULT NULL")
         
         # Insere templates padrão se não existirem
         cursor.execute('SELECT COUNT(*) as count FROM checklist_templates')
@@ -308,24 +331,9 @@ class Database:
         
         # Primeira passagem: criar todos os itens
         for template in templates:
-            # Para tarefas recorrentes mensais: cria template inicial bloqueado
-            # Serão desbloqueadas e geradas mensalmente pelo GeradorTarefasRecorrentes
+            # Não cria tarefas mensais padrão no card inicial.
+            # MEDIÇÃO/CONFIRMAÇÃO serão geradas apenas pelo fluxo dinâmico de medições.
             if template['recorrencia'] == 'mensal':
-                # Determina se deve bloquear: bloqueia se a obra ainda não começou ou se data_inicio não foi preenchida
-                bloqueado_mensal = 0 if obra_ja_comecou else 1
-                
-                # Cria tarefa mensal "template" (será gerenciada pelo gerador)
-                cursor.execute('''
-                    INSERT INTO obra_checklist 
-                    (obra_id, template_id, descricao, prazo_dias, data_limite, tipo, 
-                     base_calculo, data_base_calculo, bloqueado, status_notificacao, recorrencia)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ''', (obra_id, template['id'], template['nome'], template['prazo_dias'],
-                      None,  # data_limite será definida pelo gerador mensal
-                      template['tipo'], template['base_calculo'], data_inicio, bloqueado_mensal, 
-                      'pendente', template['recorrencia']))
-                
-                template_map[template['id']] = cursor.lastrowid
                 continue
             
             # Determina se a tarefa deve iniciar bloqueada
@@ -792,13 +800,14 @@ class Database:
         
         # Busca trigger_ui e obra_id (necessário tanto ao marcar quanto desmarcar)
         cursor.execute('''
-            SELECT ct.trigger_ui, oc.obra_id 
+            SELECT ct.trigger_ui, oc.obra_id, oc.descricao 
             FROM obra_checklist oc
             JOIN checklist_templates ct ON oc.template_id = ct.id
             WHERE oc.id = ?
         ''', (item_id,))
         row_info = cursor.fetchone()
         obra_id = row_info['obra_id'] if row_info else None
+        item_descricao = (row_info['descricao'] or '') if row_info else ''
         if row_info and row_info['trigger_ui']:
             trigger_ui = row_info['trigger_ui']
         
@@ -833,6 +842,16 @@ class Database:
                 SET concluido = 0, data_conclusao = NULL
                 WHERE id = ?
             ''', (item_id,))
+
+            # Se a tarefa desmarcada faz parte do fluxo de medições, invalida a conclusão da obra
+            if obra_id and (item_descricao.startswith('MEDIÇÃO ') or item_descricao.startswith('CONFIRMAÇÃO DE MEDIÇÃO')):
+                cursor.execute('''
+                    UPDATE obras
+                    SET status = 'Em Andamento',
+                        status_conclusao_obra = NULL,
+                        data_conclusao = NULL
+                    WHERE id = ?
+                ''', (obra_id,))
             
             # Rebloqueia tarefas dependentes diretas (por depende_item_id)
             cursor.execute('''
@@ -916,3 +935,268 @@ class Database:
         conn.close()
         
         return tarefas
+
+    # ========== Medições Dinâmicas ========== #
+    def obter_medicoes_obra(self, obra_id: int) -> Optional[Dict]:
+        """Retorna registro de medições configuradas para a obra"""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        cursor.execute('SELECT * FROM medicoes_obra WHERE obra_id = ?', (obra_id,))
+        row = cursor.fetchone()
+        conn.close()
+        return dict(row) if row else None
+
+    def criar_medicoes_dinamicas(self, obra_id: int, quantidade: int) -> bool:
+        """Cria/atualiza medições dinâmicas para uma obra (máx 6).
+
+        Gera tarefas `MEDIÇÃO MM/YYYY` (dia 20 do mês) e
+        `CONFIRMAÇÃO DE MEDIÇÃO MM/YYYY` (dia 10 do mês seguinte).
+        Não deleta medições já concluídas.
+        """
+        if quantidade is None:
+            return False
+        quantidade = int(quantidade)
+        if quantidade < 0 or quantidade > 6:
+            raise ValueError('Quantidade de medições deve ser entre 0 e 6')
+
+        conn = self.get_connection()
+        cursor = conn.cursor()
+
+        def _mes_ref(ano: int, mes: int) -> str:
+            return f"{ano:04d}-{mes:02d}"
+
+        def _avancar_mes(ano: int, mes: int) -> tuple[int, int]:
+            proximo_mes = mes + 1
+            proximo_ano = ano + (proximo_mes - 1) // 12
+            proximo_mes = ((proximo_mes - 1) % 12) + 1
+            return proximo_ano, proximo_mes
+
+        # Limpa tarefas mensais padrão legadas (sem mês/ano) para evitar soma com as dinâmicas
+        cursor.execute('''
+            DELETE FROM obra_checklist
+            WHERE obra_id = ?
+              AND descricao IN ('MEDIÇÃO', 'CONFIRMAÇÃO DE MEDIÇÃO')
+              AND (mes_referencia IS NULL OR mes_referencia = '')
+        ''', (obra_id,))
+
+        # Busca data de início da obra
+        cursor.execute('SELECT data_inicio FROM obras WHERE id = ?', (obra_id,))
+        row = cursor.fetchone()
+        if not row or not row['data_inicio']:
+            conn.close()
+            raise ValueError('Data de início da obra não preenchida')
+
+        try:
+            data_inicio = datetime.datetime.strptime(row['data_inicio'], '%Y-%m-%d').date()
+        except Exception:
+            conn.close()
+            raise ValueError('Formato de data_inicio inválido')
+
+        # Obtém template ids para MEDIÇÃO e CONFIRMAÇÃO
+        cursor.execute('SELECT id FROM checklist_templates WHERE nome = ?', ('MEDIÇÃO',))
+        t_med = cursor.fetchone()
+        cursor.execute('SELECT id FROM checklist_templates WHERE nome = ?', ('CONFIRMAÇÃO DE MEDIÇÃO',))
+        t_conf = cursor.fetchone()
+        template_med_id = t_med['id'] if t_med else None
+        template_conf_id = t_conf['id'] if t_conf else None
+
+        cursor.execute('''
+            SELECT id, descricao, concluido, mes_referencia
+            FROM obra_checklist
+            WHERE obra_id = ?
+              AND (
+                    descricao LIKE 'MEDIÇÃO %'
+                    OR descricao LIKE 'CONFIRMAÇÃO DE MEDIÇÃO %'
+                  )
+        ''', (obra_id,))
+        tarefas_existentes = cursor.fetchall()
+
+        desejados = set()
+
+        for i in range(quantidade):
+            m = data_inicio.month + i
+            y = data_inicio.year + (m - 1) // 12
+            m = ((m - 1) % 12) + 1
+            mes_referencia = _mes_ref(y, m)
+            desejados.add(mes_referencia)
+
+            ano_conf, mes_conf = _avancar_mes(y, m)
+            competencia = f"{m:02d}/{y}"
+            # A nomenclatura segue a competência da medição, não a data de emissão do alerta.
+            descr_med = f"MEDIÇÃO {competencia}"
+            descr_conf = f"CONFIRMAÇÃO DE MEDIÇÃO {competencia}"
+            data_limite_med = datetime.date(y, m, 20)
+            data_limite_conf = datetime.date(ano_conf, mes_conf, 10)
+
+            cursor.execute('''
+                SELECT id, concluido
+                FROM obra_checklist
+                WHERE obra_id = ? AND descricao = ?
+            ''', (obra_id, descr_med))
+            existente_med = cursor.fetchone()
+            if not existente_med:
+                cursor.execute('''
+                    INSERT INTO obra_checklist
+                    (obra_id, template_id, descricao, prazo_dias, data_limite, tipo, base_calculo, data_base_calculo, bloqueado, recorrencia, mes_referencia)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ''', (
+                    obra_id,
+                    template_med_id or 0,
+                    descr_med,
+                    0,
+                    data_limite_med.strftime('%Y-%m-%d'),
+                    'B',
+                    'inicio',
+                    data_inicio.strftime('%Y-%m-%d'),
+                    0,
+                    'unica',
+                    mes_referencia
+                ))
+            elif not existente_med['concluido']:
+                cursor.execute('''
+                    UPDATE obra_checklist
+                    SET template_id = ?, prazo_dias = ?, data_limite = ?, tipo = ?, base_calculo = ?,
+                        data_base_calculo = ?, bloqueado = 0, recorrencia = 'unica', mes_referencia = ?
+                    WHERE id = ?
+                ''', (
+                    template_med_id or 0,
+                    0,
+                    data_limite_med.strftime('%Y-%m-%d'),
+                    'B',
+                    'inicio',
+                    data_inicio.strftime('%Y-%m-%d'),
+                    mes_referencia,
+                    existente_med['id']
+                ))
+
+            cursor.execute('''
+                SELECT id, concluido
+                FROM obra_checklist
+                WHERE obra_id = ? AND descricao = ?
+            ''', (obra_id, descr_conf))
+            existente_conf = cursor.fetchone()
+            if not existente_conf:
+                cursor.execute('''
+                    INSERT INTO obra_checklist
+                    (obra_id, template_id, descricao, prazo_dias, data_limite, tipo, base_calculo, data_base_calculo, bloqueado, recorrencia, mes_referencia)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ''', (
+                    obra_id,
+                    template_conf_id or 0,
+                    descr_conf,
+                    0,
+                    data_limite_conf.strftime('%Y-%m-%d'),
+                    'A',
+                    'inicio',
+                    data_inicio.strftime('%Y-%m-%d'),
+                    0,
+                    'unica',
+                    mes_referencia
+                ))
+            elif not existente_conf['concluido']:
+                cursor.execute('''
+                    UPDATE obra_checklist
+                    SET template_id = ?, prazo_dias = ?, data_limite = ?, tipo = ?, base_calculo = ?,
+                        data_base_calculo = ?, bloqueado = 0, recorrencia = 'unica', mes_referencia = ?
+                    WHERE id = ?
+                ''', (
+                    template_conf_id or 0,
+                    0,
+                    data_limite_conf.strftime('%Y-%m-%d'),
+                    'A',
+                    'inicio',
+                    data_inicio.strftime('%Y-%m-%d'),
+                    mes_referencia,
+                    existente_conf['id']
+                ))
+
+        tarefas_por_mes = {}
+        for tarefa in tarefas_existentes:
+            mes_ref_tarefa = (tarefa['mes_referencia'] or '').strip()
+            if not mes_ref_tarefa:
+                continue
+            tarefas_por_mes.setdefault(mes_ref_tarefa, []).append(tarefa)
+
+        for mes_ref_tarefa, tarefas_mes in tarefas_por_mes.items():
+            if mes_ref_tarefa in desejados:
+                continue
+            if any(t['concluido'] for t in tarefas_mes):
+                continue
+            for tarefa in tarefas_mes:
+                cursor.execute('DELETE FROM obra_checklist WHERE id = ?', (tarefa['id'],))
+
+        # Atualiza/insere registro em medicoes_obra
+        now = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        cursor.execute('SELECT id FROM medicoes_obra WHERE obra_id = ?', (obra_id,))
+        registro = cursor.fetchone()
+        # Guarda quantidade anterior (se existir) para detectar alterações
+        cursor.execute('SELECT quantidade FROM medicoes_obra WHERE obra_id = ?', (obra_id,))
+        prev = cursor.fetchone()
+        prev_qtd = int(prev['quantidade']) if prev and prev['quantidade'] is not None else None
+
+        if registro:
+            cursor.execute(
+                'UPDATE medicoes_obra SET quantidade = ?, data_ultima_alteracao = ?, atualizado_em = ? WHERE obra_id = ?',
+                (quantidade, now, now, obra_id)
+            )
+        else:
+            cursor.execute(
+                'INSERT INTO medicoes_obra (obra_id, quantidade, data_ultima_alteracao, atualizado_em) VALUES (?, ?, ?, ?)',
+                (obra_id, quantidade, now, now)
+            )
+
+        # Se a obra estava marcada como concluída (com ou sem pendências) e houve
+        # alteração na configuração de medições, limpa o status de conclusão para
+        # que o fluxo de confirmações volte a perguntar ao finalizar novas medições.
+        cursor.execute('SELECT status_conclusao_obra FROM obras WHERE id = ?', (obra_id,))
+        status_row = cursor.fetchone()
+        status_atual = (status_row['status_conclusao_obra'] or '').strip() if status_row else ''
+        if status_atual and prev_qtd != quantidade:
+            cursor.execute(
+                "UPDATE obras SET status_conclusao_obra = NULL, data_conclusao = NULL, status = 'Em Andamento' WHERE id = ?",
+                (obra_id,)
+            )
+
+        conn.commit()
+        conn.close()
+        return True
+
+    def verificar_todas_medicoes_concluidas(self, obra_id: int) -> bool:
+        """Retorna True se todas as tarefas de medição/confirmacao desta obra estiverem concluídas."""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        cursor.execute('''
+            SELECT COUNT(*) as pendentes
+            FROM obra_checklist
+            WHERE obra_id = ?
+              AND (
+                descricao LIKE 'MEDIÇÃO %'
+                OR descricao LIKE 'CONFIRMAÇÃO DE MEDIÇÃO %'
+              )
+              AND concluido = 0
+        ''', (obra_id,))
+        row = cursor.fetchone()
+        conn.close()
+        return (row['pendentes'] == 0)
+
+    def registrar_finalizacao_obra(self, obra_id: int, status_conclusao_obra: str) -> bool:
+        """Marca a obra como concluída e registra se ficou com ou sem pendências."""
+        status_normalizado = (status_conclusao_obra or '').strip().lower()
+        if status_normalizado not in {'sem_pendencias', 'com_pendencias'}:
+            raise ValueError('Status de conclusão inválido')
+
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        agora = datetime.datetime.now().strftime('%Y-%m-%d')
+
+        cursor.execute('''
+            UPDATE obras
+            SET status = 'Concluída',
+                status_conclusao_obra = ?,
+                data_conclusao = ?
+            WHERE id = ?
+        ''', (status_normalizado, agora, obra_id))
+
+        conn.commit()
+        conn.close()
+        return True

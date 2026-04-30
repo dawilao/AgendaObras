@@ -612,6 +612,87 @@ TEMPLATE_EMAIL_CRITICO_ATRASADO = """
 </html>
 """
 
+TEMPLATE_EMAIL_OBRA_PENDENCIAS = """
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <style>
+        body {{ font-family: 'Segoe UI', Arial, sans-serif; line-height: 1.6; color: #333; background-color: #f5f5f5; }}
+        .container {{ max-width: 750px; margin: 20px auto; background-color: white; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }}
+        
+        /* Header */
+        .header {{ background: linear-gradient(135deg, #f57c00 0%, #ff9800 100%); color: white; padding: 25px 30px; }}
+        .header.critico {{ background: linear-gradient(135deg, #c62828 0%, #d32f2f 100%); }}
+        .header h1 {{ margin: 0 0 10px 0; font-size: 24px; font-weight: 600; }}
+        .header p {{ margin: 0; font-size: 15px; opacity: 0.95; }}
+        
+        /* Resumo Executivo */
+        .resumo-executivo {{ background-color: #fff8e1; border-left: 5px solid #ffa000; padding: 20px 25px; margin: 20px 25px; border-radius: 4px; }}
+        .resumo-executivo.critico {{ background-color: #ffebee; border-left-color: #c62828; }}
+        .resumo-titulo {{ font-size: 18px; font-weight: 600; color: #333; margin: 0 0 15px 0; }}
+        .info-grid {{ display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 15px; }}
+        .info-item {{ display: flex; align-items: center; }}
+        .info-label {{ color: #666; font-size: 13px; margin-right: 8px; }}
+        .info-valor {{ color: #1565c0; font-weight: 600; font-size: 14px; }}
+        .resumo-executivo p {{ margin: 10px 0 0 0; color: #555; }}
+
+        /* Content */
+        .content {{ padding: 0 25px 25px 25px; }}
+
+        /* Footer */
+        .footer {{ background-color: #263238; color: white; padding: 20px; text-align: center; }}
+        .footer-texto {{ margin: 5px 0; font-size: 13px; opacity: 0.9; }}
+        .footer-data {{ margin: 8px 0 0 0; font-size: 12px; opacity: 0.7; }}
+
+        /* Responsividade */
+        @media only screen and (max-width: 600px) {{
+            .container {{ margin: 0; box-shadow: none; }}
+            .header, .content {{ padding: 20px 15px; }}
+            .resumo-executivo {{ margin: 15px; padding: 15px; }}
+            .info-grid {{ grid-template-columns: 1fr; }}
+            th, td {{ padding: 10px; font-size: 13px; }}
+        }}
+
+        .observacoes-box {{ background-color: #f7f7f7; border-left: 4px solid #ccc; padding: 12px; margin: 18px 0 6px 0; }}
+        .observacoes-titulo {{ margin: 0 0 6px 0; color: #555; }}
+        .observacoes-texto {{ margin: 12px 0; white-space: normal; font-size: 13px; color: #333; }}
+    </style>
+</head>
+<body>
+    <div class="container">
+        <!-- Cabeçalho -->
+        <div class="header{header_class}">
+            <h1>⚠️ AgendaObras - Alertas Diário de Obra Concluída com Pendências</h1>
+        </div>
+
+        <!-- Resumo Executivo -->
+        <div class="resumo-executivo{resumo_class}">
+            <div class="resumo-titulo">📋 {nome_contrato}</div>
+            <div class="info-grid">
+                <div class="info-item">
+                    <span class="info-label">👤 Cliente:</span>
+                    <span class="info-valor">{cliente}</span>
+                </div>
+            </div>
+            <p>A obra <strong>{nome_contrato}</strong> foi concluída com pendências em aberto.</p>
+        </div>
+
+        <div class="content">
+            {secao_observacoes}
+
+            <p class="observacoes-texto">Este alerta é enviado diariamente até que a obra seja marcada como <strong>sem pendências</strong>.</p>
+        </div>
+        <!-- Rodapé -->
+        <div class="footer">
+            <div class="footer-texto">AgendaObras - Sistema de Rastreamento de Obras</div>
+            <div class="footer-data">📅 {data_envio}</div>
+        </div>
+    </div>
+</body>
+</html>
+"""
+
 TEMPLATE_EMAIL_AGRUPADO_POR_OBRA = """
 <!DOCTYPE html>
 <html>

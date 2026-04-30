@@ -140,6 +140,14 @@ class MigrationManager:
             upgrade=self._migration_010_add_observacoes,
             downgrade=None
         ))
+
+        # Migração 11: Criar tabela medicoes_obra e coluna status_conclusao_obra
+        self.migrations.append(Migration(
+            version=11,
+            description="Adicionar tabela medicoes_obra e coluna status_conclusao_obra em obras",
+            upgrade=self._migration_011_medicoes_e_status,
+            downgrade=None
+        ))
     
     def _migration_001_add_tipo_recorrencia(self, conn: sqlite3.Connection):
         """Adiciona coluna tipo_recorrencia à tabela checklist_templates"""
@@ -600,6 +608,39 @@ class MigrationManager:
                 print(f"    ✅ Coluna {nome_coluna} adicionada à tabela obras")
             else:
                 print(f"    ⏭️  Coluna {nome_coluna} já existe, pulando...")
+
+        conn.commit()
+
+    def _migration_011_medicoes_e_status(self, conn: sqlite3.Connection):
+        """Cria a tabela medicoes_obra e adiciona coluna status_conclusao_obra em obras"""
+        cursor = conn.cursor()
+
+        # 1. Cria tabela medicoes_obra se não existir
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='medicoes_obra'")
+        if cursor.fetchone():
+            print("    ⏭️  Tabela medicoes_obra já existe, pulando...")
+        else:
+            cursor.execute('''
+                CREATE TABLE medicoes_obra (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    obra_id INTEGER NOT NULL,
+                    quantidade INTEGER DEFAULT 0,
+                    criado_em TEXT DEFAULT (datetime('now')),
+                    data_ultima_alteracao TEXT,
+                    atualizado_em TEXT
+                )
+            ''')
+            cursor.execute('CREATE INDEX idx_medicoes_obra_obra_id ON medicoes_obra(obra_id)')
+            print("    ✅ Tabela medicoes_obra criada")
+
+        # 2. Adiciona coluna status_conclusao_obra em obras se não existir
+        cursor.execute('PRAGMA table_info(obras)')
+        cols = [row[1] for row in cursor.fetchall()]
+        if 'status_conclusao_obra' not in cols:
+            cursor.execute("ALTER TABLE obras ADD COLUMN status_conclusao_obra TEXT DEFAULT ''")
+            print("    ✅ Coluna status_conclusao_obra adicionada à tabela obras")
+        else:
+            print("    ⏭️  Coluna status_conclusao_obra já existe, pulando...")
 
         conn.commit()
     

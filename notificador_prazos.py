@@ -24,7 +24,7 @@ _notificador_ativo = False
 _notificador_lock = threading.Lock()
 
 class NotificadorPrazos:
-    def __init__(self, database: 'Database', email_service: 'EmailService', gerador_recorrentes: 'GeradorTarefasRecorrentes'):
+    def __init__(self, database: 'Database', email_service: 'EmailService', gerador_recorrentes: 'GeradorTarefasRecorrentes' = None):
         self.database = database
         self.email_service = email_service
         self.gerador_recorrentes = gerador_recorrentes
@@ -223,12 +223,7 @@ class NotificadorPrazos:
             time.sleep(intervalo)
 
     def _executar_ciclo_diario(self, origem: str = 'agendado') -> bool:
-        """Executa ciclo diário completo de geração, verificação e registro."""
-        try:
-            self.gerador_recorrentes.gerar_tarefas_mensais()
-        except Exception as e:
-            print(f"❌ Erro ao gerar tarefas recorrentes ({origem}): {e}")
-
+        """Executa ciclo diário completo de verificação e registro."""
         try:
             alertas = self._verificar_prazos()
             self._registrar_execucao(alertas, 'concluida')
@@ -354,6 +349,35 @@ class NotificadorPrazos:
                     print(f"Obra(s) com e-mails enviados:")
                     for nome in obras_com_emails:
                         print(f"   - {nome}\n")
+
+                # Envia alertas diários críticos para obras marcadas como 'com_pendencias'
+                try:
+                    conn2 = self.database.get_connection()
+                    cur2 = conn2.cursor()
+                    cur2.execute('SELECT id, nome_contrato, cliente, observacoes FROM obras WHERE status_conclusao_obra = ?', ('com_pendencias',))
+                    obras_pend = [dict(row) for row in cur2.fetchall()]
+                    conn2.close()
+
+                    for obra in obras_pend:
+                        try:
+                            assunto, corpo_html, tem_critico = self.email_service.criar_email_obras_com_pendencias(obra)
+                            destinatarios = self._obter_destinatarios_por_contrato(obra.get('cliente'), tem_critico=True)
+                            if not destinatarios:
+                                print(f"⚠️ Sem destinatários para obra pendente {obra.get('nome_contrato')}")
+                                continue
+
+                            sucesso, msg = self.email_service.enviar_email(destinatarios, assunto, corpo_html)
+                            # Registra histórico (tarefa_id = 0 para indicar email de obra)
+                            self._registrar_historico_com_retry(obra['id'], 0, 'obra_pendencias', destinatarios, sucesso, None if sucesso else msg)
+                            if sucesso:
+                                print(f"📧 Alerta diário enviado para obra com pendências: {obra.get('nome_contrato')}")
+                            else:
+                                print(f"❌ Falha ao enviar alerta para obra {obra.get('nome_contrato')}: {msg}")
+                        except Exception as e:
+                            print(f"❌ Erro ao processar obra pendente {obra.get('id')}: {e}")
+                            continue
+                except Exception as e:
+                    log_error(e, 'notificador_prazos', 'Buscar obras com pendencias')
 
                 return total_tarefas if alertas_por_obra else 0
 
