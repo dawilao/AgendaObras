@@ -67,7 +67,13 @@ class NotificadorPrazos:
                     if not email:
                         continue
 
+                    receber_alerta_critico = usuario.get('receber_alerta_critico', 1)
+
                     if usuario.get('is_admin'):
+                        if not tem_critico:
+                            continue
+                        if tem_critico and receber_alerta_critico in (0, False, '0', 'false', 'False', None):
+                            continue
                         emails.add(email)
                         continue
 
@@ -81,6 +87,8 @@ class NotificadorPrazos:
                         if (c or '').strip()
                     }
                     if contrato_normalizado in contratos_usuario:
+                        if tem_critico and receber_alerta_critico in (0, False, '0', 'false', 'False', None):
+                            continue
                         emails.add(email)
 
                 destinatarios = sorted(emails)

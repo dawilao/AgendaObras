@@ -2,9 +2,10 @@
 Testes de destinatários do notificador por vínculo de contrato.
 
 Regra esperada:
-- admin recebe alertas de todos os contratos
+- admin recebe apenas alertas críticos
 - não-admin recebe apenas alertas de contratos vinculados
 - fallback para config.email_destinatarios quando não há base de usuários
+- usuário pode desativar alertas críticos sem expor e-mail no código
 """
 
 import os
@@ -69,7 +70,7 @@ class TestNotificadorDestinatarios(unittest.TestCase):
         email_service = _DummyEmailService(_DummyConfig(fallback=fallback, critico=critico))
         return NotificadorPrazos(self.db, email_service, _DummyGerador())
 
-    def test_admin_recebe_todos_contratos_nao_admin_so_vinculado(self):
+    def test_admin_recebe_apenas_alerta_critico_nao_admin_so_vinculado(self):
         self.auth_db.criar_usuario('Admin', 'Master', 'admin@empresa.com', '123456', is_admin=True)
         self.auth_db.criar_usuario('Usuario', 'A', 'a@empresa.com', '123456', is_admin=False)
         self.auth_db.criar_usuario('Usuario', 'B', 'b@empresa.com', '123456', is_admin=False)
@@ -82,14 +83,20 @@ class TestNotificadorDestinatarios(unittest.TestCase):
         notificador = self._criar_notificador()
 
         destinatarios_bahia = notificador._obter_destinatarios_por_contrato('C.E.F BAHIA - 4922.2024')
-        self.assertIn('admin@empresa.com', destinatarios_bahia)
+        self.assertNotIn('admin@empresa.com', destinatarios_bahia)
         self.assertIn('a@empresa.com', destinatarios_bahia)
         self.assertNotIn('b@empresa.com', destinatarios_bahia)
 
         destinatarios_manaus = notificador._obter_destinatarios_por_contrato('C.E.F MANAUS - 4569.2024')
-        self.assertIn('admin@empresa.com', destinatarios_manaus)
+        self.assertNotIn('admin@empresa.com', destinatarios_manaus)
         self.assertIn('b@empresa.com', destinatarios_manaus)
         self.assertNotIn('a@empresa.com', destinatarios_manaus)
+
+        destinatarios_criticos = notificador._obter_destinatarios_por_contrato(
+            'C.E.F BAHIA - 4922.2024', tem_critico=True
+        )
+        self.assertIn('admin@empresa.com', destinatarios_criticos)
+        self.assertIn('a@empresa.com', destinatarios_criticos)
 
     def test_fallback_quando_sem_usuarios(self):
         fallback = ['fallback1@empresa.com', 'fallback2@empresa.com']
@@ -107,6 +114,33 @@ class TestNotificadorDestinatarios(unittest.TestCase):
         )
         self.assertIn('admin@empresa.com', destinatarios)
         self.assertIn('critico@empresa.com', destinatarios)
+
+    def test_usuario_pode_optar_por_nao_receber_alerta_critico(self):
+        self.auth_db.criar_usuario(
+            'Admin',
+            'Master',
+            'admin@empresa.com',
+            '123456',
+            is_admin=True,
+            receber_alerta_critico=False,
+        )
+        self.auth_db.criar_usuario('Usuario', 'A', 'a@empresa.com', '123456', is_admin=False)
+
+        usuarios = {u['email']: u['id'] for u in self.auth_db.listar_usuarios()}
+        self.contr_db.vincular_usuario_contrato(usuarios['a@empresa.com'], 'C.E.F BAHIA - 4922.2024')
+
+        notificador = self._criar_notificador()
+
+        destinatarios_normais = notificador._obter_destinatarios_por_contrato(
+            'C.E.F BAHIA - 4922.2024', tem_critico=False
+        )
+        self.assertNotIn('admin@empresa.com', destinatarios_normais)
+
+        destinatarios_criticos = notificador._obter_destinatarios_por_contrato(
+            'C.E.F BAHIA - 4922.2024', tem_critico=True
+        )
+        self.assertNotIn('admin@empresa.com', destinatarios_criticos)
+        self.assertIn('a@empresa.com', destinatarios_criticos)
 
 
 if __name__ == '__main__':

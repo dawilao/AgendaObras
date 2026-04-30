@@ -845,6 +845,17 @@ class AgendaObras:
                                         total_contratos = contagem_vinculos.get(u['id'], 0)
                                         ui.label(f'Contratos vinculados: {total_contratos}').style('color: #999; font-size: 12px;')
 
+                                    recebe_alerta_critico = bool(u.get('receber_alerta_critico', 1))
+                                    with ui.row().classes('items-center gap-2'):
+                                        ui.label('Alertas críticos:').style('color: #999; font-size: 12px;')
+                                        ui.switch(
+                                            value=recebe_alerta_critico,
+                                            on_change=lambda e, uid=u['id'], nome=f'{u["nome"]} {u["sobrenome"]}': alternar_alerta_critico(uid, nome, e.value),
+                                        ).props('dense').style('transform: scale(0.9);')
+                                        ui.label('Recebe' if recebe_alerta_critico else 'Não recebe').style(
+                                            'color: #999; font-size: 12px;'
+                                        )
+
                                 # Não permite excluir a si mesmo nem o último admin
                                 pode_excluir = (
                                     u['id'] != usuario_logado.get('id')
@@ -877,6 +888,23 @@ class AgendaObras:
                                             '🗑️',
                                             on_click=lambda uid=user_id, un=user_nome: confirmar_exclusao(uid, un)
                                         ).props('flat dense round').style('color: #f44336;').tooltip('Excluir usuário')
+
+            def alternar_alerta_critico(user_id: int, user_nome: str, receber_alerta_critico: bool):
+                usuario_logado = obter_usuario_logado()
+                if not usuario_logado.get('is_admin'):
+                    ui.notification('Apenas administradores podem alterar essa preferência.', type='negative', timeout=3)
+                    return
+
+                try:
+                    ok = auth_db.atualizar_receber_alerta_critico(user_id, receber_alerta_critico)
+                    if ok:
+                        renderizar_lista()
+                        texto = 'passará a receber' if receber_alerta_critico else 'não receberá mais'
+                        ui.notification(f'Usuário "{user_nome}" {texto} alertas críticos.', type='positive', timeout=3)
+                    else:
+                        ui.notification('Não foi possível atualizar a preferência.', type='negative', timeout=3)
+                except Exception:
+                    ui.notification('Erro ao atualizar preferência de alertas críticos.', type='negative', timeout=3)
 
             def promover_usuario_admin(user_id: int, user_nome: str):
                 usuario_logado = obter_usuario_logado()
@@ -964,6 +992,8 @@ class AgendaObras:
                     email_input = ui.input('E-mail').props('outlined dense').classes('w-full').style('margin-bottom: 8px;')
                     senha_input = ui.input('Senha').props('outlined dense type=password').classes('w-full').style('margin-bottom: 8px;')
                     admin_check = ui.checkbox('Administrador').style('margin-bottom: 10px;')
+                    receber_criticos_check = ui.checkbox('Receber alertas críticos').style('margin-bottom: 10px;')
+                    receber_criticos_check.value = True
                     erro_label = ui.label('').style('color: #f44336; font-size: 13px; display: none; margin-bottom: 8px;')
 
                     def salvar_usuario():
@@ -982,7 +1012,14 @@ class AgendaObras:
                             erro_label.style('display: block;')
                             return
 
-                        ok = auth_db.criar_usuario(nome, sobrenome, email, senha, is_admin=admin_check.value)
+                        ok = auth_db.criar_usuario(
+                            nome,
+                            sobrenome,
+                            email,
+                            senha,
+                            is_admin=admin_check.value,
+                            receber_alerta_critico=receber_criticos_check.value,
+                        )
                         if not ok:
                             erro_label.set_text('E-mail já cadastrado.')
                             erro_label.style('display: block;')

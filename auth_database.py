@@ -74,9 +74,18 @@ class AuthDatabase:
                     senha_hash TEXT NOT NULL,
                     salt TEXT NOT NULL,
                     is_admin INTEGER DEFAULT 0,
+                    receber_alerta_critico INTEGER DEFAULT 1,
                     data_criacao TEXT DEFAULT CURRENT_TIMESTAMP
                 )
             ''')
+            colunas = {
+                row['name']
+                for row in conn.execute('PRAGMA table_info(usuarios)').fetchall()
+            }
+            if 'receber_alerta_critico' not in colunas:
+                conn.execute(
+                    'ALTER TABLE usuarios ADD COLUMN receber_alerta_critico INTEGER DEFAULT 1'
+                )
             conn.commit()
         except Exception as e:
             log_error(e, "auth_database", "Criação da tabela de usuários")
@@ -97,15 +106,23 @@ class AuthDatabase:
         finally:
             conn.close()
 
-    def criar_usuario(self, nome: str, sobrenome: str, email: str, senha: str, is_admin: bool = False) -> bool:
+    def criar_usuario(self, nome: str, sobrenome: str, email: str, senha: str, is_admin: bool = False, receber_alerta_critico: bool = True) -> bool:
         """Cria um novo usuário com senha criptografada. Retorna True se criado com sucesso."""
         salt = _gerar_salt()
         senha_hash = _hash_senha(senha, salt)
         conn = self.get_connection()
         try:
             conn.execute(
-                'INSERT INTO usuarios (nome, sobrenome, email, senha_hash, salt, is_admin) VALUES (?, ?, ?, ?, ?, ?)',
-                (nome.strip(), sobrenome.strip(), email.strip().lower(), senha_hash, salt, int(is_admin))
+                'INSERT INTO usuarios (nome, sobrenome, email, senha_hash, salt, is_admin, receber_alerta_critico) VALUES (?, ?, ?, ?, ?, ?, ?)',
+                (
+                    nome.strip(),
+                    sobrenome.strip(),
+                    email.strip().lower(),
+                    senha_hash,
+                    salt,
+                    int(is_admin),
+                    int(receber_alerta_critico),
+                )
             )
             conn.commit()
             return True
@@ -137,6 +154,7 @@ class AuthDatabase:
                     'sobrenome': row['sobrenome'],
                     'email': row['email'],
                     'is_admin': bool(row['is_admin']),
+                    'receber_alerta_critico': bool(row['receber_alerta_critico']),
                 }
             return None
         except Exception as e:
@@ -150,7 +168,7 @@ class AuthDatabase:
         conn = self.get_connection()
         try:
             rows = conn.execute(
-                'SELECT id, nome, sobrenome, email, is_admin, data_criacao FROM usuarios ORDER BY nome'
+                'SELECT id, nome, sobrenome, email, is_admin, receber_alerta_critico, data_criacao FROM usuarios ORDER BY nome'
             ).fetchall()
             return [dict(r) for r in rows]
         except Exception as e:
@@ -164,7 +182,7 @@ class AuthDatabase:
         conn = self.get_connection()
         try:
             row = conn.execute(
-                'SELECT id, nome, sobrenome, email, is_admin, data_criacao FROM usuarios WHERE id = ?',
+                'SELECT id, nome, sobrenome, email, is_admin, receber_alerta_critico, data_criacao FROM usuarios WHERE id = ?',
                 (user_id,),
             ).fetchone()
             return dict(row) if row else None
@@ -255,6 +273,22 @@ class AuthDatabase:
             return cursor.rowcount > 0
         except Exception as e:
             log_error(e, "auth_database", f"Promover usuário {user_id} para admin")
+            return False
+        finally:
+            conn.close()
+
+    def atualizar_receber_alerta_critico(self, user_id: int, receber_alerta_critico: bool) -> bool:
+        """Atualiza a preferência de recebimento de alertas críticos de um usuário."""
+        conn = self.get_connection()
+        try:
+            cursor = conn.execute(
+                'UPDATE usuarios SET receber_alerta_critico = ? WHERE id = ?',
+                (int(receber_alerta_critico), user_id),
+            )
+            conn.commit()
+            return cursor.rowcount > 0
+        except Exception as e:
+            log_error(e, "auth_database", f"Atualizar preferência de alerta crítico do usuário {user_id}")
             return False
         finally:
             conn.close()
