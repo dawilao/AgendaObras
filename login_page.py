@@ -15,7 +15,7 @@ class LoginPage:
         self.auth_db = AuthDatabase()
 
         # Configura fundo da página
-        ui.query('body').style('background-color: #f5f5f5; margin: 0;')
+        ui.query('body').style('background-color: #f5f5f5; margin: 0; min-height: 100vh; padding: 16px; box-sizing: border-box;')
 
         if not self.auth_db.tem_usuarios():
             self._tela_primeiro_acesso()
@@ -26,9 +26,9 @@ class LoginPage:
 
     def _tela_login(self):
         """Monta formulário de login."""
-        with ui.column().classes('absolute-center items-center'):
+        with ui.column().classes('absolute-center items-center w-full px-4'):
             with ui.card().style(
-                'min-width: 400px; max-width: 450px; padding: 40px 35px; border-radius: 12px;'
+                'width: min(94vw, 450px); padding: 30px 22px; border-radius: 12px;'
             ):
                 # Título
                 with ui.column().classes('w-full items-center').style('margin-bottom: 25px;'):
@@ -109,9 +109,9 @@ class LoginPage:
 
     def _tela_primeiro_acesso(self):
         """Monta formulário de cadastro do primeiro usuário (admin)."""
-        with ui.column().classes('absolute-center items-center'):
+        with ui.column().classes('absolute-center items-center w-full px-4'):
             with ui.card().style(
-                'min-width: 420px; max-width: 500px; padding: 40px 35px; border-radius: 12px;'
+                'width: min(94vw, 500px); padding: 30px 22px; border-radius: 12px;'
             ):
                 # Título
                 with ui.column().classes('w-full items-center').style('margin-bottom: 20px;'):

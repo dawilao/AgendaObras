@@ -5,8 +5,10 @@ Responsável pelo envio de notificações e alertas de prazos.
 
 import smtplib
 import datetime
+import html
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
+from email.header import Header
 from typing import Tuple, Dict, List
 from error_logger import log_error
 from config import (
@@ -14,6 +16,7 @@ from config import (
     TEMPLATE_EMAIL_ALERTA_A, 
     TEMPLATE_EMAIL_ALERTA_B, 
     TEMPLATE_EMAIL_CRITICO_ATRASADO,
+    TEMPLATE_EMAIL_OBRA_PENDENCIAS,
     TEMPLATE_EMAIL_AGRUPADO_POR_OBRA,
     SECAO_REITERACAO,
     SECAO_CRITICO_ATRASADO,
@@ -35,11 +38,11 @@ class EmailService:
     def enviar_email(self, destinatario: str, assunto: str, corpo_html: str) -> Tuple[bool, str]:
         """Envia email via SMTP"""
         if not self.config.is_configured():
-            return (False, "Configuração SMTP não encontrada. Configure em ⚙️ Configurações.")
+            return (False, "Configuração SMTP não encontrada.")
         
         try:
             msg = MIMEMultipart('alternative')
-            msg['Subject'] = assunto
+            msg['Subject'] = str(Header(assunto or '', 'utf-8'))
             msg['From'] = self.config.email_remetente
             msg['To'] = ", ".join(destinatario)
             
@@ -94,11 +97,41 @@ class EmailService:
         except Exception as e:
             log_error(e, "email_service", "Teste de conexão SMTP")
             return (False, f"Erro: {str(e)}")
+
+    def _montar_secao_observacoes_html(self, observacoes: str) -> str:
+        """Monta bloco HTML de observações preservando quebras de linha."""
+        texto = (observacoes or '').strip()
+        if not texto:
+            return ''
+
+        # Converte acentos para entidades HTML numéricas para maior compatibilidade
+        # entre clientes de e-mail com suporte inconsistente de charset.
+        texto_html = (
+            html.escape(texto)
+            .encode('ascii', errors='xmlcharrefreplace')
+            .decode('ascii')
+            .replace('\n', '<br>')
+        )
+        return (
+            '<div class="observacoes-box">'
+            '<p class="observacoes-titulo"><strong>Observações</strong></p>'
+            f'<p class="observacoes-texto">{texto_html}</p>'
+            '</div>'
+        )
+
+    def _texto_html(self, valor) -> str:
+        """Normaliza texto para HTML com entidades ASCII para máxima compatibilidade."""
+        texto = str(valor or '')
+        return html.escape(texto).encode('ascii', errors='xmlcharrefreplace').decode('ascii')
     
     def criar_email_alerta_tipo_a(self, tarefa: Dict, reiteracao: int) -> str:
         """Cria HTML de email para tarefa Tipo A (com reiteração)"""
         data_limite = datetime.datetime.strptime(tarefa['data_limite'], '%Y-%m-%d')
         prazo_formatado = data_limite.strftime('%d/%m/%Y')
+        secao_observacoes = self._montar_secao_observacoes_html(tarefa.get('observacoes'))
+        nome_contrato = self._texto_html(tarefa.get('nome_contrato'))
+        cliente = self._texto_html(tarefa.get('cliente'))
+        tarefa_desc = self._texto_html(tarefa.get('descricao'))
         
         dias_atraso = (datetime.date.today() - data_limite.date()).days
         
@@ -109,12 +142,13 @@ class EmailService:
         
         return TEMPLATE_EMAIL_ALERTA_A.format(
             reiteracao=reiteracao,
-            nome_contrato=tarefa['nome_contrato'],
-            cliente=tarefa['cliente'],
-            tarefa=tarefa['descricao'],
+            nome_contrato=nome_contrato,
+            cliente=cliente,
+            tarefa=tarefa_desc,
             prazo=prazo_formatado,
             dias_atraso=dias_atraso,
             mensagem_adicional=mensagem_adicional,
+            secao_observacoes=secao_observacoes,
             data_envio=datetime.datetime.now().strftime('%d/%m/%Y %H:%M:%S')
         )
     
@@ -122,6 +156,10 @@ class EmailService:
         """Cria HTML de email para tarefa Tipo B (prazo fixo)"""
         data_limite = datetime.datetime.strptime(tarefa['data_limite'], '%Y-%m-%d')
         prazo_formatado = data_limite.strftime('%d/%m/%Y')
+        secao_observacoes = self._montar_secao_observacoes_html(tarefa.get('observacoes'))
+        nome_contrato = self._texto_html(tarefa.get('nome_contrato'))
+        cliente = self._texto_html(tarefa.get('cliente'))
+        tarefa_desc = self._texto_html(tarefa.get('descricao'))
         
         hoje = datetime.date.today()
         if data_limite.date() == hoje:
@@ -130,13 +168,15 @@ class EmailService:
             status = f"ATRASADA - {(hoje - data_limite.date()).days} dias"
         else:
             status = "Dentro do prazo"
+        status = self._texto_html(status)
         
         return TEMPLATE_EMAIL_ALERTA_B.format(
-            nome_contrato=tarefa['nome_contrato'],
-            cliente=tarefa['cliente'],
-            tarefa=tarefa['descricao'],
+            nome_contrato=nome_contrato,
+            cliente=cliente,
+            tarefa=tarefa_desc,
             prazo=prazo_formatado,
             status=status,
+            secao_observacoes=secao_observacoes,
             data_envio=datetime.datetime.now().strftime('%d/%m/%Y %H:%M:%S')
         )
     
@@ -144,13 +184,18 @@ class EmailService:
         """Cria HTML de email crítico para tarefa atrasada"""
         data_limite = datetime.datetime.strptime(tarefa['data_limite'], '%Y-%m-%d')
         prazo_formatado = data_limite.strftime('%d/%m/%Y')
+        secao_observacoes = self._montar_secao_observacoes_html(tarefa.get('observacoes'))
+        nome_contrato = self._texto_html(tarefa.get('nome_contrato'))
+        cliente = self._texto_html(tarefa.get('cliente'))
+        tarefa_desc = self._texto_html(tarefa.get('descricao'))
         
         return TEMPLATE_EMAIL_CRITICO_ATRASADO.format(
-            nome_contrato=tarefa['nome_contrato'],
-            cliente=tarefa['cliente'],
-            tarefa=tarefa['descricao'],
+            nome_contrato=nome_contrato,
+            cliente=cliente,
+            tarefa=tarefa_desc,
             prazo=prazo_formatado,
             dias_atraso=dias_atraso,
+            secao_observacoes=secao_observacoes,
             data_envio=datetime.datetime.now().strftime('%d/%m/%Y %H:%M:%S')
         )
     
@@ -331,14 +376,18 @@ class EmailService:
                 secoes_html.append(secao)
         
         # Monta HTML final
+        secao_observacoes = self._montar_secao_observacoes_html(obra_info.get('observacoes'))
+        nome_contrato_html = self._texto_html(obra_info.get('nome_contrato'))
+        cliente_html = self._texto_html(obra_info.get('cliente'))
         corpo_html = TEMPLATE_EMAIL_AGRUPADO_POR_OBRA.format(
             header_class=header_class,
             resumo_class=resumo_class,
             total_tarefas=total_tarefas,
             texto_tarefas=texto_tarefas,
-            nome_contrato=obra_info['nome_contrato'],
-            cliente=obra_info['cliente'],
+            nome_contrato=nome_contrato_html,
+            cliente=cliente_html,
             secoes_conteudo=''.join(secoes_html),
+            secao_observacoes=secao_observacoes,
             data_envio=datetime.datetime.now().strftime('%d/%m/%Y %H:%M:%S')
         )
         
@@ -349,3 +398,26 @@ class EmailService:
             assunto = f"⚠️ Obra {obra_info['nome_contrato']} - {total_tarefas} {texto_tarefas} precisam de atenção"
         
         return (assunto, corpo_html, tem_critico)
+
+    def criar_email_obras_com_pendencias(self, obra_info: Dict) -> Tuple[str, str, bool]:
+        """Cria assunto e corpo HTML para obras marcadas como 'com_pendencias'.
+
+        Retorna (assunto, corpo_html, tem_critico)
+        """
+        nome_contrato = self._texto_html(obra_info.get('nome_contrato'))
+        cliente = self._texto_html(obra_info.get('cliente'))
+        secao_observacoes = self._montar_secao_observacoes_html(obra_info.get('observacoes'))
+
+        assunto = f"🆘 [CRÍTICO] Obra {obra_info.get('nome_contrato')} - Pendências"
+
+        corpo = TEMPLATE_EMAIL_OBRA_PENDENCIAS.format(
+            header_class= ' critico',
+            resumo_class= ' critico',
+            nome_contrato=nome_contrato,
+            cliente=cliente,
+            secao_observacoes=secao_observacoes,
+            data_envio=datetime.datetime.now().strftime('%d/%m/%Y %H:%M:%S')
+        )
+
+        # Sempre considerar crítico para incluir destinatário crítico
+        return (assunto, corpo, True)

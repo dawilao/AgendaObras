@@ -68,8 +68,15 @@ class ObrasHelper:
         try:
             progresso = ObrasHelper.calcular_progresso(checklist)
             
+            # Verifica se foi finalizada com pendências
+            status_conclusao = (obra.get('status_conclusao_obra') or '').strip().lower()
+            if status_conclusao == 'com_pendencias':
+                return ('orange', 'warning', '⚠️ Concluída com Pendências')
+            elif status_conclusao == 'sem_pendencias':
+                return ('green', 'check_circle', 'Concluído')
+            
             if progresso == 100:
-                return ('green', 'check_circle', 'Concluída')
+                return ('orange', 'schedule', 'Pronta para concluir')
             
             # Verifica se há tarefas atrasadas
             hoje = datetime.date.today().strftime('%Y-%m-%d')
