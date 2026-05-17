@@ -92,3 +92,32 @@ class ObrasHelper:
         except Exception as e:
             log_error(e, "obras_helper", f"Obter status visual - obra_id: {obra.get('id', 'N/A')}")
             return ('gray', 'error', 'Erro')
+    
+    # ========== FASE 3 - FUNÇÕES FINANCEIRAS ========== #
+    @staticmethod
+    def obter_cor_percentual(percentual: float) -> str:
+        """Retorna cor baseada no percentual faturado (Fase 3 - Financeiro)"""
+        if percentual >= 75:
+            return 'green'
+        elif percentual >= 50:
+            return 'blue'
+        elif percentual >= 25:
+            return 'orange'
+        else:
+            return 'red'
+
+    @staticmethod
+    def obter_status_faturamento(percentual: float) -> str:
+        """Retorna status descritivo do faturamento (Fase 3 - Financeiro)"""
+        if percentual >= 100:
+            return '✓ Faturado 100%'
+        elif percentual >= 75:
+            return '✓ Faturado 75%+'
+        elif percentual >= 50:
+            return '○ Faturado 50%+'
+        elif percentual >= 25:
+            return '◐ Faturado 25%+'
+        elif percentual > 0:
+            return '◑ Iniciado'
+        else:
+            return '◕ Não iniciado'
