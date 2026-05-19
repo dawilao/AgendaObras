@@ -10,8 +10,8 @@ import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from contratos_database import ContratosDatabase
-from database import Database
+from db.contratos_repo import ContratosDatabase
+from db import Database
 
 
 class TestVinculacaoContratos(unittest.TestCase):

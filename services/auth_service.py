@@ -7,7 +7,7 @@ from nicegui import app
 from starlette.requests import Request
 from starlette.responses import RedirectResponse
 
-from auth_database import AuthDatabase
+from db.auth_repo import AuthDatabase
 
 # Rotas que NÃO exigem autenticação
 ROTAS_PUBLICAS = {'/login', '/login/', '/_nicegui', '/favicon.ico'}

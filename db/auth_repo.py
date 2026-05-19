@@ -1,6 +1,6 @@
 """
-Módulo de gerenciamento do banco de dados de usuários para autenticação.
-Utiliza SQLite separado do banco principal do AgendaObras.
+Repositório de usuários para autenticação.
+Banco SQLite separado do banco principal.
 Senhas protegidas com SHA-256 + salt aleatório.
 """
 
@@ -9,21 +9,17 @@ import hashlib
 import os
 import datetime
 from typing import Optional, Dict, List
-from error_logger import log_error
+from core.error_logger import log_error
 
-# Caminho padrão: mesmo diretório do banco principal (Google Drive)
 _CAMINHO_DRIVE = r'G:\Meu Drive\17 - MODELOS\PROGRAMAS\AgendaObras\app\db'
-# Caminho fallback: diretório local junto ao código
-_CAMINHO_LOCAL = os.path.dirname(os.path.abspath(__file__))
+# Raiz do projeto (um nível acima de db/)
+_CAMINHO_LOCAL = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
 def _resolver_caminho_db() -> str:
-    """Resolve o caminho do banco de usuários.
-    Tenta usar o diretório do Google Drive; se não existir, usa local."""
     env_path = (os.getenv('AGENDA_OBRAS_USERS_DB_PATH') or '').strip()
     if env_path:
         return env_path
-
     if os.path.isdir(_CAMINHO_DRIVE):
         return os.path.join(_CAMINHO_DRIVE, 'users.db')
     return os.path.join(_CAMINHO_LOCAL, 'users.db')
@@ -33,36 +29,26 @@ CAMINHO_USERS_DB = _resolver_caminho_db()
 
 
 def _gerar_salt() -> str:
-    """Gera um salt aleatório de 32 bytes em hexadecimal."""
     return os.urandom(32).hex()
 
 
 def _hash_senha(senha: str, salt: str) -> str:
-    """Gera hash SHA-256 da senha concatenada com o salt."""
     return hashlib.sha256((salt + senha).encode('utf-8')).hexdigest()
 
 
 class AuthDatabase:
-    """Gerencia o banco de dados de usuários (users.db)."""
-
     def __init__(self, db_path: str = None):
         self.db_path = db_path or _resolver_caminho_db()
         self._criar_tabela()
 
-    # ========== Conexão ========== #
-
     def get_connection(self) -> sqlite3.Connection:
-        """Cria e retorna conexão com WAL mode e acesso por nome de coluna."""
         conn = sqlite3.connect(self.db_path, timeout=30.0, check_same_thread=False)
         conn.row_factory = sqlite3.Row
         conn.execute('PRAGMA journal_mode=WAL')
         conn.execute('PRAGMA busy_timeout=30000')
         return conn
 
-    # ========== Inicialização ========== #
-
     def _criar_tabela(self):
-        """Cria a tabela de usuários se não existir."""
         conn = self.get_connection()
         try:
             conn.execute('''
@@ -78,24 +64,16 @@ class AuthDatabase:
                     data_criacao TEXT DEFAULT CURRENT_TIMESTAMP
                 )
             ''')
-            colunas = {
-                row['name']
-                for row in conn.execute('PRAGMA table_info(usuarios)').fetchall()
-            }
+            colunas = {row['name'] for row in conn.execute('PRAGMA table_info(usuarios)').fetchall()}
             if 'receber_alerta_critico' not in colunas:
-                conn.execute(
-                    'ALTER TABLE usuarios ADD COLUMN receber_alerta_critico INTEGER DEFAULT 1'
-                )
+                conn.execute('ALTER TABLE usuarios ADD COLUMN receber_alerta_critico INTEGER DEFAULT 1')
             conn.commit()
         except Exception as e:
             log_error(e, "auth_database", "Criação da tabela de usuários")
         finally:
             conn.close()
 
-    # ========== CRUD ========== #
-
     def tem_usuarios(self) -> bool:
-        """Retorna True se já existir ao menos um usuário cadastrado."""
         conn = self.get_connection()
         try:
             row = conn.execute('SELECT COUNT(*) as total FROM usuarios').fetchone()
@@ -107,27 +85,14 @@ class AuthDatabase:
             conn.close()
 
     def criar_usuario(self, nome: str, sobrenome: str, email: str, senha: str, is_admin: bool = False, receber_alerta_critico: bool = True) -> bool:
-        """Cria um novo usuário com senha criptografada. Retorna True se criado com sucesso."""
         salt = _gerar_salt()
         senha_hash = _hash_senha(senha, salt)
         conn = self.get_connection()
         try:
-            conn.execute(
-                'INSERT INTO usuarios (nome, sobrenome, email, senha_hash, salt, is_admin, receber_alerta_critico) VALUES (?, ?, ?, ?, ?, ?, ?)',
-                (
-                    nome.strip(),
-                    sobrenome.strip(),
-                    email.strip().lower(),
-                    senha_hash,
-                    salt,
-                    int(is_admin),
-                    int(receber_alerta_critico),
-                )
-            )
+            conn.execute('INSERT INTO usuarios (nome, sobrenome, email, senha_hash, salt, is_admin, receber_alerta_critico) VALUES (?, ?, ?, ?, ?, ?, ?)', (nome.strip(), sobrenome.strip(), email.strip().lower(), senha_hash, salt, int(is_admin), int(receber_alerta_critico)))
             conn.commit()
             return True
         except sqlite3.IntegrityError:
-            # E-mail já existe
             return False
         except Exception as e:
             log_error(e, "auth_database", f"Criar usuário {email}")
@@ -136,26 +101,13 @@ class AuthDatabase:
             conn.close()
 
     def autenticar(self, email: str, senha: str) -> Optional[Dict]:
-        """Autentica usuário por e-mail e senha.
-        Retorna dict com dados do usuário se válido, None caso contrário."""
         conn = self.get_connection()
         try:
-            row = conn.execute(
-                'SELECT * FROM usuarios WHERE email = ?', (email.strip().lower(),)
-            ).fetchone()
+            row = conn.execute('SELECT * FROM usuarios WHERE email = ?', (email.strip().lower(),)).fetchone()
             if row is None:
                 return None
-            # Verifica senha
-            senha_hash = _hash_senha(senha, row['salt'])
-            if senha_hash == row['senha_hash']:
-                return {
-                    'id': row['id'],
-                    'nome': row['nome'],
-                    'sobrenome': row['sobrenome'],
-                    'email': row['email'],
-                    'is_admin': bool(row['is_admin']),
-                    'receber_alerta_critico': bool(row['receber_alerta_critico']),
-                }
+            if _hash_senha(senha, row['salt']) == row['senha_hash']:
+                return {'id': row['id'], 'nome': row['nome'], 'sobrenome': row['sobrenome'], 'email': row['email'], 'is_admin': bool(row['is_admin']), 'receber_alerta_critico': bool(row['receber_alerta_critico'])}
             return None
         except Exception as e:
             log_error(e, "auth_database", f"Autenticar usuário {email}")
@@ -164,12 +116,9 @@ class AuthDatabase:
             conn.close()
 
     def listar_usuarios(self) -> List[Dict]:
-        """Retorna lista de todos os usuários (sem dados sensíveis)."""
         conn = self.get_connection()
         try:
-            rows = conn.execute(
-                'SELECT id, nome, sobrenome, email, is_admin, receber_alerta_critico, data_criacao FROM usuarios ORDER BY nome'
-            ).fetchall()
+            rows = conn.execute('SELECT id, nome, sobrenome, email, is_admin, receber_alerta_critico, data_criacao FROM usuarios ORDER BY nome').fetchall()
             return [dict(r) for r in rows]
         except Exception as e:
             log_error(e, "auth_database", "Listar usuários")
@@ -178,13 +127,9 @@ class AuthDatabase:
             conn.close()
 
     def obter_usuario_por_id(self, user_id: int) -> Optional[Dict]:
-        """Retorna os dados de um usuário pelo ID, sem dados sensíveis."""
         conn = self.get_connection()
         try:
-            row = conn.execute(
-                'SELECT id, nome, sobrenome, email, is_admin, receber_alerta_critico, data_criacao FROM usuarios WHERE id = ?',
-                (user_id,),
-            ).fetchone()
+            row = conn.execute('SELECT id, nome, sobrenome, email, is_admin, receber_alerta_critico, data_criacao FROM usuarios WHERE id = ?', (user_id,)).fetchone()
             return dict(row) if row else None
         except Exception as e:
             log_error(e, "auth_database", f"Obter usuário {user_id}")
@@ -193,7 +138,6 @@ class AuthDatabase:
             conn.close()
 
     def excluir_usuario(self, user_id: int) -> bool:
-        """Exclui um usuário pelo ID. Retorna True se excluído."""
         conn = self.get_connection()
         try:
             cursor = conn.execute('DELETE FROM usuarios WHERE id = ?', (user_id,))
@@ -206,15 +150,11 @@ class AuthDatabase:
             conn.close()
 
     def redefinir_senha(self, user_id: int, nova_senha: str) -> bool:
-        """Redefine a senha de um usuário com novo hash e salt."""
         salt = _gerar_salt()
         senha_hash = _hash_senha(nova_senha, salt)
         conn = self.get_connection()
         try:
-            cursor = conn.execute(
-                'UPDATE usuarios SET senha_hash = ?, salt = ? WHERE id = ?',
-                (senha_hash, salt, user_id),
-            )
+            cursor = conn.execute('UPDATE usuarios SET senha_hash = ?, salt = ? WHERE id = ?', (senha_hash, salt, user_id))
             conn.commit()
             return cursor.rowcount > 0
         except Exception as e:
@@ -224,17 +164,12 @@ class AuthDatabase:
             conn.close()
 
     def verificar_senha_atual(self, user_id: int, senha_atual: str) -> bool:
-        """Verifica se a senha atual informada confere para o usuário."""
         conn = self.get_connection()
         try:
-            row = conn.execute(
-                'SELECT senha_hash, salt FROM usuarios WHERE id = ?',
-                (user_id,),
-            ).fetchone()
+            row = conn.execute('SELECT senha_hash, salt FROM usuarios WHERE id = ?', (user_id,)).fetchone()
             if row is None:
                 return False
-            senha_hash = _hash_senha(senha_atual, row['salt'])
-            return senha_hash == row['senha_hash']
+            return _hash_senha(senha_atual, row['salt']) == row['senha_hash']
         except Exception as e:
             log_error(e, "auth_database", f"Verificar senha atual usuário {user_id}")
             return False
@@ -242,18 +177,12 @@ class AuthDatabase:
             conn.close()
 
     def atualizar_usuario(self, user_id: int, nome: str, sobrenome: str, email: str) -> bool:
-        """Atualiza informações pessoais de um usuário (nome, sobrenome, email).
-        Retorna True se atualizado com sucesso."""
         conn = self.get_connection()
         try:
-            cursor = conn.execute(
-                'UPDATE usuarios SET nome = ?, sobrenome = ?, email = ? WHERE id = ?',
-                (nome.strip(), sobrenome.strip(), email.strip().lower(), user_id),
-            )
+            cursor = conn.execute('UPDATE usuarios SET nome = ?, sobrenome = ?, email = ? WHERE id = ?', (nome.strip(), sobrenome.strip(), email.strip().lower(), user_id))
             conn.commit()
             return cursor.rowcount > 0
         except sqlite3.IntegrityError:
-            # E-mail já existe para outro usuário
             return False
         except Exception as e:
             log_error(e, "auth_database", f"Atualizar usuário {user_id}")
@@ -262,13 +191,9 @@ class AuthDatabase:
             conn.close()
 
     def promover_para_admin(self, user_id: int) -> bool:
-        """Promove um usuário para administrador."""
         conn = self.get_connection()
         try:
-            cursor = conn.execute(
-                'UPDATE usuarios SET is_admin = 1 WHERE id = ? AND is_admin = 0',
-                (user_id,),
-            )
+            cursor = conn.execute('UPDATE usuarios SET is_admin = 1 WHERE id = ? AND is_admin = 0', (user_id,))
             conn.commit()
             return cursor.rowcount > 0
         except Exception as e:
@@ -278,13 +203,9 @@ class AuthDatabase:
             conn.close()
 
     def atualizar_receber_alerta_critico(self, user_id: int, receber_alerta_critico: bool) -> bool:
-        """Atualiza a preferência de recebimento de alertas críticos de um usuário."""
         conn = self.get_connection()
         try:
-            cursor = conn.execute(
-                'UPDATE usuarios SET receber_alerta_critico = ? WHERE id = ?',
-                (int(receber_alerta_critico), user_id),
-            )
+            cursor = conn.execute('UPDATE usuarios SET receber_alerta_critico = ? WHERE id = ?', (int(receber_alerta_critico), user_id))
             conn.commit()
             return cursor.rowcount > 0
         except Exception as e:
@@ -294,7 +215,6 @@ class AuthDatabase:
             conn.close()
 
     def contar_admins(self) -> int:
-        """Retorna a quantidade de administradores cadastrados."""
         conn = self.get_connection()
         try:
             row = conn.execute('SELECT COUNT(*) as total FROM usuarios WHERE is_admin = 1').fetchone()

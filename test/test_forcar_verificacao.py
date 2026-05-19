@@ -10,7 +10,7 @@ import datetime
 # Adiciona o diretório pai ao path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from database import Database, CAMINHO_DB
+from db import Database, CAMINHO_DB
 
 def limpar_execucao_hoje(limpar_todas: bool = False):
     """Limpa os registros de verificação de hoje para permitir nova execução

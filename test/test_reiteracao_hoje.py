@@ -16,7 +16,7 @@ import datetime
 # Adiciona o diretório pai ao path para importar os módulos
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from database import Database, CAMINHO_DB
+from db import Database, CAMINHO_DB
 
 
 def listar_tarefas_disponiveis():

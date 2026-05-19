@@ -6,7 +6,7 @@ import unittest
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from agenda_obras import obra_tem_medicoes_concluidas
-from database import Database
+from db import Database
 
 
 class TestConclusaoMedicoes(unittest.TestCase):

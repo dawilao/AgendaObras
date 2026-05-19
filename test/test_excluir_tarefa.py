@@ -8,7 +8,7 @@ import os
 # Adiciona o diretório pai ao path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from database import Database, CAMINHO_DB
+from db import Database, CAMINHO_DB
 
 
 def excluir_tarefa_por_id():

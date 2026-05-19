@@ -5,7 +5,7 @@ Contém métodos utilitários para formatação e cálculos.
 
 import datetime
 from typing import List, Dict
-from error_logger import log_error
+from core.error_logger import log_error
 
 
 class ObrasHelper:
@@ -17,7 +17,7 @@ class ObrasHelper:
         except Exception as e:
             log_error(e, "obras_helper", f"Formatar valor: {valor}")
             return f"R$ {valor}"
-    
+
     @staticmethod
     def calcular_progresso(checklist: List[Dict]) -> int:
         """Calcula percentual de progresso do checklist"""
@@ -25,7 +25,7 @@ class ObrasHelper:
             return 0
         concluidos = sum(1 for item in checklist if item['concluido'])
         return int((concluidos / len(checklist)) * 100)
-    
+
     @staticmethod
     def calcular_dias_restantes(data_limite: str) -> int:
         """Calcula dias restantes até o prazo"""
@@ -61,28 +61,28 @@ class ObrasHelper:
         except Exception as e:
             log_error(e, "obras_helper", f"Calcular dias úteis restantes - data_limite: {data_limite}")
             return 0
-    
+
     @staticmethod
     def obter_status_visual(obra: Dict, checklist: List[Dict]) -> tuple:
         """Retorna cor e ícone baseado no status da obra"""
         try:
             progresso = ObrasHelper.calcular_progresso(checklist)
-            
+
             # Verifica se foi finalizada com pendências
             status_conclusao = (obra.get('status_conclusao_obra') or '').strip().lower()
             if status_conclusao == 'com_pendencias':
                 return ('orange', 'warning', '⚠️ Concluída com Pendências')
             elif status_conclusao == 'sem_pendencias':
                 return ('green', 'check_circle', 'Concluído')
-            
+
             if progresso == 100:
                 return ('orange', 'schedule', 'Pronta para concluir')
-            
+
             # Verifica se há tarefas atrasadas
             hoje = datetime.date.today().strftime('%Y-%m-%d')
-            atrasadas = [item for item in checklist 
+            atrasadas = [item for item in checklist
                          if not item['concluido'] and item['data_limite'] and item['data_limite'] < hoje]
-            
+
             if atrasadas:
                 return ('red', 'warning', 'Atrasada')
             elif progresso > 0:
@@ -92,7 +92,7 @@ class ObrasHelper:
         except Exception as e:
             log_error(e, "obras_helper", f"Obter status visual - obra_id: {obra.get('id', 'N/A')}")
             return ('gray', 'error', 'Erro')
-    
+
     # ========== FASE 3 - FUNÇÕES FINANCEIRAS ========== #
     @staticmethod
     def obter_cor_percentual(percentual: float) -> str:

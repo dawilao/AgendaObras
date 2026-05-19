@@ -12,7 +12,7 @@ from pathlib import Path
 # Adiciona o diretório pai ao path para importar módulos
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from error_logger import log_error, log_error_simples, _criar_nome_arquivo, _formatar_traceback
+from core.error_logger import log_error, log_error_simples, _criar_nome_arquivo, _formatar_traceback
 
 
 # Diretório temporário para testes
@@ -83,10 +83,14 @@ def test_log_error_com_arquivo(usar_dir_temp=True):
     print("="*80)
     
     # Temporariamente altera o diretório de erros para o diretório de teste
-    import error_logger
+    import core.error_logger as error_logger
     original_dir = error_logger.ERRO_DIR
-    
+
     if usar_dir_temp:
+        # Garante diretório limpo para não pegar arquivos de execuções anteriores
+        if os.path.exists(TEST_ERROR_DIR):
+            shutil.rmtree(TEST_ERROR_DIR)
+        os.makedirs(TEST_ERROR_DIR, exist_ok=True)
         error_logger.ERRO_DIR = TEST_ERROR_DIR
         print(f"📁 Usando diretório temporário: {TEST_ERROR_DIR}")
     else:
@@ -134,7 +138,7 @@ def test_log_error_simples():
     print("TESTE 4: Log de erro simples (sem exceção)")
     print("="*80)
     
-    import error_logger
+    import core.error_logger as error_logger
     original_dir = error_logger.ERRO_DIR
     error_logger.ERRO_DIR = TEST_ERROR_DIR
     
@@ -168,7 +172,7 @@ def test_multiplos_erros():
     print("TESTE 5: Múltiplos erros consecutivos")
     print("="*80)
     
-    import error_logger
+    import core.error_logger as error_logger
     original_dir = error_logger.ERRO_DIR
     error_logger.ERRO_DIR = TEST_ERROR_DIR
     
@@ -224,7 +228,7 @@ def test_fallback_console():
     print("TESTE 6: Fallback para console (diretório inválido)")
     print("="*80)
     
-    import error_logger
+    import core.error_logger as error_logger
     original_dir = error_logger.ERRO_DIR
     
     # Define um diretório inválido/inacessível
@@ -251,7 +255,7 @@ def test_diretorio_real():
     print("TESTE 7: Teste com diretório REAL do sistema")
     print("="*80)
     
-    import error_logger
+    import core.error_logger as error_logger
     print(f"📁 Diretório configurado: {error_logger.ERRO_DIR}")
     
     resposta = input("\n⚠️ Deseja testar com o diretório real? (s/n): ").strip().lower()

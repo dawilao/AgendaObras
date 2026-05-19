@@ -9,8 +9,8 @@ from unittest.mock import patch
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from auth_database import AuthDatabase
-from auth_middleware import obter_usuario_logado
+from db.auth_repo import AuthDatabase
+from services.auth_service import obter_usuario_logado
 
 
 class TestAuthMiddleware(unittest.TestCase):
@@ -28,7 +28,7 @@ class TestAuthMiddleware(unittest.TestCase):
         self.assertIsNotNone(usuario)
         self.auth_db.promover_para_admin(usuario['id'])
 
-        with patch('auth_middleware.app.storage', SimpleNamespace(user={
+        with patch('services.auth_service.app.storage', SimpleNamespace(user={
             'user_id': usuario['id'],
             'nome': 'Ana',
             'sobrenome': 'Admin',

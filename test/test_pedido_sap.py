@@ -5,7 +5,7 @@ Teste para verificar se o campo pedido_sap está sendo salvo e recuperado corret
 import sys
 sys.path.insert(0, 'c:/Users/mache/OneDrive/Documentos/GitHub/AgendaObras')
 
-from database import Database
+from db import Database
 
 def test_pedido_sap():
     print("🧪 Testando campo pedido_sap...\n")
