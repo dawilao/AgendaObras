@@ -290,8 +290,8 @@ class ChecklistRepository(BaseRepository):
         if quantidade is None:
             return False
         quantidade = int(quantidade)
-        if quantidade < 0 or quantidade > 6:
-            raise ValueError('Quantidade de medições deve ser entre 0 e 6')
+        if quantidade < 1 or quantidade > 12:
+            raise ValueError('Quantidade de medições deve ser entre 1 e 12')
 
         conn = self.get_connection()
         cursor = conn.cursor()

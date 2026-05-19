@@ -11,7 +11,7 @@ import datetime
 import os
 import sqlite3
 from secrets import randbelow
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, Optional, Tuple
 from db import Database, TAREFAS_COM_DIAS_UTEIS
 from services.email_service import EmailService
 from utils.obras_helper import ObrasHelper
@@ -25,60 +25,6 @@ from db.contratos_repo import ContratosDatabase
 from ui.components.obra_card import ObraCardMixin
 from ui.components.obra_dialogs import ObraDialogsMixin
 from ui.components.admin_dialogs import AdminDialogsMixin
-
-# Valores de status padrão (mantidos aqui para compatibilidade com importações externas)
-STATUS_OPTIONS = ['Não Iniciada', 'Em Andamento', 'Atrasada', 'Concluída']
-STATUS_VISUAL_EDICAO_OPTIONS = [
-    'Não Iniciada',
-    'Em Andamento',
-    'Atrasada',
-    'Pronta para concluir',
-    'Concluído',
-    'Concluída com Pendências',
-]
-
-
-def datas_iguais_normalizadas(valor_antigo, valor_novo) -> bool:
-    """Compara datas tratando None e string vazia como equivalentes."""
-    return (valor_antigo or '').strip() == (valor_novo or '').strip()
-
-
-def rotulo_alterar_medicoes(quantidade: int, habilitado: bool = True) -> str:
-    """Retorna o rótulo do botão de configuração de medições."""
-    if not habilitado:
-        return 'Alterar medições'
-    quantidade_normalizada = max(0, int(quantidade or 0))
-    return f'Alterar medições ({quantidade_normalizada}/6)'
-
-
-def obra_tem_medicoes_concluidas(db, obra_id: int) -> bool:
-    """Indica se a obra já concluiu todas as medições/confirmacões e ainda não foi finalizada."""
-    obra = db.obter_obra(obra_id) or {}
-    status_conclusao = (obra.get('status_conclusao_obra') or '').strip().lower()
-    if status_conclusao in {'sem_pendencias', 'com_pendencias'}:
-        return False
-    return db.verificar_todas_medicoes_concluidas(obra_id)
-
-
-def status_visual_para_edicao(obra: Dict, checklist: List[Dict]) -> str:
-    """Converte o status visual do card para o valor exibido no select de edição."""
-    _, _, status_texto = ObrasHelper.obter_status_visual(obra, checklist)
-    if status_texto in STATUS_VISUAL_EDICAO_OPTIONS:
-        return status_texto
-
-    status_salvo = (obra.get('status') or '').strip()
-    if status_salvo in STATUS_VISUAL_EDICAO_OPTIONS:
-        return status_salvo
-
-    return 'Não Iniciada'
-
-
-def status_edicao_para_banco(status: str) -> str:
-    """Normaliza o valor do select de edição para o formato persistido no banco."""
-    status_normalizado = (status or '').strip()
-    if status_normalizado in {'Concluído', 'Pronta para concluir', 'Concluída com Pendências'}:
-        return 'Concluída'
-    return status_normalizado
 
 
 class AgendaObras(ObraCardMixin, ObraDialogsMixin, AdminDialogsMixin):
@@ -215,76 +161,6 @@ class AgendaObras(ObraCardMixin, ObraDialogsMixin, AdminDialogsMixin):
             return f'📧 2ª reiteração enviada em {data_notif_formatada}'
         else:
             return f'🆘 Alertas críticos diários (última em {data_notif_formatada})'
-
-    def _normalizar_valor_data(self, valor) -> str:
-        """Normaliza valor de data para string (suporta tipos retornados pelo NiceGUI)."""
-        if valor is None:
-            return ''
-
-        if isinstance(valor, datetime.datetime):
-            return valor.strftime('%Y-%m-%d')
-
-        if isinstance(valor, datetime.date):
-            return valor.strftime('%Y-%m-%d')
-
-        if isinstance(valor, (list, tuple)):
-            if not valor:
-                return ''
-            valor = valor[0]
-
-        if isinstance(valor, dict):
-            valor = valor.get('from') or valor.get('to') or ''
-
-        if not isinstance(valor, str):
-            valor = str(valor)
-
-        return valor.strip()
-
-    def converter_data_para_iso(self, data_str: str) -> str:
-        """Converte data de dd/mm/aaaa para aaaa-mm-dd (formato ISO)"""
-        data_str = self._normalizar_valor_data(data_str)
-
-        if not data_str:
-            return ''
-
-        if '-' in data_str:
-            try:
-                datetime.datetime.strptime(data_str, '%Y-%m-%d')
-                return data_str
-            except ValueError:
-                pass
-
-        if '/' in data_str:
-            try:
-                dt = datetime.datetime.strptime(data_str, '%d/%m/%Y')
-                return dt.strftime('%Y-%m-%d')
-            except ValueError:
-                pass
-
-        return data_str
-
-    def formatar_data_exibicao(self, data_str: str) -> str:
-        """Converte data do banco (qualquer formato) para dd/mm/aaaa para exibição"""
-        data_str = self._normalizar_valor_data(data_str)
-
-        if not data_str:
-            return ''
-
-        if '-' in data_str:
-            try:
-                dt = datetime.datetime.strptime(data_str, '%Y-%m-%d')
-                return dt.strftime('%d/%m/%Y')
-            except ValueError:
-                pass
-
-        if '/' in data_str:
-            try:
-                dt = datetime.datetime.strptime(data_str, '%d/%m/%Y')
-                return dt.strftime('%d/%m/%Y')
-            except ValueError:
-                pass
-
-        return data_str
 
     def _obter_permissoes_usuario(self) -> Dict:
         """Obtém permissões de visualização de contratos para o usuário logado."""

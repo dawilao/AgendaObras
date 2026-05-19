@@ -5,6 +5,7 @@ Mixin com o componente de card de obra (aba Informações, Checklist, Financeiro
 from nicegui import ui
 import datetime
 from core.error_logger import log_error
+from utils.formatters import formatar_data_exibicao
 
 
 class ObraCardMixin:
@@ -48,7 +49,7 @@ class ObraCardMixin:
                             ui.icon('event').style('color: #666; font-size: 16px;')
 
                             if obra.get('data_inicio') and obra.get('data_inicio').strip():
-                                data_formatada = self.formatar_data_exibicao(obra['data_inicio'])
+                                data_formatada = formatar_data_exibicao(obra['data_inicio'])
                                 if data_formatada:
                                     ui.label(f'Início: {data_formatada}').style('color: #666; font-size: 13px;')
                                 else:
@@ -91,7 +92,7 @@ class ObraCardMixin:
                             if proxima_tarefa['data_limite']:
                                 dias_restantes = self.calcular_dias_restantes_exibicao(proxima_tarefa)
                                 sufixo_dias = ' dias úteis' if self.usa_dias_uteis_exibicao(proxima_tarefa) else ' dias'
-                                data_formatada_prazo = self.formatar_data_exibicao(proxima_tarefa['data_limite'])
+                                data_formatada_prazo = formatar_data_exibicao(proxima_tarefa['data_limite'])
                                 cor_prazo = 'red' if dias_restantes < 0 else 'orange' if dias_restantes <= 3 else 'green'
 
                                 if dias_restantes == 0:
@@ -135,7 +136,7 @@ class ObraCardMixin:
                         for item in checklist:
                             if item['concluido']:
                                 data_conclusao = item.get('data_conclusao')
-                                data_conclusao_fmt = self.formatar_data_exibicao(data_conclusao) if data_conclusao else ''
+                                data_conclusao_fmt = formatar_data_exibicao(data_conclusao) if data_conclusao else ''
                                 tooltip_text = f"✅ Concluída" + (f" em {data_conclusao_fmt}" if data_conclusao_fmt else "")
                             elif item.get('bloqueado'):
                                 base_calculo = item.get('base_calculo', '')
@@ -150,7 +151,7 @@ class ObraCardMixin:
                             elif item.get('data_limite'):
                                 dias_restantes = self.calcular_dias_restantes_exibicao(item)
                                 sufixo_dias = ' dias úteis' if self.usa_dias_uteis_exibicao(item) else ' dias'
-                                data_formatada = self.formatar_data_exibicao(item['data_limite'])
+                                data_formatada = formatar_data_exibicao(item['data_limite'])
                                 if dias_restantes < 0:
                                     tooltip_text = f"⚠️ Atrasada: {abs(dias_restantes)}{sufixo_dias} - Prazo: {data_formatada}"
                                     info_reiteracao = self.formatar_info_reiteracao(item)
@@ -171,7 +172,7 @@ class ObraCardMixin:
                                     with ui.column().classes('gap-0'):
                                         ui.label(item['descricao']).style('font-size: 11px; color: #999; text-decoration: line-through;')
                                         if item.get('data_conclusao'):
-                                            data_concl_fmt = self.formatar_data_exibicao(item['data_conclusao'])
+                                            data_concl_fmt = formatar_data_exibicao(item['data_conclusao'])
                                             if data_concl_fmt:
                                                 ui.label(f'✓ Concluída em {data_concl_fmt}').style('font-size: 9px; color: #999; font-style: italic;')
                                 elif item['bloqueado']:

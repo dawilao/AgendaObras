@@ -4,7 +4,7 @@ import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from agenda_obras import datas_iguais_normalizadas
+from utils.formatters import datas_iguais_normalizadas
 
 
 class TestDatasNormalizadas(unittest.TestCase):

@@ -13,6 +13,8 @@ from utils.formatters import (
     rotulo_alterar_medicoes,
     status_edicao_para_banco,
     datas_iguais_normalizadas,
+    converter_data_para_iso,
+    formatar_data_exibicao,
 )
 from services.obra_service import status_visual_para_edicao, obra_tem_medicoes_concluidas
 
@@ -50,7 +52,7 @@ class ObraDialogsMixin:
             with ui.input('Data de Acionamento', value='', placeholder='dd/mm/aaaa').classes('w-full').props('outlined').tooltip('📅 Data usada como base para calcular prazos iniciais (ex: RETORNO PROJETO E ORÇAMENTO). Se não informada, será usada a data de criação do card.') as data_acionamento_input:
                 with ui.menu().props('no-parent-event') as menu_acionamento:
                     with ui.date(value='') as date_picker_acionamento:
-                        date_picker_acionamento.on('update:model-value', lambda e: data_acionamento_input.set_value(self.formatar_data_exibicao(e.args) if e.args else ''))
+                        date_picker_acionamento.on('update:model-value', lambda e: data_acionamento_input.set_value(formatar_data_exibicao(e.args) if e.args else ''))
                         with ui.row().classes('justify-end'):
                             ui.button('Fechar', on_click=menu_acionamento.close).props('flat')
                 with data_acionamento_input.add_slot('append'):
@@ -82,7 +84,7 @@ class ObraDialogsMixin:
             with ui.input('Data de início da obra', value='', placeholder='dd/mm/aaaa').classes('w-full').props('outlined').tooltip('📅 Data em que a obra deve começar. Este campo será preenchido pelo coordenador.') as data_input:
                 with ui.menu().props('no-parent-event') as menu:
                     with ui.date(value='') as date_picker:
-                        date_picker.on('update:model-value', lambda e: data_input.set_value(self.formatar_data_exibicao(e.args) if e.args else ''))
+                        date_picker.on('update:model-value', lambda e: data_input.set_value(formatar_data_exibicao(e.args) if e.args else ''))
                         with ui.row().classes('justify-end'):
                             ui.button('Fechar', on_click=menu.close).props('flat')
                 with data_input.add_slot('append'):
@@ -91,7 +93,7 @@ class ObraDialogsMixin:
             with ui.input('Data de Assinatura do Contrato', value='', placeholder='dd/mm/aaaa').classes('w-full').props('outlined disable').tooltip('🔒 Será desbloqueado quando a tarefa "CONTRATO ASSINADO" for concluída') as data_assinatura_input:
                 with ui.menu().props('no-parent-event') as menu_assinatura:
                     with ui.date() as date_picker_assinatura:
-                        date_picker_assinatura.on('update:model-value', lambda e: data_assinatura_input.set_value(self.formatar_data_exibicao(e.args) if e.args else ''))
+                        date_picker_assinatura.on('update:model-value', lambda e: data_assinatura_input.set_value(formatar_data_exibicao(e.args) if e.args else ''))
                         with ui.row().classes('justify-end'):
                             ui.button('Fechar', on_click=menu_assinatura.close).props('flat')
                 with data_assinatura_input.add_slot('append'):
@@ -100,7 +102,7 @@ class ObraDialogsMixin:
             with ui.input('Data da AIO', value='', placeholder='dd/mm/aaaa').classes('w-full').props('outlined disable').tooltip('🔒 Será desbloqueado quando a tarefa "SOLICITAR A DATA DA AIO" for concluída') as data_aio_input:
                 with ui.menu().props('no-parent-event') as menu_aio:
                     with ui.date() as date_picker_aio:
-                        date_picker_aio.on('update:model-value', lambda e: data_aio_input.set_value(self.formatar_data_exibicao(e.args) if e.args else ''))
+                        date_picker_aio.on('update:model-value', lambda e: data_aio_input.set_value(formatar_data_exibicao(e.args) if e.args else ''))
                         with ui.row().classes('justify-end'):
                             ui.button('Fechar', on_click=menu_aio.close).props('flat')
                 with data_aio_input.add_slot('append'):
@@ -156,15 +158,15 @@ class ObraDialogsMixin:
             return
 
         try:
-            data_inicio = self.converter_data_para_iso(data_inicio)
+            data_inicio = converter_data_para_iso(data_inicio)
             if 'data_assinatura' in kwargs:
-                kwargs['data_assinatura'] = self.converter_data_para_iso(kwargs['data_assinatura'])
+                kwargs['data_assinatura'] = converter_data_para_iso(kwargs['data_assinatura'])
             if 'data_aio' in kwargs:
-                kwargs['data_aio'] = self.converter_data_para_iso(kwargs['data_aio'])
+                kwargs['data_aio'] = converter_data_para_iso(kwargs['data_aio'])
             if 'data_conclusao' in kwargs:
-                kwargs['data_conclusao'] = self.converter_data_para_iso(kwargs['data_conclusao'])
+                kwargs['data_conclusao'] = converter_data_para_iso(kwargs['data_conclusao'])
             if 'data_acionamento' in kwargs:
-                kwargs['data_acionamento'] = self.converter_data_para_iso(kwargs['data_acionamento'])
+                kwargs['data_acionamento'] = converter_data_para_iso(kwargs['data_acionamento'])
 
             obra_id = self.db.criar_obra(nome, cliente, valor, data_inicio, status, **kwargs)
 
@@ -259,10 +261,10 @@ class ObraDialogsMixin:
                     pedido_sap_input = ui.input(label='Pedido SAP', value=obra.get('pedido_sap') or '').classes('w-full').props('outlined')
                     prefixo_agencia_input = ui.input(label='Prefixo Agência', value=obra.get('prefixo_agencia') or '').classes('w-full').props('outlined')
 
-                with ui.input('Data de Acionamento', value=self.formatar_data_exibicao(obra.get('data_acionamento') or ''), placeholder='dd/mm/aaaa').classes('w-full').props('outlined').tooltip('📅 Data usada como base para calcular prazos iniciais. Se alterada, os prazos das tarefas dependentes serão recalculados.') as data_acionamento_input:
+                with ui.input('Data de Acionamento', value=formatar_data_exibicao(obra.get('data_acionamento') or ''), placeholder='dd/mm/aaaa').classes('w-full').props('outlined').tooltip('📅 Data usada como base para calcular prazos iniciais. Se alterada, os prazos das tarefas dependentes serão recalculados.') as data_acionamento_input:
                     with ui.menu().props('no-parent-event') as menu_acionamento:
                         with ui.date(value=obra.get('data_acionamento') or '') as date_picker_acionamento:
-                            date_picker_acionamento.on('update:model-value', lambda e: data_acionamento_input.set_value(self.formatar_data_exibicao(e.args) if e.args else ''))
+                            date_picker_acionamento.on('update:model-value', lambda e: data_acionamento_input.set_value(formatar_data_exibicao(e.args) if e.args else ''))
                             with ui.row().classes('justify-end'):
                                 ui.button('Fechar', on_click=menu_acionamento.close).props('flat')
                     with data_acionamento_input.add_slot('append'):
@@ -291,10 +293,10 @@ class ObraDialogsMixin:
                 mes_execucao_input = ui.select(meses, label='Mês de Execução', value=obra.get('mes_execucao')).classes('w-full sm:w-[49%]').props('outlined')
                 ano_execucao_input = ui.number(label='Ano', value=obra.get('ano_execucao') or datetime.date.today().year, min=2020, max=2050, step=1).classes('w-full sm:w-[49%]').props('outlined')
 
-            with ui.input('Data de início da obra', value=self.formatar_data_exibicao(obra.get('data_inicio') or ''), placeholder='dd/mm/aaaa').classes('w-full').props('outlined').tooltip('📅 Data em que a obra deve começar. Este campo será preenchido pelo coordenador.') as data_input:
+            with ui.input('Data de início da obra', value=formatar_data_exibicao(obra.get('data_inicio') or ''), placeholder='dd/mm/aaaa').classes('w-full').props('outlined').tooltip('📅 Data em que a obra deve começar. Este campo será preenchido pelo coordenador.') as data_input:
                 with ui.menu().props('no-parent-event') as menu:
                     with ui.date(value=obra.get('data_inicio') or '') as date_picker:
-                        date_picker.on('update:model-value', lambda e: data_input.set_value(self.formatar_data_exibicao(e.args) if e.args else ''))
+                        date_picker.on('update:model-value', lambda e: data_input.set_value(formatar_data_exibicao(e.args) if e.args else ''))
                         with ui.row().classes('justify-end'):
                             ui.button('Fechar', on_click=menu.close).props('flat')
                 with data_input.add_slot('append'):
@@ -303,14 +305,14 @@ class ObraDialogsMixin:
             data_assinatura_props = 'outlined' if contrato_assinado_concluido else 'outlined disable'
             tooltip_assinatura = '📅 Data de assinatura do contrato' if contrato_assinado_concluido else '🔒 Complete a tarefa "CONTRATO ASSINADO" para desbloquear'
 
-            with ui.input('Data de Assinatura do Contrato', value=self.formatar_data_exibicao(obra.get('data_assinatura') or ''), placeholder='dd/mm/aaaa').classes('w-full').props(data_assinatura_props).tooltip(tooltip_assinatura) as data_assinatura_input:
+            with ui.input('Data de Assinatura do Contrato', value=formatar_data_exibicao(obra.get('data_assinatura') or ''), placeholder='dd/mm/aaaa').classes('w-full').props(data_assinatura_props).tooltip(tooltip_assinatura) as data_assinatura_input:
                 pass
             self._data_assinatura_input = data_assinatura_input
 
             data_aio_props = 'outlined' if aio_concluido else 'outlined disable'
             tooltip_aio = '📅 Data da Autorização de Início de Obra' if aio_concluido else '🔒 Complete a tarefa "SOLICITAR A DATA DA AIO" para desbloquear'
 
-            with ui.input('Data da AIO', value=self.formatar_data_exibicao(obra.get('data_aio') or ''), placeholder='dd/mm/aaaa').classes('w-full').props(data_aio_props).tooltip(tooltip_aio) as data_aio_input:
+            with ui.input('Data da AIO', value=formatar_data_exibicao(obra.get('data_aio') or ''), placeholder='dd/mm/aaaa').classes('w-full').props(data_aio_props).tooltip(tooltip_aio) as data_aio_input:
                 pass
             self._data_aio_input = data_aio_input
 
@@ -602,7 +604,7 @@ class ObraDialogsMixin:
                         ui.label(texto_status).style(f'font-size: 11px; color: {cor_status};')
 
                         if item['concluido'] and item.get('data_conclusao'):
-                            data_concl_fmt = self.formatar_data_exibicao(item['data_conclusao'])
+                            data_concl_fmt = formatar_data_exibicao(item['data_conclusao'])
                             if data_concl_fmt:
                                 ui.label(f'✓ Concluída em {data_concl_fmt}').style('font-size: 10px; color: #999; font-style: italic;')
 
@@ -612,7 +614,7 @@ class ObraDialogsMixin:
                                 ui.label(info_reiteracao).style('font-size: 10px; color: #ff5722; font-weight: bold;')
 
                 if item['data_limite'] and not bloqueado:
-                    data_formatada = self.formatar_data_exibicao(item['data_limite'])
+                    data_formatada = formatar_data_exibicao(item['data_limite'])
 
                     if item['concluido']:
                         ui.label(f'Prazo: {data_formatada}').style('font-size: 12px; color: #666; text-decoration: line-through;')
@@ -642,7 +644,7 @@ class ObraDialogsMixin:
                     with ui.menu().props('no-parent-event') as menu:
                         with ui.date(value=data_hoje_iso) as date_picker:
                             date_picker.on('update:model-value', lambda e, inp=data_input: inp.set_value(
-                                self.formatar_data_exibicao(e.args) if e.args else ''
+                                formatar_data_exibicao(e.args) if e.args else ''
                             ))
                             with ui.row().classes('justify-end'):
                                 ui.button('Fechar', on_click=menu.close).props('flat')
@@ -671,18 +673,18 @@ class ObraDialogsMixin:
 
                     try:
                         for campo, data_input in data_inputs.items():
-                            data = self.converter_data_para_iso(data_input.value)
+                            data = converter_data_para_iso(data_input.value)
                             self.db.atualizar_data_critica(obra_id, campo, data)
                             self.db.recalcular_checklist(obra_id, campo, data)
 
                             if campo == 'data_assinatura' and hasattr(self, '_data_assinatura_input'):
                                 try:
-                                    self._data_assinatura_input.set_value(self.formatar_data_exibicao(data))
+                                    self._data_assinatura_input.set_value(formatar_data_exibicao(data))
                                 except Exception:
                                     pass
                             elif campo == 'data_aio' and hasattr(self, '_data_aio_input'):
                                 try:
-                                    self._data_aio_input.set_value(self.formatar_data_exibicao(data))
+                                    self._data_aio_input.set_value(formatar_data_exibicao(data))
                                 except Exception:
                                     pass
 
@@ -721,7 +723,7 @@ class ObraDialogsMixin:
             with ui.input('Data *', value=data_hoje_formatada, placeholder='dd/mm/aaaa').classes('w-full').props('outlined') as data_input:
                 with ui.menu().props('no-parent-event') as menu:
                     with ui.date(value=data_hoje_iso) as date_picker:
-                        date_picker.on('update:model-value', lambda e: data_input.set_value(self.formatar_data_exibicao(e.args) if e.args else ''))
+                        date_picker.on('update:model-value', lambda e: data_input.set_value(formatar_data_exibicao(e.args) if e.args else ''))
                         with ui.row().classes('justify-end'):
                             ui.button('Fechar', on_click=menu.close).props('flat')
                 with data_input.add_slot('append'):
@@ -754,7 +756,7 @@ class ObraDialogsMixin:
             return
 
         try:
-            data_iso = self.converter_data_para_iso(data)
+            data_iso = converter_data_para_iso(data)
 
             if campo not in ('data_assinatura', 'data_aio'):
                 raise ValueError(f"Campo desconhecido: {campo}")
@@ -762,7 +764,7 @@ class ObraDialogsMixin:
             self.db.atualizar_data_critica(obra_id, campo, data_iso)
             self.db.recalcular_checklist(obra_id, campo, data_iso)
 
-            data_formatada = self.formatar_data_exibicao(data_iso)
+            data_formatada = formatar_data_exibicao(data_iso)
             if campo == 'data_assinatura' and hasattr(self, '_data_assinatura_input'):
                 try:
                     self._data_assinatura_input.set_value(data_formatada)
@@ -803,9 +805,9 @@ class ObraDialogsMixin:
 
         with ui.dialog() as dialog_med, ui.card().classes('responsive-dialog-sm').style('padding: 20px;'):
             ui.label('🔧 Configurar Medições').style('font-size: 18px; font-weight: bold; margin-bottom: 8px;')
-            ui.label('Selecione a quantidade de medições para este card (máx 6).').style('color: #666; margin-bottom: 10px;')
+            ui.label('Selecione a quantidade de medições para este card (máx 12).').style('color: #666; margin-bottom: 10px;')
 
-            options = [str(i) for i in range(0, 7)]
+            options = [str(i) for i in range(0, 13)]
             select_input = ui.select(options, label='Medições', value=str(valor_atual or 0)).classes('w-full').props('outlined')
 
             ui.separator()
@@ -816,8 +818,8 @@ class ObraDialogsMixin:
                 def confirmar():
                     try:
                         qtd = int(select_input.value or 0)
-                        if qtd < 0 or qtd > 6:
-                            self.notificar('⚠️ Escolha um valor entre 0 e 6.', tipo='warning')
+                        if qtd < 1 or qtd > 12:
+                            self.notificar('⚠️ Escolha um valor entre 1 e 12.', tipo='warning')
                             return
 
                         self.db.criar_medicoes_dinamicas(obra_id, qtd)
@@ -1031,15 +1033,15 @@ class ObraDialogsMixin:
             return
 
         try:
-            data_inicio = self.converter_data_para_iso(data_inicio)
+            data_inicio = converter_data_para_iso(data_inicio)
             if 'data_assinatura' in kwargs:
-                kwargs['data_assinatura'] = self.converter_data_para_iso(kwargs['data_assinatura'])
+                kwargs['data_assinatura'] = converter_data_para_iso(kwargs['data_assinatura'])
             if 'data_aio' in kwargs:
-                kwargs['data_aio'] = self.converter_data_para_iso(kwargs['data_aio'])
+                kwargs['data_aio'] = converter_data_para_iso(kwargs['data_aio'])
             if 'data_conclusao' in kwargs:
-                kwargs['data_conclusao'] = self.converter_data_para_iso(kwargs['data_conclusao'])
+                kwargs['data_conclusao'] = converter_data_para_iso(kwargs['data_conclusao'])
             if 'data_acionamento' in kwargs:
-                kwargs['data_acionamento'] = self.converter_data_para_iso(kwargs['data_acionamento'])
+                kwargs['data_acionamento'] = converter_data_para_iso(kwargs['data_acionamento'])
 
             observacoes_nova = (kwargs.pop('observacoes', '') or '').strip()
 

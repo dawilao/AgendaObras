@@ -5,7 +5,7 @@ import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from agenda_obras import obra_tem_medicoes_concluidas
+from services.obra_service import obra_tem_medicoes_concluidas
 from db import Database
 
 

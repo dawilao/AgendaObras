@@ -115,7 +115,7 @@ def rotulo_alterar_medicoes(quantidade: int, habilitado: bool = True) -> str:
     if not habilitado:
         return 'Alterar medições'
     quantidade_normalizada = max(0, int(quantidade or 0))
-    return f'Alterar medições ({quantidade_normalizada}/6)'
+    return f'Alterar medições ({quantidade_normalizada}/12)'
 
 
 def status_edicao_para_banco(status: str) -> str:
