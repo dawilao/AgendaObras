@@ -1340,9 +1340,8 @@ class Database:
             
             total_obra = float(obra['total_obra'])
             soma_valores = self.obter_soma_valores_medidos(obra_id)
-            
-            total_faturar = total_obra - soma_valores
-            return round(max(total_faturar, 0.0), 2)  # Nunca menor que 0
+
+            return round(total_obra - soma_valores, 2)
             
         except Exception as e:
             log_error(e, "database", f"Calcular total a faturar - Obra: {obra_id}")
