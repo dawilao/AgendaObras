@@ -1453,6 +1453,7 @@ class AgendaObras:
             with ui.tabs().classes('w-full') as tabs:
                 tab_info = ui.tab('Informações', icon='info')
                 tab_checklist = ui.tab('Checklist', icon='checklist')
+                tab_financeiro = ui.tab('Financeiro', icon='attach_money')
             
             with ui.tab_panels(tabs, value=tab_info).classes('w-full'):
                 # Aba de Informações Gerais
@@ -1619,6 +1620,75 @@ class AgendaObras:
                                                 if info_reiteracao:
                                                     ui.label(info_reiteracao).style('font-size: 9px; color: #ff5722; font-style: italic;')
     
+                with ui.tab_panel(tab_financeiro).style('max-height: 370px; overflow-y: auto;'):
+                    with ui.column().classes('w-full gap-2'):
+                        valor_contrato = obra.get('valor_contrato') or 0
+                        total_obra = obra.get('total_obra') or 0
+
+                        ui.label(f'Valor do Contrato: {self.helper.formatar_valor(valor_contrato)}').style(
+                            'font-size: 13px; color: #666;'
+                        )
+                        ui.label(f'Total da Obra: {self.helper.formatar_valor(total_obra)}').style(
+                            'font-size: 13px; color: #2e7d32; font-weight: bold;'
+                        )
+
+                        ui.separator().classes('my-2')
+
+                        # Cálculos dinâmicos: atualizados com cada nova medição registrada
+                        soma_medidos = self.db.obter_soma_valores_medidos(obra['id'])
+                        percentual_faturado = (soma_medidos / total_obra * 100) if total_obra > 0 else 0.0
+                        total_faturar = total_obra - soma_medidos  # saldo real; negativo = acima do orçamento
+
+                        ui.label(f'Total Faturado: {self.helper.formatar_valor(soma_medidos)}').style(
+                            'font-size: 13px; color: #1976d2; font-weight: bold;'
+                        )
+
+                        cor_pct = '#d32f2f' if percentual_faturado > 100 else '#1976d2'
+                        ui.label(f'% Faturada da Obra: {percentual_faturado:.2f}%').style(
+                            f'font-size: 13px; color: {cor_pct}; font-weight: bold;'
+                        )
+                        ui.linear_progress(
+                            min(percentual_faturado / 100, 1.0), show_value=False
+                        ).style('height: 8px;').props(f'color={"negative" if percentual_faturado > 100 else "primary"}')
+
+                        cor_saldo = '#d32f2f' if total_faturar < 0 else '#2e7d32'
+                        label_saldo = f'Total a Faturar (Saldo): {self.helper.formatar_valor(total_faturar)}'
+                        if total_faturar < 0:
+                            label_saldo += '  ⚠️ Acima do orçamento!'
+                        ui.label(label_saldo).style(
+                            f'font-size: 13px; color: {cor_saldo}; font-weight: bold;'
+                        )
+
+                        # Histórico mês a mês
+                        historico = self.db.obter_valores_medicoes(obra['id'])
+                        if historico:
+                            ui.separator().classes('my-2')
+                            ui.label('Histórico de Medições').style(
+                                'font-size: 12px; font-weight: bold; color: #555;'
+                            )
+                            with ui.column().classes('w-full gap-1'):
+                                for med in historico:
+                                    mes_ref = med.get('mes_referencia') or ''
+                                    try:
+                                        ano, mes = mes_ref.split('-')
+                                        mes_label = f"{int(mes):02d}/{ano}"
+                                    except Exception:
+                                        mes_label = mes_ref or '—'
+                                    data_conf = med.get('data_conclusao') or med.get('data_medicao') or ''
+                                    try:
+                                        data_fmt = datetime.datetime.strptime(data_conf, '%Y-%m-%d').strftime('%d/%m/%Y')
+                                    except Exception:
+                                        data_fmt = data_conf
+                                    with ui.row().classes('w-full items-center justify-between').style(
+                                        'background: #f5f5f5; border-radius: 4px; padding: 4px 8px;'
+                                    ):
+                                        ui.label(f'Medição {mes_label}').style('font-size: 12px; color: #444;')
+                                        with ui.row().classes('items-center gap-3'):
+                                            ui.label(self.helper.formatar_valor(med['valor_medido'])).style(
+                                                'font-size: 12px; color: #1976d2; font-weight: bold;'
+                                            )
+                                            ui.label(data_fmt).style('font-size: 11px; color: #999;')
+
     # ========== Dialogs ========== #
     def nova_entrada(self):
         """Dialog para adicionar nova obra"""
@@ -1673,7 +1743,7 @@ class AgendaObras:
                 valor_parceiro_input = ui.number(label='Valor Parceiro (R$)', min=0, step=0.01, format='%.2f').classes('w-full sm:w-[32%]').props('outlined')
                 valor_percentual_input = ui.number(label='Valor % (%)', min=0, max=100, step=0.01, format='%.2f').classes('w-full sm:w-[32%]').props('outlined')
             
-            total_obra_input = ui.number(label='Total da Obra (R$)', min=0, step=0.01, format='%.2f').classes('w-full').props('outlined')
+            total_obra_input = ui.number(label='Total da Obra (R$) *', min=0, step=0.01, format='%.2f').classes('w-full').props('outlined').tooltip('💰 [OBRIGATÓRIO] Valor total da obra para rastreamento financeiro da Fase 3')
             
             ui.separator().classes('my-4')
             
@@ -1759,6 +1829,12 @@ class AgendaObras:
         
         if not valor or valor <= 0:
             self.notificar('⚠️ Valor do contrato deve ser maior que zero!', tipo='warning')
+            return
+        
+        # ===== FASE 3: Validação obrigatória de Total da Obra =====
+        total_obra = kwargs.get('total_obra')
+        if not total_obra or total_obra <= 0:
+            self.notificar('⚠️ [FASE 3] Total da Obra é obrigatório e deve ser maior que zero!', tipo='warning')
             return
         
         try:
@@ -1893,7 +1969,7 @@ class AgendaObras:
                 valor_parceiro_input = ui.number(label='Valor Parceiro (R$)', value=obra.get('valor_parceiro') or 0, min=0, step=0.01, format='%.2f').classes('w-full sm:w-[32%]').props('outlined')
                 valor_percentual_input = ui.number(label='Valor % (%)', value=obra.get('valor_percentual') or 0, min=0, max=100, step=0.01, format='%.2f').classes('w-full sm:w-[32%]').props('outlined')
             
-            total_obra_input = ui.number(label='Total da Obra (R$)', value=obra.get('total_obra') or 0, min=0, step=0.01, format='%.2f').classes('w-full').props('outlined')
+            total_obra_input = ui.number(label='Total da Obra (R$) *', value=obra.get('total_obra') or 0, min=0, step=0.01, format='%.2f').classes('w-full').props('outlined').tooltip('💰 [OBRIGATÓRIO] Valor total da obra para rastreamento financeiro da Fase 3')
             
             ui.separator().classes('my-4')
             
@@ -2173,18 +2249,23 @@ class AgendaObras:
                     if not bloqueado:
                         def on_change(e, item_id=item['id'], item_descricao=item.get('descricao', '')):
                             novo_valor = bool(e.value)
-                            # Salva no banco imediatamente
-                            trigger_ui = self.db.marcar_item_checklist(item_id, novo_valor)
 
-                            # Se concluiu uma CONFIRMAÇÃO DE MEDIÇÃO e não há decisão de finalização, abre o diálogo automaticamente
+                            # CONFIRMAÇÃO DE MEDIÇÃO exige dialog antes de salvar no banco
                             if novo_valor and item_descricao.startswith('CONFIRMAÇÃO DE MEDIÇÃO'):
                                 try:
-                                    if obra_tem_medicoes_concluidas(self.db, obra_id):
-                                        self.abrir_dialog_conclusao_obra(obra_id, atualizar_checklist_fn, self._observacoes_input_atual)
-                                        return
-                                except Exception as e:
-                                    log_error(e, 'agenda_obras', f'Checar finalizacao da obra - item {item_id}')
-                            
+                                    self.abrir_dialog_valor_medicao(obra_id, item_id, e.sender, atualizar_checklist_fn)
+                                except Exception as exc:
+                                    log_error(exc, 'agenda_obras', f'Erro ao abrir dialog de medicao - item {item_id}')
+                                return
+
+                            # Para todos os demais itens, salva no banco imediatamente
+                            trigger_ui = self.db.marcar_item_checklist(item_id, novo_valor)
+
+                            # Para tarefas MEDIÇÃO (sem dialog de valor), verifica se finalizou todas
+                            if novo_valor and not trigger_ui and item_descricao.startswith('MEDIÇÃO ') and obra_tem_medicoes_concluidas(self.db, obra_id):
+                                ui.timer(0.1, lambda: self.abrir_dialog_conclusao_obra(obra_id, atualizar_checklist_fn, getattr(self, '_observacoes_input_atual', None)), once=True)
+                                return
+
                             # Se marcou como concluído e há trigger_ui, abre dialog de data crítica
                             # Neste caso, o próprio dialog cuidará de atualizar o checklist
                             if trigger_ui and novo_valor and obra_id:
@@ -2624,7 +2705,66 @@ class AgendaObras:
                 ui.button('Confirmar pendências', on_click=concluir_com_pendencias).props('color=negative flat')
 
         dialog_finalizacao.open()
-    
+
+    def abrir_dialog_valor_medicao(self, obra_id: int, item_id: int, checkbox_obj, atualizar_checklist_fn):
+        """Abre o diálogo para inserir o valor faturado no mês e só então conclui a tarefa."""
+        with ui.dialog() as dialog, ui.card().classes('responsive-dialog-sm').style('padding: 20px; min-width: 300px;'):
+            ui.label('💰 Valor da Medição').style('font-size: 18px; font-weight: bold; margin-bottom: 8px;')
+            ui.label('Informe o valor faturado referente a esta medição.').style('color: #666; margin-bottom: 10px;')
+            
+            # Input para o valor financeiro
+            valor_input = ui.number('Valor Medido (R$)', format='%.2f', min=0.01).classes('w-full').props('outlined autofocus')
+
+            ui.separator().classes('my-4')
+
+            def confirmar():
+                try:
+                    valor = float(valor_input.value or 0)
+                    if valor <= 0:
+                        self.notificar('⚠️ O valor medido é obrigatório e deve ser maior que zero!', tipo='warning')
+                        return
+                    
+                    # 1. Salvar o valor financeiro no banco (Fase 3)
+                    sucesso = self.db.registrar_valor_medido(item_id, valor)
+                    if not sucesso:
+                        self.notificar('❌ Erro ao salvar o valor da medição no banco.', tipo='negative')
+                        return
+
+                    # 2. Marca a tarefa efetivamente como concluída no banco
+                    self.db.marcar_item_checklist(item_id, True)
+
+                    # 3. Fecha o dialog atual de valor medido
+                    dialog.close()
+
+                    self.notificar('✅ Valor medido salvo com sucesso!', tipo='positive')
+
+                    # 4. Verifica se todas as medições acabaram para poder finalizar a obra
+                    if self.db.verificar_todas_medicoes_concluidas(obra_id):
+                        # Usa timer para o dialog antigo fechar antes do novo abrir (evita bugs visuais)
+                        ui.timer(0.1, lambda: self.abrir_dialog_conclusao_obra(obra_id, atualizar_checklist_fn, getattr(self, '_observacoes_input_atual', None)), once=True)
+                    else:
+                        # Se ainda há medições futuras, apenas atualiza o checklist na tela
+                        if atualizar_checklist_fn:
+                            ui.timer(0.05, atualizar_checklist_fn, once=True)
+
+                    self.renderizar_obras()  # Atualiza a lista de obras para refletir o valor medido e status atualizado
+
+                except Exception as e:
+                    from error_logger import log_error # Garante o log em caso de erro na conversão
+                    log_error(e, 'agenda_obras', f'Confirmar valor de medição - item {item_id}')
+                    self.notificar(f'❌ Erro ao processar medição: {e}', tipo='negative')
+
+            def cancelar():
+                # Reverte visualmente o checkbox para não marcado, já que o usuário desistiu
+                checkbox_obj.set_value(False)
+                dialog.close()
+
+            with ui.row().classes('w-full justify-end gap-2'):
+                ui.button('Cancelar', on_click=cancelar).props('flat color=red')
+                ui.button('Confirmar', on_click=confirmar).props('color=positive')
+
+        dialog.open()
+
     def atualizar_obra_dialog(self, dialog, obra_id: int, nome: str, cliente: str,
                             valor: float, data_inicio: str, status: str, checklist_estados: Dict = None, 
                             checklist_container = None, **kwargs):
@@ -2635,6 +2775,12 @@ class AgendaObras:
         
         if not valor or valor <= 0:
             self.notificar('⚠️ Valor deve ser maior que zero!', tipo='warning')
+            return
+
+        # ===== FASE 3: Validação obrigatória de Total da Obra =====
+        total_obra = kwargs.get('total_obra')
+        if not total_obra or total_obra <= 0:
+            self.notificar('⚠️ [FASE 3] Total da Obra é obrigatório e deve ser maior que zero!', tipo='warning')
             return
 
         if not self._usuario_pode_acessar_contrato(cliente):

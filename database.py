@@ -182,6 +182,26 @@ class Database:
         if 'atualizado_em' not in medicoes_cols:
             cursor.execute('ALTER TABLE medicoes_obra ADD COLUMN atualizado_em TEXT')
 
+        # Tabela para histórico de valores medidos (Fase 3 - Financeiro)
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS medicoes_valores (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                obra_id INTEGER NOT NULL,
+                tarefa_id INTEGER NOT NULL,
+                valor_medido REAL NOT NULL,
+                data_medicao TEXT NOT NULL,
+                mes_referencia TEXT,
+                FOREIGN KEY (obra_id) REFERENCES obras (id),
+                FOREIGN KEY (tarefa_id) REFERENCES obra_checklist (id)
+            )
+        ''')
+
+        # Garante coluna valor_medido na tabela obra_checklist (Fase 3)
+        cursor.execute("PRAGMA table_info(obra_checklist)")
+        checklist_cols = [r[1] for r in cursor.fetchall()]
+        if 'valor_medido' not in checklist_cols:
+            cursor.execute("ALTER TABLE obra_checklist ADD COLUMN valor_medido REAL")
+
         # Garante coluna de status de conclusão específica para a obra
         cursor.execute("PRAGMA table_info(obras)")
         cols = [r[1] for r in cursor.fetchall()]
@@ -1200,3 +1220,164 @@ class Database:
         conn.commit()
         conn.close()
         return True
+
+    # ========== FASE 3 - GERENCIAMENTO DE VALORES MEDIDOS ========== #
+    def registrar_valor_medido(self, tarefa_id: int, valor_medido: float, mes_referencia: str = None) -> bool:
+        """Registra um valor medido para uma tarefa de CONFIRMAÇÃO DE MEDIÇÃO (Fase 3 - Financeiro)"""
+        try:
+            conn = self.get_connection()
+            cursor = conn.cursor()
+            
+            # Busca informações da tarefa
+            cursor.execute('''
+                SELECT obra_id, descricao, mes_referencia FROM obra_checklist
+                WHERE id = ?
+            ''', (tarefa_id,))
+            tarefa = cursor.fetchone()
+            
+            if not tarefa:
+                conn.close()
+                return False
+            
+            obra_id = tarefa['obra_id']
+            mes_ref = mes_referencia or (tarefa['mes_referencia'] or '')
+            data_medicao = datetime.datetime.now().strftime('%Y-%m-%d')
+            
+            # Atualiza coluna valor_medido na tabela obra_checklist
+            cursor.execute('''
+                UPDATE obra_checklist
+                SET valor_medido = ?
+                WHERE id = ?
+            ''', (valor_medido, tarefa_id))
+            
+            # 1. Apaga a medição anterior dessa tarefa (se existir)
+            cursor.execute('DELETE FROM medicoes_valores WHERE tarefa_id = ?', (tarefa_id,))
+            
+            # 2. Insere o novo valor
+            cursor.execute('''
+                INSERT INTO medicoes_valores
+                (obra_id, tarefa_id, valor_medido, data_medicao, mes_referencia)
+                VALUES (?, ?, ?, ?, ?)
+            ''', (obra_id, tarefa_id, valor_medido, data_medicao, mes_ref))
+                        
+            conn.commit()
+            conn.close()
+            
+            return True
+            
+        except Exception as e:
+            log_error(e, "database", f"Registrar valor medido - Tarefa: {tarefa_id}")
+            if 'conn' in locals():
+                try:
+                    conn.close()
+                except:
+                    pass
+            return False
+
+    def obter_soma_valores_medidos(self, obra_id: int) -> float:
+        """Retorna a soma de todos os valores medidos para uma obra (Fase 3 - Financeiro)"""
+        try:
+            conn = self.get_connection()
+            cursor = conn.cursor()
+            
+            cursor.execute('''
+                SELECT COALESCE(SUM(valor_medido), 0) as total
+                FROM medicoes_valores
+                WHERE obra_id = ?
+            ''', (obra_id,))
+            
+            result = cursor.fetchone()
+            conn.close()
+            
+            return float(result['total']) if result else 0.0
+            
+        except Exception as e:
+            log_error(e, "database", f"Obter soma valores medidos - Obra: {obra_id}")
+            if 'conn' in locals():
+                try:
+                    conn.close()
+                except:
+                    pass
+            return 0.0
+
+    def calcular_percentual_faturado(self, obra_id: int) -> float:
+        """Calcula o percentual faturado da obra (Fase 3 - Financeiro)"""
+        try:
+            conn = self.get_connection()
+            cursor = conn.cursor()
+            
+            # Busca total_obra
+            cursor.execute('SELECT total_obra FROM obras WHERE id = ?', (obra_id,))
+            obra = cursor.fetchone()
+            conn.close()
+            
+            if not obra or not obra['total_obra'] or obra['total_obra'] <= 0:
+                return 0.0
+            
+            total_obra = float(obra['total_obra'])
+            soma_valores = self.obter_soma_valores_medidos(obra_id)
+            
+            percentual = (soma_valores / total_obra) * 100
+            return round(percentual, 2)
+            
+        except Exception as e:
+            log_error(e, "database", f"Calcular percentual faturado - Obra: {obra_id}")
+            return 0.0
+
+    def calcular_total_faturar(self, obra_id: int) -> float:
+        """Calcula o total a faturar da obra (Fase 3 - Financeiro)"""
+        try:
+            conn = self.get_connection()
+            cursor = conn.cursor()
+            
+            # Busca total_obra
+            cursor.execute('SELECT total_obra FROM obras WHERE id = ?', (obra_id,))
+            obra = cursor.fetchone()
+            conn.close()
+            
+            if not obra or not obra['total_obra']:
+                return 0.0
+            
+            total_obra = float(obra['total_obra'])
+            soma_valores = self.obter_soma_valores_medidos(obra_id)
+
+            return round(total_obra - soma_valores, 2)
+            
+        except Exception as e:
+            log_error(e, "database", f"Calcular total a faturar - Obra: {obra_id}")
+            return 0.0
+
+    def obter_valores_medicoes(self, obra_id: int) -> List[Dict]:
+        """Retorna todos os valores medidos de uma obra com detalhes (Fase 3 - Financeiro)"""
+        try:
+            conn = self.get_connection()
+            cursor = conn.cursor()
+            
+            cursor.execute('''
+                SELECT 
+                    mv.id,
+                    mv.tarefa_id,
+                    mv.valor_medido,
+                    mv.data_medicao,
+                    mv.mes_referencia,
+                    oc.descricao as tarefa_descricao,
+                    oc.data_conclusao
+                FROM medicoes_valores mv
+                LEFT JOIN obra_checklist oc ON mv.tarefa_id = oc.id
+                WHERE mv.obra_id = ?
+                ORDER BY mv.mes_referencia DESC, mv.data_medicao DESC
+            ''', (obra_id,))
+            
+            medicoes = [dict(row) for row in cursor.fetchall()]
+            conn.close()
+            
+            return medicoes
+            
+        except Exception as e:
+            log_error(e, "database", f"Obter valores medições - Obra: {obra_id}")
+            if 'conn' in locals():
+                try:
+                    conn.close()
+                except:
+                    pass
+            return []
