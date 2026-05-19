@@ -1,0 +1,78 @@
+name: "Relatar um Bug"
+description: Registrar um comportamento incorreto ou erro no sistema.
+title: "[Bug]: "
+labels: ["bug"]
+projects: [""dawilao/AgendaObras/2""]
+assignees:
+  - dawilao
+type: bug
+body:
+  - type: textarea
+    id: descricao
+    attributes:
+      label: Descrição do Problema
+      description: Descreva de forma clara o que está acontecendo de errado.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: severidade
+    attributes:
+      label: Impacto / Severidade
+      options:
+        - "Baixa (Apenas visual ou contornável)"
+        - "Média (Afeta uma funcionalidade secundária)"
+        - "Alta (Bloqueia o uso ou gera dados financeiros errados)"
+    validations:
+      required: true
+
+  - type: textarea
+    id: passos
+    attributes:
+      label: Passos para Reproduzir
+      description: O passo a passo para fazer o erro acontecer de novo.
+      placeholder: |
+        1. Acesse a tela X...
+        2. Clique no botão Y...
+    validations:
+      required: true
+
+  - type: textarea
+    id: massa_dados
+    attributes:
+      label: Massa de Dados (Valores de Teste)
+      description: Quais valores exatos geraram o erro? (Ex: Valor do Contrato de R$ 50.000,00).
+    validations:
+      required: false
+
+  - type: textarea
+    id: comportamento_esperado
+    attributes:
+      label: Comportamento Esperado
+      description: O que deveria ter acontecido?
+    validations:
+      required: true
+
+  - type: textarea
+    id: ambiente
+    attributes:
+      label: Ambiente
+      description: Onde o erro ocorreu? (Ex: VPS, Localhost, Navegador Chrome).
+    validations:
+      required: false
+
+  - type: textarea
+    id: causa_provavel
+    attributes:
+      label: Anotações Técnicas / Causa Provável (Opcional)
+      description: Suspeitas de onde está o problema no código (ex: float vs decimal).
+    validations:
+      required: false
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Capturas de Tela / Logs
+      description: Cole mensagens de erro do terminal ou insira o link de imagens aqui.
+    validations:
+      required: false
