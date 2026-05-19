@@ -41,8 +41,8 @@ def rotulo_alterar_medicoes(quantidade: int, habilitado: bool = True) -> str:
     """Retorna o rótulo do botão de configuração de medições."""
     if not habilitado:
         return 'Alterar medições'
-    quantidade_normalizada = max(0, int(quantidade or 0))
-    return f'Alterar medições ({quantidade_normalizada}/6)'
+    quantidade_normalizada = max(1, int(quantidade or 1))
+    return f'Alterar medições ({quantidade_normalizada}/12)'
 
 
 def obra_tem_medicoes_concluidas(db, obra_id: int) -> bool:

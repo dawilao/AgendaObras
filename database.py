@@ -967,7 +967,7 @@ class Database:
         return dict(row) if row else None
 
     def criar_medicoes_dinamicas(self, obra_id: int, quantidade: int) -> bool:
-        """Cria/atualiza medições dinâmicas para uma obra (máx 6).
+        """Cria/atualiza medições dinâmicas para uma obra (máx 12).
 
         Gera tarefas `MEDIÇÃO MM/YYYY` (dia 20 do mês) e
         `CONFIRMAÇÃO DE MEDIÇÃO MM/YYYY` (dia 10 do mês seguinte).
@@ -976,8 +976,8 @@ class Database:
         if quantidade is None:
             return False
         quantidade = int(quantidade)
-        if quantidade < 0 or quantidade > 6:
-            raise ValueError('Quantidade de medições deve ser entre 0 e 6')
+        if quantidade < 1 or quantidade > 12:
+            raise ValueError('Quantidade de medições deve ser entre 1 e 12')
 
         conn = self.get_connection()
         cursor = conn.cursor()
