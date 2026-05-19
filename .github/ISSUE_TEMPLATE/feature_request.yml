@@ -2,7 +2,6 @@ name: "Solicitação de Nova Funcionalidade"
 description: Propor uma nova funcionalidade ou alteração no sistema.
 title: "[Feature]: "
 labels: ["enhancement"]
-projects: ["dawilao/AgendaObras/2"]
 assignees:
   - dawilao
 body:
