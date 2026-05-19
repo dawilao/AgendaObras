@@ -2566,10 +2566,10 @@ class AgendaObras:
 
         with ui.dialog() as dialog_med, ui.card().classes('responsive-dialog-sm').style('padding: 20px;'):
             ui.label('🔧 Configurar Medições').style('font-size: 18px; font-weight: bold; margin-bottom: 8px;')
-            ui.label('Selecione a quantidade de medições para este card (máx 6).').style('color: #666; margin-bottom: 10px;')
+            ui.label('Selecione a quantidade de medições para este card (máx 12).').style('color: #666; margin-bottom: 10px;')
 
-            options = [str(i) for i in range(0, 7)]
-            select_input = ui.select(options, label='Medições', value=str(valor_atual or 0)).classes('w-full').props('outlined')
+            options = [str(i) for i in range(1, 13)]
+            select_input = ui.select(options, label='Medições', value=str(valor_atual or 1)).classes('w-full').props('outlined')
 
             ui.separator()
 
@@ -2578,9 +2578,9 @@ class AgendaObras:
 
                 def confirmar():
                     try:
-                        qtd = int(select_input.value or 0)
-                        if qtd < 0 or qtd > 6:
-                            self.notificar('⚠️ Escolha um valor entre 0 e 6.', tipo='warning')
+                        qtd = int(select_input.value or 1)
+                        if qtd < 1 or qtd > 12:
+                            self.notificar('⚠️ Escolha um valor entre 1 e 12.', tipo='warning')
                             return
 
                         self.db.criar_medicoes_dinamicas(obra_id, qtd)
