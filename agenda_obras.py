@@ -137,6 +137,25 @@ class AgendaObras:
                     font-size: 22px !important;
                 }
             }
+
+            /* Grid de obras responsivo */
+            .obras-grid {
+                display: grid;
+                gap: 1rem;
+                grid-template-columns: repeat(3, minmax(0, 1fr));
+            }
+
+            @media (max-width: 1100px) {
+                .obras-grid {
+                    grid-template-columns: repeat(2, minmax(0, 1fr));
+                }
+            }
+
+            @media (max-width: 640px) {
+                .obras-grid {
+                    grid-template-columns: 1fr;
+                }
+            }
         </style>
         ''')
     
@@ -1422,8 +1441,8 @@ class AgendaObras:
                         'font-size: 14px; color: #666; margin-bottom: 10px; font-weight: 500;'
                     )
                 
-                # Grid responsivo de 4 colunas (ajustado para cards mais compactos)
-                with ui.grid(columns='repeat(auto-fit, minmax(min(100%, 280px), 1fr))').classes('w-full gap-4'):
+                # Grid responsivo (ajustado para cards mais compactos)
+                with ui.grid(columns='repeat(auto-fit, minmax(min(100%, 360px), 1fr))').classes('w-full gap-4'):
                     for obra in obras:
                         self.criar_card_obra(obra)
     
