@@ -2,10 +2,9 @@ name: "Relatar um Bug"
 description: Registrar um comportamento incorreto ou erro no sistema.
 title: "[Bug]: "
 labels: ["bug"]
-projects: [""dawilao/AgendaObras/2""]
+projects: ["dawilao/AgendaObras/2"]
 assignees:
   - dawilao
-type: bug
 body:
   - type: textarea
     id: descricao
@@ -14,7 +13,6 @@ body:
       description: Descreva de forma clara o que está acontecendo de errado.
     validations:
       required: true
-
   - type: dropdown
     id: severidade
     attributes:
@@ -25,7 +23,6 @@ body:
         - "Alta (Bloqueia o uso ou gera dados financeiros errados)"
     validations:
       required: true
-
   - type: textarea
     id: passos
     attributes:
@@ -36,7 +33,6 @@ body:
         2. Clique no botão Y...
     validations:
       required: true
-
   - type: textarea
     id: massa_dados
     attributes:
@@ -44,7 +40,6 @@ body:
       description: Quais valores exatos geraram o erro? (Ex: Valor do Contrato de R$ 50.000,00).
     validations:
       required: false
-
   - type: textarea
     id: comportamento_esperado
     attributes:
@@ -52,7 +47,6 @@ body:
       description: O que deveria ter acontecido?
     validations:
       required: true
-
   - type: textarea
     id: ambiente
     attributes:
@@ -60,7 +54,6 @@ body:
       description: Onde o erro ocorreu? (Ex: VPS, Localhost, Navegador Chrome).
     validations:
       required: false
-
   - type: textarea
     id: causa_provavel
     attributes:
@@ -68,7 +61,6 @@ body:
       description: Suspeitas de onde está o problema no código (ex: float vs decimal).
     validations:
       required: false
-
   - type: textarea
     id: logs
     attributes:
