@@ -1,0 +1,54 @@
+name: "Solicitação de Nova Funcionalidade"
+description: Propor uma nova funcionalidade ou alteração no sistema.
+title: "[Feature]: "
+labels: ["enhancement"]
+assignees:
+  - dawilao
+body:
+  - type: textarea
+    id: objetivo
+    attributes:
+      label: Objetivo
+      description: Como [perfil], quero [ação] para que [resultado esperado].
+    validations:
+      required: true
+
+  - type: textarea
+    id: criterios_aceite
+    attributes:
+      label: Critérios de Aceite
+      description: O que precisa acontecer para considerar pronto? (Use o formato - [ ] Item)
+    validations:
+      required: true
+
+  - type: textarea
+    id: fora_escopo
+    attributes:
+      label: Fora do Escopo
+      description: O que NÃO será feito nesta tarefa.
+    validations:
+      required: false
+
+  - type: textarea
+    id: tratamento_erros
+    attributes:
+      label: Tratamento de Erros / Casos Extremos
+      description: O que o sistema deve fazer se algo der errado ou valores bizarros forem inseridos.
+    validations:
+      required: false
+
+  - type: textarea
+    id: dependencias
+    attributes:
+      label: Dependências
+      description: Essa tarefa depende de alguma outra para começar?
+    validations:
+      required: false
+
+  - type: textarea
+    id: anotacoes_tecnicas
+    attributes:
+      label: Anotações Técnicas (Opcional)
+      description: Sugestões de implementação, bibliotecas, rotas, etc.
+    validations:
+      required: false
