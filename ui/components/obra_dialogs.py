@@ -983,16 +983,13 @@ class ObraDialogsMixin:
                         self.notificar('❌ Erro ao salvar o valor da medição no banco.', tipo='negative')
                         return
 
-                    # Verificar ANTES de marcar para não contar o próximo item que será desbloqueado
-                    is_ultima_medicao = self.db.verificar_ultima_confirmacao_medicao(obra_id, item_id)
-
                     self.db.marcar_item_checklist(item_id, True)
 
                     dialog.close()
 
                     self.notificar('✅ Valor medido salvo com sucesso!', tipo='positive')
 
-                    if is_ultima_medicao:
+                    if self.db.verificar_todas_medicoes_concluidas(obra_id):
                         ui.timer(0.1, lambda: self.abrir_dialog_conclusao_obra(obra_id, atualizar_checklist_fn, getattr(self, '_observacoes_input_atual', None)), once=True)
                     else:
                         if atualizar_checklist_fn:
