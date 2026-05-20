@@ -994,8 +994,7 @@ class ObraDialogsMixin:
                     else:
                         if atualizar_checklist_fn:
                             ui.timer(0.05, atualizar_checklist_fn, once=True)
-
-                    self.renderizar_obras()
+                        self.renderizar_obras()
 
                 except Exception as e:
                     log_error(e, 'agenda_obras', f'Confirmar valor de medição - item {item_id}')
