@@ -6,7 +6,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from database import Database
+from db import Database
 
 
 class TestMedicoesDinamicas(unittest.TestCase):
@@ -146,8 +146,8 @@ class TestMedicoesDinamicas(unittest.TestCase):
 
         self.assertTrue(self.db.verificar_todas_medicoes_concluidas(self.obra_id))
 
-    def test_primeira_medicao_apos_dia_20(self):
-        # Cria uma obra com início no dia 20 -> primeira medição no mês seguinte
+    def test_primeira_medicao_mesmo_mes_inicio(self):
+        # Obra iniciada no dia 20: primeira medição no mesmo mês de início
         obra_id2 = self.db.criar_obra(
             'Obra Teste Inicio 20',
             'Cliente Teste',
@@ -171,8 +171,8 @@ class TestMedicoesDinamicas(unittest.TestCase):
         conn.close()
 
         self.assertEqual(len(rows), 1)
-        self.assertEqual(rows[0]['descricao'], 'MEDIÇÃO 05/2026')
-        self.assertEqual(rows[0]['data_limite'], '2026-05-20')
+        self.assertEqual(rows[0]['descricao'], 'MEDIÇÃO 04/2026')
+        self.assertEqual(rows[0]['data_limite'], '2026-04-20')
 
 
 if __name__ == '__main__':

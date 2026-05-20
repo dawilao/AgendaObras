@@ -17,10 +17,10 @@ from typing import Dict, List
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from config import EmailConfig
-from database import Database, CAMINHO_DB
-from email_service import EmailService
-from notificador_prazos import NotificadorPrazos
+from core.config import EmailConfig
+from db import Database, CAMINHO_DB
+from services.email_service import EmailService
+from services.notificador import NotificadorPrazos
 
 
 ENV_EXTERNO_PADRAO = r"G:\Meu Drive\17 - MODELOS\PROGRAMAS\AgendaObras\app\email_config.env"

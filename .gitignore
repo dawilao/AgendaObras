@@ -6,6 +6,9 @@ email_config.env
 *.db-journal
 *.env
 
+# Arquivos do nicegui
+.nicegui/
+
 # Arquivos desnecessários
 commit.txt
 new.txt

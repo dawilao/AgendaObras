@@ -1,18 +1,18 @@
 """
-Módulo de sistema de notificações automáticas de prazos.
-Responsável por verificar prazos e enviar alertas por email conforme regras de negócio.
+Módulo de sistema de notificações automáticas de prazos e gerador de tarefas recorrentes.
 """
 
 import threading
 import time
 import datetime
 import sqlite3
+import calendar
 from typing import Dict, List
 from zoneinfo import ZoneInfo
-from error_logger import log_error
-from auth_database import AuthDatabase
-from contratos_database import ContratosDatabase
-from config import (
+from core.error_logger import log_error
+from db.auth_repo import AuthDatabase
+from db.contratos_repo import ContratosDatabase
+from core.config import (
     EMAIL_DISPARO_HORA,
     EMAIL_DISPARO_MINUTO,
     EMAIL_DISPARO_TIMEZONE,
@@ -22,6 +22,113 @@ from config import (
 # Flag global para controlar se o notificador já está executando
 _notificador_ativo = False
 _notificador_lock = threading.Lock()
+
+
+class GeradorTarefasRecorrentes:
+    """Gera tarefas mensais recorrentes dinamicamente"""
+
+    _TAREFAS_DINAMICAS_EXCLUIDAS = {'MEDIÇÃO', 'CONFIRMAÇÃO DE MEDIÇÃO'}
+
+    def __init__(self, database: 'Database'):
+        self.database = database
+
+    def gerar_tarefas_mensais(self):
+        """Verifica e gera tarefas mensais para obras ativas"""
+        conn = None
+        try:
+            conn = self.database.get_connection()
+            cursor = conn.cursor()
+
+            # Busca obras que já começaram (com data_inicio preenchida e válida)
+            hoje = datetime.date.today()
+            cursor.execute('''
+                SELECT * FROM obras
+                WHERE data_inicio IS NOT NULL AND data_inicio != ''
+                AND data_inicio <= ? AND (data_conclusao IS NULL OR data_conclusao >= ?)
+                AND status != 'Concluída'
+            ''', (hoje.strftime('%Y-%m-%d'), hoje.strftime('%Y-%m-%d')))
+
+            obras_ativas = [dict(row) for row in cursor.fetchall()]
+
+            # Busca templates de tarefas recorrentes
+            cursor.execute('''
+                SELECT * FROM checklist_templates
+                WHERE recorrencia = 'mensal'
+            ''')
+            templates_mensais = [
+                dict(row)
+                for row in cursor.fetchall()
+                if (row['nome'] or '').strip() not in self._TAREFAS_DINAMICAS_EXCLUIDAS
+            ]
+
+            for obra in obras_ativas:
+                # Desbloqueia tarefas mensais template (se ainda estiverem bloqueadas)
+                cursor.execute('''
+                    UPDATE obra_checklist
+                    SET bloqueado = 0
+                    WHERE obra_id = ? AND recorrencia = 'mensal' AND bloqueado = 1 AND mes_referencia IS NULL
+                ''', (obra['id'],))
+
+                # Cria instâncias mensais específicas
+                for template in templates_mensais:
+                    self._verificar_e_criar_mes_atual(cursor, obra, template, hoje)
+
+            conn.commit()
+
+            print(f"🔄 Gerador de tarefas recorrentes executado: {len(obras_ativas)} obra(s) verificada(s)")
+
+        except sqlite3.OperationalError as e:
+            if "locked" in str(e).lower():
+                print(f"⚠️ Banco de dados temporariamente bloqueado ao gerar tarefas recorrentes...")
+            else:
+                log_error(e, "gerador_tarefas_recorrentes", "Gerar tarefas mensais - OperationalError")
+                raise
+        except Exception as e:
+            log_error(e, "gerador_tarefas_recorrentes", "Gerar tarefas mensais")
+            print(f"❌ Erro ao gerar tarefas recorrentes: {e}")
+        finally:
+            if conn:
+                conn.close()
+
+    def _verificar_e_criar_mes_atual(self, cursor, obra: Dict, template: Dict, hoje: datetime.date):
+        """Verifica se existe tarefa mensal para o mês atual e cria se necessário"""
+        mes_ref = hoje.strftime('%Y-%m')
+
+        # Verifica se já existe essa tarefa para este mês
+        cursor.execute('''
+            SELECT id FROM obra_checklist
+            WHERE obra_id = ? AND template_id = ? AND mes_referencia = ?
+        ''', (obra['id'], template['id'], mes_ref))
+
+        if cursor.fetchone():
+            return  # Já existe
+
+        # Calcula data limite baseada no dia de referência mensal
+        dia_ref = template['dia_referencia_mensal']
+        try:
+            data_limite = datetime.date(hoje.year, hoje.month, dia_ref)
+        except ValueError:
+            # Se o dia não existe no mês (ex: 31 em fevereiro), usa último dia do mês
+            ultimo_dia = calendar.monthrange(hoje.year, hoje.month)[1]
+            data_limite = datetime.date(hoje.year, hoje.month, ultimo_dia)
+
+        # Cria a tarefa mensal - formata mês no padrão brasileiro mm/aaaa
+        mes_ref_formatado = hoje.strftime('%m/%Y')
+        descricao = f"{template['nome']} - {mes_ref_formatado}"
+
+        cursor.execute('''
+            INSERT INTO obra_checklist
+            (obra_id, template_id, descricao, prazo_dias, data_limite, tipo,
+             base_calculo, data_base_calculo, bloqueado, recorrencia, mes_referencia,
+             status_notificacao)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ''', (obra['id'], template['id'], descricao, template['prazo_dias'],
+              data_limite.strftime('%Y-%m-%d'), template['tipo'],
+              template['base_calculo'], obra['data_inicio'], 0,
+              'mensal', mes_ref, 'pendente'))
+
+        print(f"  ✅ Criada tarefa mensal: {descricao} para obra {obra['nome_contrato']}")
+
 
 class NotificadorPrazos:
     def __init__(self, database: 'Database', email_service: 'EmailService', gerador_recorrentes: 'GeradorTarefasRecorrentes' = None):
@@ -120,36 +227,36 @@ class NotificadorPrazos:
     def _nome_fuso_horario(self) -> str:
         """Retorna nome amigável da timezone atual."""
         return getattr(self.fuso_horario, 'key', self.fuso_horario.tzname(None) or str(self.fuso_horario))
-    
+
     def iniciar_verificacao(self):
         """Inicia thread de verificação periódica de prazos (singleton global)"""
         global _notificador_ativo
-        
+
         with _notificador_lock:
             if _notificador_ativo:
                 # Já existe um notificador ativo, não inicia outro
                 return
-            
+
             _notificador_ativo = True
             self.executando = True
-            
+
             agora = self._agora_referencia()
             hoje = agora.date()
             horario_alvo = self._horario_alvo_no_dia(hoje)
             ja_executou = self._ja_executou_hoje(hoje)
             eh_dia_util = self._eh_dia_util(hoje)
-            
+
             print(
                 "🔔 Sistema de notificação de prazos iniciado "
                 f"({self.hora_disparo:02d}:{self.minuto_disparo:02d}, seg-sex, tz={self._nome_fuso_horario()})!"
             )
-            
+
             thread = threading.Thread(target=self._verificar_loop, daemon=True)
             thread.start()
-    
+
     def verificar_agora(self, forcar: bool = False):
         """Executa verificação manual de prazos
-        
+
         Args:
             forcar: Se True, ignora verificação de última execução e força o envio
         """
@@ -241,7 +348,7 @@ class NotificadorPrazos:
             print(f"❌ Erro ao verificar prazos ({origem}): {e}")
             self._registrar_execucao(0, 'erro', str(e))
             return False
-    
+
     def _verificar_loop(self):
         """Loop principal: executa em dias úteis às 08:00 (timezone configurada)."""
         while self.executando:
@@ -257,17 +364,17 @@ class NotificadorPrazos:
                 continue
 
             proximo_horario = self._proximo_horario_execucao(agora)
-            
+
             if self._ja_executou_hoje(hoje):
                 print(f"[JA EXECUTOU] Verificacao realizada em {hoje.strftime('%d/%m/%Y')}")
                 print(f"[PRÓX. EXEC] {proximo_horario.strftime('%d/%m/%Y %H:%M:%S')}")
             else:
                 print(f"[PRÓX. EXEC] {proximo_horario.strftime('%d/%m/%Y %H:%M:%S')}")
-            
+
             segundos = int((proximo_horario - agora).total_seconds())
             if segundos > 0:
                 self._aguardar_ate(proximo_horario)
-    
+
     def _verificar_prazos(self) -> int:
         """Verifica tarefas atrasadas e envia alertas agrupados por obra. Retorna total de alertas enviados."""
         # Retry mechanism para lidar com database locked
@@ -277,30 +384,29 @@ class NotificadorPrazos:
             try:
                 conn = self.database.get_connection()
                 cursor = conn.cursor()
-                
+
                 hoje = self._hoje_referencia().strftime('%Y-%m-%d')
-                
+
                 # Busca tarefas não concluídas e não bloqueadas
                 cursor.execute('''
                     SELECT oc.*, o.nome_contrato, o.cliente, o.observacoes, ct.possui_reiteracao, ct.tipo_recorrencia
                     FROM obra_checklist oc
-                    JOIN obras o ON oc.obra_id = o.id 
+                    JOIN obras o ON oc.obra_id = o.id
                     LEFT JOIN checklist_templates ct ON oc.template_id = ct.id
-                    WHERE oc.concluido = 0 AND oc.bloqueado = 0 
+                    WHERE oc.concluido = 0 AND oc.bloqueado = 0
                     AND oc.data_limite IS NOT NULL
                     ORDER BY oc.data_limite
                 ''')
-                
+
                 tarefas = [dict(row) for row in cursor.fetchall()]
-                
+
                 # Dicionário para agrupar alertas por obra
-                # Estrutura: {obra_id: {'info': {...}, 'tarefas': {tipo_alerta: [tarefa_data, ...]}}}
                 alertas_por_obra = {}
-                
+
                 for tarefa in tarefas:
                     data_limite = datetime.datetime.strptime(tarefa['data_limite'], '%Y-%m-%d').date()
-                    dias_diff = (hoje - data_limite).days if isinstance(hoje, datetime.date) else (datetime.datetime.strptime(hoje, '%Y-%m-%d').date() - data_limite).days
-                    
+                    dias_diff = (datetime.datetime.strptime(hoje, '%Y-%m-%d').date() - data_limite).days
+
                     try:
                         # Processa tarefa e obtém dados de alerta (se aplicável)
                         if tarefa['tipo'] == 'A':
@@ -309,11 +415,11 @@ class NotificadorPrazos:
                         else:
                             # Tipo B: Prazo fixo (último dia crítico, depois diário)
                             alerta_data = self._processar_tipo_b(cursor, tarefa, dias_diff)
-                        
+
                         # Se deve enviar alerta, adiciona ao agrupamento por obra
                         if alerta_data:
                             obra_id = tarefa['obra_id']
-                            
+
                             # Inicializa estrutura da obra se não existir
                             if obra_id not in alertas_por_obra:
                                 alertas_por_obra[obra_id] = {
@@ -330,30 +436,30 @@ class NotificadorPrazos:
                                         'tipo_b': []
                                     }
                                 }
-                            
+
                             # Adiciona tarefa no tipo de alerta correspondente
                             tipo_alerta = alerta_data['tipo_alerta']
                             alertas_por_obra[obra_id]['tarefas'][tipo_alerta].append(alerta_data)
-                            
+
                     except Exception as e:
                         print(f"⚠️ Erro ao processar tarefa {tarefa['id']}: {e}")
                         continue
-                
+
                 # Envia emails agrupados por obra
                 total_emails_enviados = 0
                 for obra_id, dados_obra in alertas_por_obra.items():
                     if self._enviar_email_agrupado_por_obra(obra_id, dados_obra):
                         total_emails_enviados += 1
-                
+
                 if total_emails_enviados > 0:
                     total_tarefas = sum(
-                        len(tarefas) 
-                        for obra in alertas_por_obra.values() 
+                        len(tarefas)
+                        for obra in alertas_por_obra.values()
                         for tarefas in obra['tarefas'].values()
                     )
                     print(f"\n📧 {total_emails_enviados} email(s) enviado(s) para {total_tarefas} tarefa(s)\n")
                     obras_com_emails = [dados['info']['nome_contrato'] for obra_id, dados in alertas_por_obra.items() if any(dados['tarefas'].values())]
-                    
+
                     print(f"Obra(s) com e-mails enviados:")
                     for nome in obras_com_emails:
                         print(f"   - {nome}\n")
@@ -403,43 +509,43 @@ class NotificadorPrazos:
             finally:
                 if conn:
                     conn.close()
-        
+
         return 0
-    
+
     def _processar_tipo_a(self, cursor, tarefa: Dict, dias_diff: int):
         """Processa notificação para tarefa Tipo A (com reiterações)
-        
+
         Returns:
             Dict com dados do alerta se deve enviar, None caso contrário
         """
         tentativas = tarefa['tentativas_reiteracao']
         ultima_notif = tarefa['ultima_notificacao']
         tipo_recorrencia = tarefa.get('tipo_recorrencia', 'padrao')
-        
+
         # Se ainda não passou do prazo, não faz nada
         if dias_diff < 0:
             return None
-        
+
         agora = self._agora_referencia()
         hoje_str = agora.strftime('%Y-%m-%d %H:%M:%S')
         hoje_data_str = agora.strftime('%Y-%m-%d')
         hoje_obj = agora.date()
-        
+
         # Verifica se já enviou hoje (compara apenas a data)
         if ultima_notif:
             # Extrai apenas a data do campo ultima_notificacao (pode ter hora ou não)
             data_ultima_notif = ultima_notif.split(' ')[0] if ' ' in ultima_notif else ultima_notif
             if data_ultima_notif == hoje_data_str:
                 return None
-        
+
         deve_enviar = False
         tipo_alerta = None
         nova_tentativa = tentativas
-        
+
         # Lógica especial para CONFIRMAÇÃO DE MEDIÇÃO (dias do mês 11, 12, 13+)
         if tipo_recorrencia == 'confirmacao':
             dia_mes = hoje_obj.day
-            
+
             # Dia 10: Criação da tarefa (sem alerta)
             # Dia 11: Reiteração 1
             if dia_mes == 11 and tentativas == 0:
@@ -474,7 +580,7 @@ class NotificadorPrazos:
                 # Após 3ª reiteração: alerta crítico diário
                 deve_enviar = True
                 tipo_alerta = 'critico_atrasado'
-        
+
         if deve_enviar:
             # Retorna dados do alerta para processamento posterior
             return {
@@ -488,12 +594,12 @@ class NotificadorPrazos:
                 'hoje_str': hoje_str,
                 'status': 'atrasado' if tipo_alerta == 'critico_atrasado' else 'alerta'
             }
-        
+
         return None
-    
+
     def _processar_tipo_b(self, cursor, tarefa: Dict, dias_diff: int):
         """Processa notificação para tarefa Tipo B (prazo fixo)
-        
+
         Returns:
             Dict com dados do alerta se deve enviar, None caso contrário
         """
@@ -501,26 +607,26 @@ class NotificadorPrazos:
         agora = self._agora_referencia()
         hoje_str = agora.strftime('%Y-%m-%d %H:%M:%S')
         hoje_data_str = agora.strftime('%Y-%m-%d')
-        
+
         # Verifica se já enviou hoje (compara apenas a data)
         if ultima_notif:
             # Extrai apenas a data do campo ultima_notificacao (pode ter hora ou não)
             data_ultima_notif = ultima_notif.split(' ')[0] if ' ' in ultima_notif else ultima_notif
             if data_ultima_notif == hoje_data_str:
                 return None
-        
+
         deve_enviar = False
         tipo_alerta = None
-        
+
         if dias_diff == 0:
             # Último dia - alerta crítico
             deve_enviar = True
             tipo_alerta = 'tipo_b'
         elif dias_diff > 0:
-            # Atrasado - alerta crítico diário  
+            # Atrasado - alerta crítico diário
             deve_enviar = True
             tipo_alerta = 'tipo_b'
-        
+
         if deve_enviar:
             # Retorna dados do alerta para processamento posterior
             return {
@@ -533,57 +639,48 @@ class NotificadorPrazos:
                 'hoje_str': hoje_str,
                 'status': 'critico' if dias_diff == 0 else 'atrasado'
             }
-        
+
         return None
-    
+
     def _enviar_email_agrupado_por_obra(self, obra_id: int, dados_obra: Dict) -> bool:
-        """Envia email agrupado com todas as tarefas de uma obra e atualiza banco
-        
-        Args:
-            obra_id: ID da obra
-            dados_obra: Dict com 'info' (nome_contrato, cliente) e 'tarefas' (agrupadas por tipo)
-        
-        Returns:
-            True se enviou com sucesso, False caso contrário
-        """
+        """Envia email agrupado com todas as tarefas de uma obra e atualiza banco"""
         obra_info = dados_obra['info']
         tarefas_agrupadas = dados_obra['tarefas']
-        
+
         # Filtra apenas tipos que têm tarefas
         tarefas_com_conteudo = {
-            tipo: tarefas 
-            for tipo, tarefas in tarefas_agrupadas.items() 
+            tipo: tarefas
+            for tipo, tarefas in tarefas_agrupadas.items()
             if len(tarefas) > 0
         }
-        
+
         if not tarefas_com_conteudo:
             return False
-        
+
         # Gera email agrupado
         try:
             assunto, corpo_html, tem_critico = self.email_service.criar_email_agrupado_por_obra(
-                obra_info, 
+                obra_info,
                 tarefas_com_conteudo
             )
-            
+
             # Monta lista de destinatários por vínculo de contrato.
-            # Admin recebe todos os contratos; não-admin só os contratos vinculados.
             destinatario = self._obter_destinatarios_por_contrato(obra_info.get('cliente'), tem_critico)
             if not destinatario:
                 print(f"⚠️ Sem destinatários para obra {obra_info['nome_contrato']} (contrato: {obra_info.get('cliente')})")
                 return False
 
             sucesso, msg = self.email_service.enviar_email(destinatario, assunto, corpo_html)
-            
+
             if not sucesso:
                 print(f"❌ Falha ao enviar email para obra {obra_info['nome_contrato']}: {msg}")
                 return False
-            
+
             # Atualiza banco para todas as tarefas
             for tipo_alerta, lista_tarefas in tarefas_com_conteudo.items():
                 for tarefa_data in lista_tarefas:
                     tarefa_id = tarefa_data['tarefa_id']
-                    
+
                     # Atualiza campos de controle da tarefa
                     if 'nova_tentativa' in tarefa_data:
                         # Tipo A (com reiterações)
@@ -600,7 +697,7 @@ class NotificadorPrazos:
                             tarefa_data['hoje_str'],
                             tarefa_data['status']
                         )
-                    
+
                     # Registra histórico individual para cada tarefa
                     self._registrar_historico_com_retry(
                         obra_id,
@@ -610,71 +707,71 @@ class NotificadorPrazos:
                         sucesso,
                         None if sucesso else msg
                     )
-            
+
             # Log de sucesso
             total_tarefas = sum(len(tarefas) for tarefas in tarefas_com_conteudo.values())
             print(f"📧 Email agrupado enviado: {obra_info['nome_contrato']} ({total_tarefas} tarefa(s))")
             return True
-            
+
         except Exception as e:
             print(f"❌ Erro ao enviar email agrupado para obra {obra_info['nome_contrato']}: {e}")
             return False
-    
+
     def _ja_executou_hoje(self, data_referencia: datetime.date = None) -> bool:
         """Verifica se a verificação de prazos já foi executada na data de referência."""
         try:
             conn = self.database.get_connection()
             cursor = conn.cursor()
-            
+
             data_referencia = data_referencia or self._hoje_referencia()
             hoje = data_referencia.strftime('%Y-%m-%d')
             cursor.execute('''
-                SELECT COUNT(*) FROM verificacoes_prazos 
+                SELECT COUNT(*) FROM verificacoes_prazos
                 WHERE data_verificacao = ? AND status = 'concluida'
             ''', (hoje,))
-            
+
             count = cursor.fetchone()[0]
             conn.close()
-            
+
             return count > 0
         except Exception as e:
             print(f"⚠️ Erro ao verificar última execução: {e}")
             return False
-    
+
     def _registrar_execucao(self, alertas_enviados: int = 0, status: str = 'concluida', mensagem_erro: str = None):
         """Registra a execução na data da timezone de referência."""
         try:
             conn = self.database.get_connection()
             cursor = conn.cursor()
-            
+
             agora_ref = self._agora_referencia()
             hoje = agora_ref.strftime('%Y-%m-%d')
             agora = agora_ref.strftime('%Y-%m-%d %H:%M:%S')
-            
+
             # Conta tarefas verificadas
             cursor.execute('''
-                SELECT COUNT(*) FROM obra_checklist 
+                SELECT COUNT(*) FROM obra_checklist
                 WHERE concluido = 0 AND bloqueado = 0 AND data_limite IS NOT NULL
             ''')
             tarefas_verificadas = cursor.fetchone()[0]
-            
+
             # Insere ou atualiza registro
             cursor.execute('''
-                INSERT OR REPLACE INTO verificacoes_prazos 
+                INSERT OR REPLACE INTO verificacoes_prazos
                 (data_verificacao, data_hora_inicio, data_hora_fim, tarefas_verificadas, alertas_enviados, status, mensagem_erro)
                 VALUES (?, ?, ?, ?, ?, ?, ?)
             ''', (hoje, agora, agora, tarefas_verificadas, alertas_enviados, status, mensagem_erro))
-            
+
             conn.commit()
             conn.close()
-            
+
             if status == 'concluida':
                 print(f"✅ Verificação de prazos concluída e registrada para {hoje} ({tarefas_verificadas} tarefas verificadas, {alertas_enviados} alertas enviados)")
             else:
                 print(f"⚠️ Verificação de prazos registrada com status '{status}' para {hoje}")
         except Exception as e:
             print(f"⚠️ Erro ao registrar execução: {e}")
-    
+
     def _atualizar_tarefa_com_retry(self, tarefa_id: int, tentativas: int, ultima_notif: str, status: str, max_tentativas: int = 5):
         """Atualiza tarefa com retry em caso de database locked"""
         for tentativa in range(max_tentativas):
@@ -682,17 +779,17 @@ class NotificadorPrazos:
             try:
                 conn = self.database.get_connection()
                 cursor = conn.cursor()
-                
+
                 cursor.execute('''
-                    UPDATE obra_checklist 
+                    UPDATE obra_checklist
                     SET tentativas_reiteracao = ?, ultima_notificacao = ?, status_notificacao = ?
                     WHERE id = ?
                 ''', (tentativas, ultima_notif, status, tarefa_id))
-                
+
                 conn.commit()
                 conn.close()
                 return True
-                
+
             except sqlite3.OperationalError as e:
                 if "locked" in str(e).lower():
                     if conn:
@@ -702,7 +799,7 @@ class NotificadorPrazos:
                             log_error(e_close, "notificador_prazos", "Fechar conexão após database locked em _atualizar_tarefa_com_retry")
                             pass
                     if tentativa < max_tentativas - 1:
-                        time.sleep(0.5)  # Aguarda 500ms antes de tentar novamente
+                        time.sleep(0.5)
                         continue
                     else:
                         print(f"❌ Falha ao atualizar tarefa {tarefa_id} após {max_tentativas} tentativas")
@@ -720,7 +817,7 @@ class NotificadorPrazos:
                         pass
                 return False
         return False
-    
+
     def _registrar_historico_com_retry(self, obra_id: int, tarefa_id: int, tipo: str, destinatarios: str, sucesso: bool, erro: str = None, max_tentativas: int = 5):
         """Registra histórico com retry em caso de database locked"""
         for tentativa in range(max_tentativas):
@@ -728,23 +825,23 @@ class NotificadorPrazos:
             try:
                 conn = self.database.get_connection()
                 cursor = conn.cursor()
-                
+
                 data_envio = self._agora_referencia().strftime('%Y-%m-%d %H:%M:%S')
-                
+
                 # Converte a lista de destinatários em string para armazenamento (se for lista)
                 if isinstance(destinatarios, list):
                     destinatarios_str = ", ".join(destinatarios)
 
                 cursor.execute('''
-                    INSERT INTO historico_notificacoes 
+                    INSERT INTO historico_notificacoes
                     (obra_id, tarefa_id, tipo_notificacao, data_envio, destinatarios, sucesso, mensagem_erro)
                     VALUES (?, ?, ?, ?, ?, ?, ?)
                 ''', (obra_id, tarefa_id, tipo, data_envio, destinatarios_str, 1 if sucesso else 0, erro))
-                
+
                 conn.commit()
                 conn.close()
                 return True
-                
+
             except sqlite3.OperationalError as e:
                 if "locked" in str(e).lower():
                     if conn:
@@ -754,7 +851,7 @@ class NotificadorPrazos:
                             log_error(e_close, "notificador_prazos", "Fechar conexão após database locked em _registrar_historico_com_retry")
                             pass
                     if tentativa < max_tentativas - 1:
-                        time.sleep(0.5)  # Aguarda 500ms antes de tentar novamente
+                        time.sleep(0.5)
                         continue
                     else:
                         print(f"❌ Falha ao registrar histórico após {max_tentativas} tentativas")
@@ -772,7 +869,7 @@ class NotificadorPrazos:
                         pass
                 return False
         return False
-    
+
     def _atualizar_tarefa_tipo_b_com_retry(self, tarefa_id: int, ultima_notif: str, status: str, max_tentativas: int = 5):
         """Atualiza tarefa tipo B com retry em caso de database locked"""
         for tentativa in range(max_tentativas):
@@ -780,17 +877,17 @@ class NotificadorPrazos:
             try:
                 conn = self.database.get_connection()
                 cursor = conn.cursor()
-                
+
                 cursor.execute('''
-                    UPDATE obra_checklist 
+                    UPDATE obra_checklist
                     SET ultima_notificacao = ?, status_notificacao = ?
                     WHERE id = ?
                 ''', (ultima_notif, status, tarefa_id))
-                
+
                 conn.commit()
                 conn.close()
                 return True
-                
+
             except sqlite3.OperationalError as e:
                 if "locked" in str(e).lower():
                     if conn:
@@ -800,7 +897,7 @@ class NotificadorPrazos:
                             log_error(e_close, "notificador_prazos", "Fechar conexão após database locked em _atualizar_tarefa_tipo_b_com_retry")
                             pass
                     if tentativa < max_tentativas - 1:
-                        time.sleep(0.5)  # Aguarda 500ms antes de tentar novamente
+                        time.sleep(0.5)
                         continue
                     else:
                         print(f"❌ Falha ao atualizar tarefa tipo B {tarefa_id} após {max_tentativas} tentativas")

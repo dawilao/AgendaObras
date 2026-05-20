@@ -10,9 +10,9 @@ import datetime
 # Adiciona o diretório pai ao path para importar os módulos
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from email_service import EmailService
-from database import Database
-from config import EmailConfig
+from services.email_service import EmailService
+from db import Database
+from core.config import EmailConfig
 
 
 def teste_configuracao():

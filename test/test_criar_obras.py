@@ -11,7 +11,7 @@ import datetime
 # Adiciona o diretório pai ao path para importar os módulos
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from database import Database
+from db import Database
 
 def gerar_obras_aleatorias():
     """Gera 4 obras com dados aleatórios realistas"""

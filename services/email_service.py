@@ -10,11 +10,11 @@ from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from email.header import Header
 from typing import Tuple, Dict, List
-from error_logger import log_error
-from config import (
-    EmailConfig, 
-    TEMPLATE_EMAIL_ALERTA_A, 
-    TEMPLATE_EMAIL_ALERTA_B, 
+from core.error_logger import log_error
+from core.config import (
+    EmailConfig,
+    TEMPLATE_EMAIL_ALERTA_A,
+    TEMPLATE_EMAIL_ALERTA_B,
     TEMPLATE_EMAIL_CRITICO_ATRASADO,
     TEMPLATE_EMAIL_OBRA_PENDENCIAS,
     TEMPLATE_EMAIL_AGRUPADO_POR_OBRA,
@@ -26,43 +26,44 @@ from config import (
 
 class EmailService:
     """Serviço para envio de emails via SMTP"""
-    
+
     def __init__(self, database: 'Database'):
         self.database = database
         self.config = EmailConfig.carregar()
-    
+
     def recarregar_config(self):
         """Recarrega configuração de email"""
         self.config = EmailConfig.carregar()
-    
-    def enviar_email(self, destinatario: str, assunto: str, corpo_html: str) -> Tuple[bool, str]:
-        """Envia email via SMTP"""
+
+    def enviar_email(self, destinatario, assunto: str, corpo_html: str) -> Tuple[bool, str]:
+        """Envia email via SMTP. destinatario pode ser str ou list[str]."""
         if not self.config.is_configured():
             return (False, "Configuração SMTP não encontrada.")
-        
+
         try:
+            destinatarios = [destinatario] if isinstance(destinatario, str) else list(destinatario)
             msg = MIMEMultipart('alternative')
             msg['Subject'] = str(Header(assunto or '', 'utf-8'))
             msg['From'] = self.config.email_remetente
-            msg['To'] = ", ".join(destinatario)
-            
+            msg['To'] = ", ".join(destinatarios)
+
             html_part = MIMEText(corpo_html, 'html', 'utf-8')
             msg.attach(html_part)
-            
+
             # Conecta ao servidor SMTP
             if self.config.usar_tls:
                 server = smtplib.SMTP(self.config.smtp_server, self.config.smtp_port, timeout=30)
                 server.starttls()
             else:
                 server = smtplib.SMTP_SSL(self.config.smtp_server, self.config.smtp_port, timeout=30)
-            
+
             server.login(self.config.smtp_user, self.config.smtp_password)
-            server.send_message(msg)
+            server.send_message(msg, to_addrs=destinatarios)
             server.quit()
-            
-            print(f"✅ Email enviado com sucesso para {destinatario}")
+
+            print(f"✅ Email enviado com sucesso para {', '.join(destinatarios)}")
             return (True, "Email enviado com sucesso")
-            
+
         except smtplib.SMTPAuthenticationError as e:
             erro = "Falha na autenticação SMTP. Verifique usuário e senha."
             log_error(e, "email_service", f"Autenticação SMTP para {destinatario}")
@@ -78,19 +79,19 @@ class EmailService:
             log_error(e, "email_service", f"Enviar email para {destinatario} - assunto: {assunto}")
             print(f"❌ {erro}")
             return (False, erro)
-    
+
     def testar_conexao(self) -> Tuple[bool, str]:
         """Testa conexão SMTP sem enviar email"""
         if not self.config.is_configured():
             return (False, "Configuração incompleta")
-        
+
         try:
             if self.config.usar_tls:
                 server = smtplib.SMTP(self.config.smtp_server, self.config.smtp_port, timeout=10)
                 server.starttls()
             else:
                 server = smtplib.SMTP_SSL(self.config.smtp_server, self.config.smtp_port, timeout=10)
-            
+
             server.login(self.config.smtp_user, self.config.smtp_password)
             server.quit()
             return (True, "Conexão SMTP bem-sucedida!")
@@ -104,8 +105,6 @@ class EmailService:
         if not texto:
             return ''
 
-        # Converte acentos para entidades HTML numéricas para maior compatibilidade
-        # entre clientes de e-mail com suporte inconsistente de charset.
         texto_html = (
             html.escape(texto)
             .encode('ascii', errors='xmlcharrefreplace')
@@ -123,7 +122,7 @@ class EmailService:
         """Normaliza texto para HTML com entidades ASCII para máxima compatibilidade."""
         texto = str(valor or '')
         return html.escape(texto).encode('ascii', errors='xmlcharrefreplace').decode('ascii')
-    
+
     def criar_email_alerta_tipo_a(self, tarefa: Dict, reiteracao: int) -> str:
         """Cria HTML de email para tarefa Tipo A (com reiteração)"""
         data_limite = datetime.datetime.strptime(tarefa['data_limite'], '%Y-%m-%d')
@@ -132,14 +131,14 @@ class EmailService:
         nome_contrato = self._texto_html(tarefa.get('nome_contrato'))
         cliente = self._texto_html(tarefa.get('cliente'))
         tarefa_desc = self._texto_html(tarefa.get('descricao'))
-        
+
         dias_atraso = (datetime.date.today() - data_limite.date()).days
-        
+
         if reiteracao == 3:
             mensagem_adicional = "<p style='color: #d32f2f; font-weight: bold;'>⚠️ ATENÇÃO: Esta é a última reiteração automática. Após esta, os alertas se tornarão CRÍTICOS e DIÁRIOS.</p>"
         else:
             mensagem_adicional = f"<p>Próxima reiteração em 2 dias caso a tarefa não seja concluída.</p>"
-        
+
         return TEMPLATE_EMAIL_ALERTA_A.format(
             reiteracao=reiteracao,
             nome_contrato=nome_contrato,
@@ -151,7 +150,7 @@ class EmailService:
             secao_observacoes=secao_observacoes,
             data_envio=datetime.datetime.now().strftime('%d/%m/%Y %H:%M:%S')
         )
-    
+
     def criar_email_alerta_tipo_b(self, tarefa: Dict) -> str:
         """Cria HTML de email para tarefa Tipo B (prazo fixo)"""
         data_limite = datetime.datetime.strptime(tarefa['data_limite'], '%Y-%m-%d')
@@ -160,7 +159,7 @@ class EmailService:
         nome_contrato = self._texto_html(tarefa.get('nome_contrato'))
         cliente = self._texto_html(tarefa.get('cliente'))
         tarefa_desc = self._texto_html(tarefa.get('descricao'))
-        
+
         hoje = datetime.date.today()
         if data_limite.date() == hoje:
             status = "ÚLTIMO DIA DO PRAZO - HOJE"
@@ -169,7 +168,7 @@ class EmailService:
         else:
             status = "Dentro do prazo"
         status = self._texto_html(status)
-        
+
         return TEMPLATE_EMAIL_ALERTA_B.format(
             nome_contrato=nome_contrato,
             cliente=cliente,
@@ -179,7 +178,7 @@ class EmailService:
             secao_observacoes=secao_observacoes,
             data_envio=datetime.datetime.now().strftime('%d/%m/%Y %H:%M:%S')
         )
-    
+
     def criar_email_critico_atrasado(self, tarefa: Dict, dias_atraso: int) -> str:
         """Cria HTML de email crítico para tarefa atrasada"""
         data_limite = datetime.datetime.strptime(tarefa['data_limite'], '%Y-%m-%d')
@@ -188,7 +187,7 @@ class EmailService:
         nome_contrato = self._texto_html(tarefa.get('nome_contrato'))
         cliente = self._texto_html(tarefa.get('cliente'))
         tarefa_desc = self._texto_html(tarefa.get('descricao'))
-        
+
         return TEMPLATE_EMAIL_CRITICO_ATRASADO.format(
             nome_contrato=nome_contrato,
             cliente=cliente,
@@ -198,65 +197,65 @@ class EmailService:
             secao_observacoes=secao_observacoes,
             data_envio=datetime.datetime.now().strftime('%d/%m/%Y %H:%M:%S')
         )
-    
-    def registrar_envio(self, obra_id: int, tarefa_id: int, tipo_notificacao: str, 
+
+    def registrar_envio(self, obra_id: int, tarefa_id: int, tipo_notificacao: str,
                        destinatarios: str, sucesso: bool, mensagem_erro: str = None):
         """Registra envio de notificação no histórico"""
         conn = self.database.get_connection()
         cursor = conn.cursor()
-        
+
         cursor.execute('''
-            INSERT INTO historico_notificacoes 
+            INSERT INTO historico_notificacoes
             (obra_id, tarefa_id, tipo_notificacao, data_envio, destinatarios, sucesso, mensagem_erro)
             VALUES (?, ?, ?, ?, ?, ?, ?)
-        ''', (obra_id, tarefa_id, tipo_notificacao, 
+        ''', (obra_id, tarefa_id, tipo_notificacao,
               datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
               destinatarios, 1 if sucesso else 0, mensagem_erro))
-        
+
         conn.commit()
         conn.close()
-    
+
     def criar_email_agrupado_por_obra(self, obra_info: Dict, tarefas_agrupadas: Dict[str, List[Dict]]) -> Tuple[str, str, bool]:
         """Cria HTML de email agrupado por obra com múltiplas tarefas
-        
+
         Args:
             obra_info: Dict com 'nome_contrato' e 'cliente'
             tarefas_agrupadas: Dict com chaves 'reiteracao_1', 'reiteracao_2', 'reiteracao_3', 'critico_atrasado', 'tipo_b'
                                Cada chave contém lista de dicts com dados da tarefa
-        
+
         Returns:
             Tuple (assunto, corpo_html)
         """
         # Conta total de tarefas
         total_tarefas = sum(len(tarefas) for tarefas in tarefas_agrupadas.values())
-        
+
         # Determina se há tarefas críticas para ajustar estilo
         tem_critico = len(tarefas_agrupadas.get('critico_atrasado', [])) > 0 or len(tarefas_agrupadas.get('tipo_b', [])) > 0
         header_class = ' critico' if tem_critico else ''
         resumo_class = ' critico' if tem_critico else ''
-        
+
         # Texto singular/plural
         texto_tarefas = 'tarefa' if total_tarefas == 1 else 'tarefas'
-        
+
         # Gera seções de conteúdo - ORDEM POR CRITICIDADE (mais crítico primeiro)
         secoes_html = []
-        
+
         # 1. MAIS CRÍTICO: Tarefas Críticas Atrasadas
         tarefas_critico = tarefas_agrupadas.get('critico_atrasado', [])
         if tarefas_critico:
             # Ordena por dias de atraso (mais atrasadas primeiro)
             tarefas_critico_ordenadas = sorted(
-                tarefas_critico, 
+                tarefas_critico,
                 key=lambda t: (datetime.date.today() - datetime.datetime.strptime(t['data_limite'], '%Y-%m-%d').date()).days,
                 reverse=True
             )
-            
+
             linhas = []
             for tarefa in tarefas_critico_ordenadas:
                 data_limite = datetime.datetime.strptime(tarefa['data_limite'], '%Y-%m-%d')
                 prazo_formatado = data_limite.strftime('%d/%m/%Y')
                 dias_atraso = (datetime.date.today() - data_limite.date()).days
-                
+
                 linha = f"""
                 <tr>
                     <td class="tarefa-nome">{tarefa['descricao']}</td>
@@ -266,13 +265,13 @@ class EmailService:
                 </tr>
                 """
                 linhas.append(linha)
-            
+
             secao = SECAO_CRITICO_ATRASADO.format(
                 linhas_tarefas=''.join(linhas),
                 contador=len(tarefas_critico_ordenadas)
             )
             secoes_html.append(secao)
-        
+
         # 2. Tarefas Tipo B (Prazo Fixo) - Último dia ou atrasadas
         tarefas_tipo_b = tarefas_agrupadas.get('tipo_b', [])
         if tarefas_tipo_b:
@@ -286,7 +285,7 @@ class EmailService:
             for tarefa in tarefas_tipo_b_ordenadas:
                 data_limite = datetime.datetime.strptime(tarefa['data_limite'], '%Y-%m-%d')
                 prazo_formatado = data_limite.strftime('%d/%m/%Y')
-                
+
                 hoje = datetime.date.today()
                 if data_limite.date() == hoje:
                     status = "ÚLTIMO DIA"
@@ -301,7 +300,7 @@ class EmailService:
                     status = "No prazo"
                     dias = "OK"
                     classe_dias = "dias-atraso leve"
-                
+
                 linha = f"""
                 <tr>
                     <td class="tarefa-nome">{tarefa['descricao']}</td>
@@ -311,18 +310,18 @@ class EmailService:
                 </tr>
                 """
                 linhas.append(linha)
-            
+
             secao = SECAO_TIPO_B.format(
                 linhas_tarefas=''.join(linhas),
                 contador=len(tarefas_tipo_b_ordenadas)
             )
             secoes_html.append(secao)
-        
+
         # 3. Reiterações - Ordem decrescente (3ª, 2ª, 1ª) para mostrar mais críticas primeiro
         for num_reiteracao in [3, 2, 1]:
             chave = f'reiteracao_{num_reiteracao}'
             tarefas = tarefas_agrupadas.get(chave, [])
-            
+
             if tarefas:
                 # Ordena por dias de atraso (mais atrasadas primeiro)
                 tarefas_ordenadas = sorted(
@@ -330,13 +329,13 @@ class EmailService:
                     key=lambda t: (datetime.date.today() - datetime.datetime.strptime(t['data_limite'], '%Y-%m-%d').date()).days,
                     reverse=True
                 )
-                
+
                 linhas = []
                 for tarefa in tarefas_ordenadas:
                     data_limite = datetime.datetime.strptime(tarefa['data_limite'], '%Y-%m-%d')
                     prazo_formatado = data_limite.strftime('%d/%m/%Y')
                     dias_atraso = (datetime.date.today() - data_limite.date()).days
-                    
+
                     # Classe CSS baseada nos dias de atraso
                     if dias_atraso > 7:
                         classe_dias = "dias-atraso"
@@ -344,7 +343,7 @@ class EmailService:
                         classe_dias = "dias-atraso medio"
                     else:
                         classe_dias = "dias-atraso leve"
-                    
+
                     linha = f"""
                     <tr>
                         <td class="tarefa-nome">{tarefa['descricao']}</td>
@@ -354,19 +353,19 @@ class EmailService:
                     </tr>
                     """
                     linhas.append(linha)
-                
+
                 # Mensagem especial para 3ª reiteração
                 mensagem_rodape = ""
                 if num_reiteracao == 3:
                     mensagem_rodape = '<div class="secao-rodape urgente">⚠️ ÚLTIMA REITERAÇÃO: Após esta, os alertas se tornarão CRÍTICOS e DIÁRIOS.</div>'
-                
+
                 if num_reiteracao == 1:
                     titulo = "Reiterações - Primeira Notificação"
                 elif num_reiteracao == 2:
                     titulo = "Reiterações - Segunda Notificação"
                 else:
                     titulo = "Reiterações - Terceira Notificação (ÚLTIMA)"
-                
+
                 secao = SECAO_REITERACAO.format(
                     titulo_secao=titulo,
                     linhas_tarefas=''.join(linhas),
@@ -374,7 +373,7 @@ class EmailService:
                     contador=len(tarefas_ordenadas)
                 )
                 secoes_html.append(secao)
-        
+
         # Monta HTML final
         secao_observacoes = self._montar_secao_observacoes_html(obra_info.get('observacoes'))
         nome_contrato_html = self._texto_html(obra_info.get('nome_contrato'))
@@ -390,13 +389,13 @@ class EmailService:
             secao_observacoes=secao_observacoes,
             data_envio=datetime.datetime.now().strftime('%d/%m/%Y %H:%M:%S')
         )
-        
+
         # Gera assunto
         if tem_critico:
             assunto = f"🆘 [CRÍTICO] Obra {obra_info['nome_contrato']} - {total_tarefas} {texto_tarefas} em alerta"
         else:
             assunto = f"⚠️ Obra {obra_info['nome_contrato']} - {total_tarefas} {texto_tarefas} precisam de atenção"
-        
+
         return (assunto, corpo_html, tem_critico)
 
     def criar_email_obras_com_pendencias(self, obra_info: Dict) -> Tuple[str, str, bool]:

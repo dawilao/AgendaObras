@@ -15,10 +15,10 @@ import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from auth_database import AuthDatabase
-from contratos_database import ContratosDatabase
-from database import Database
-from notificador_prazos import NotificadorPrazos
+from db.auth_repo import AuthDatabase
+from db.contratos_repo import ContratosDatabase
+from db import Database
+from services.notificador import NotificadorPrazos
 
 
 class _DummyConfig:

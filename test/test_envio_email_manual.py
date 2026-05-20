@@ -9,10 +9,9 @@ import os
 # Adiciona o diretório pai ao path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from database import Database, CAMINHO_DB
-from email_service import EmailService
-from gerador_tarefas_recorrentes import GeradorTarefasRecorrentes
-from notificador_prazos import NotificadorPrazos
+from db import Database, CAMINHO_DB
+from services.email_service import EmailService
+from services.notificador import GeradorTarefasRecorrentes, NotificadorPrazos
 
 def main():
     print("=" * 70)

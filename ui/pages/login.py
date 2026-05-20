@@ -4,8 +4,8 @@ Exibe formulário de login ou cadastro do primeiro usuário (admin).
 """
 
 from nicegui import ui, app
-from auth_database import AuthDatabase
-from config import VERSION
+from db.auth_repo import AuthDatabase
+from core.config import VERSION
 
 
 class LoginPage:
