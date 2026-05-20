@@ -456,6 +456,27 @@ class ChecklistRepository(BaseRepository):
         conn.close()
         return row['pendentes'] == 0
 
+    def verificar_ultima_confirmacao_medicao(self, obra_id: int, item_id: int) -> bool:
+        """Retorna True se item_id é a última CONFIRMAÇÃO DE MEDIÇÃO pendente da obra.
+        Deve ser chamado ANTES de marcar_item_checklist para evitar contar itens recém-desbloqueados."""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        cursor.execute('''
+            SELECT COUNT(*) as pendentes
+            FROM obra_checklist
+            WHERE obra_id = ?
+              AND id != ?
+              AND (
+                descricao LIKE 'MEDIÇÃO %'
+                OR descricao LIKE 'CONFIRMAÇÃO DE MEDIÇÃO %'
+              )
+              AND concluido = 0
+              AND bloqueado = 0
+        ''', (obra_id, item_id))
+        row = cursor.fetchone()
+        conn.close()
+        return row['pendentes'] == 0
+
     def registrar_finalizacao_obra(self, obra_id: int, status_conclusao_obra: str) -> bool:
         status_normalizado = (status_conclusao_obra or '').strip().lower()
         if status_normalizado not in {'sem_pendencias', 'com_pendencias'}:
