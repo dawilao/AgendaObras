@@ -141,7 +141,7 @@ class ObraDialogsMixin:
                     data_inicio: str, status: str, **kwargs):
         """Salva nova obra no banco de dados"""
         if not nome or not cliente:
-            self.notificar('⚠️ Nome do contrato e Contrato são obrigatórios!', tipo='warning')
+            self.notificar('Nome do contrato e Contrato são obrigatórios!', tipo='warning')
             return
 
         if not self._usuario_pode_acessar_contrato(cliente):
@@ -149,12 +149,12 @@ class ObraDialogsMixin:
             return
 
         if not valor or valor <= 0:
-            self.notificar('⚠️ Valor do contrato deve ser maior que zero!', tipo='warning')
+            self.notificar('Valor do contrato deve ser maior que zero!', tipo='warning')
             return
 
         total_obra = kwargs.get('total_obra')
         if not total_obra or total_obra <= 0:
-            self.notificar('⚠️ [FASE 3] Total da Obra é obrigatório e deve ser maior que zero!', tipo='warning')
+            self.notificar('Total da Obra é obrigatório e deve ser maior que zero!', tipo='warning')
             return
 
         try:
@@ -182,7 +182,7 @@ class ObraDialogsMixin:
         """Dialog para visualizar e editar obra com checklist"""
         obra = self.db.obter_obra(obra_id)
         if not obra:
-            self.notificar('⚠️ Obra não encontrada.', tipo='warning')
+            self.notificar('Obra não encontrada.', tipo='warning')
             return
 
         if not self._usuario_pode_acessar_contrato(obra.get('cliente')):
@@ -398,7 +398,7 @@ class ObraDialogsMixin:
                             obra['obs_usuario'] = obs_usuario or ''
                             obra['obs_data'] = obs_data or ''
                         else:
-                            self.notificar('⚠️ Não foi possível salvar automaticamente as observações.', tipo='warning')
+                            self.notificar('Não foi possível salvar automaticamente as observações.', tipo='warning')
                 except Exception as e:
                     log_error(e, "agenda_obras", f"Auto-save ao sair do diálogo da obra - ID: {obra_id}")
                 finally:
@@ -467,7 +467,7 @@ class ObraDialogsMixin:
         dialog.open()
 
         if contrato_fora_da_lista:
-            self.notificar('⚠️ Selecione um contrato da lista para continuar.', tipo='warning')
+            self.notificar('Selecione um contrato da lista para continuar.', tipo='warning')
 
         datas_pendentes = {}
         if contrato_assinado_concluido and not (obra.get('data_assinatura') or '').strip():
@@ -752,7 +752,7 @@ class ObraDialogsMixin:
     def salvar_data_critica(self, dialog, obra_id: int, campo: str, data: str, atualizar_checklist_fn=None, dialog_edicao=None):
         """Salva data crítica e recalcula checklist"""
         if not data:
-            self.notificar('⚠️ Informe uma data válida!', tipo='warning')
+            self.notificar('Informe uma data válida!', tipo='warning')
             return
 
         try:
@@ -792,12 +792,12 @@ class ObraDialogsMixin:
         """Abre diálogo para o usuário selecionar quantas medições deseja (0-6)."""
         obra = self.db.obter_obra(obra_id)
         if not obra:
-            self.notificar('⚠️ Obra não encontrada.', tipo='warning')
+            self.notificar('Obra não encontrada.', tipo='warning')
             return
 
         data_inicio_obra = (obra.get('data_inicio') or '').strip()
         if not data_inicio_obra:
-            self.notificar('⚠️ Preencha a Data de início da obra antes de configurar as medições.', tipo='warning')
+            self.notificar('Preencha a Data de início da obra antes de configurar as medições.', tipo='warning')
             return
 
         registro = self.db.obter_medicoes_obra(obra_id)
@@ -819,7 +819,7 @@ class ObraDialogsMixin:
                     try:
                         qtd = int(select_input.value or 0)
                         if qtd < 1 or qtd > 12:
-                            self.notificar('⚠️ Escolha um valor entre 1 e 12.', tipo='warning')
+                            self.notificar('Escolha um valor entre 1 e 12.', tipo='warning')
                             return
 
                         self.db.criar_medicoes_dinamicas(obra_id, qtd)
@@ -856,7 +856,7 @@ class ObraDialogsMixin:
         """Abre diálogo para confirmar a conclusão da obra após finalizar as medições."""
         obra = self.db.obter_obra(obra_id)
         if not obra:
-            self.notificar('⚠️ Obra não encontrada.', tipo='warning')
+            self.notificar('Obra não encontrada.', tipo='warning')
             return
 
         status_atual = (obra.get('status_conclusao_obra') or '').strip().lower()
@@ -950,7 +950,7 @@ class ObraDialogsMixin:
                             ui.timer(0.05, atualizar_checklist_fn, once=True)
                         else:
                             ui.timer(0.05, self.renderizar_obras, once=True)
-                        self.notificar('⚠️ Obra finalizada com pendências. Alertas críticos diários ativos.', tipo='warning')
+                        self.notificar('Obra finalizada com pendências. Alertas críticos diários ativos.', tipo='warning')
                     except Exception as e:
                         log_error(e, 'agenda_obras', 'Finalizar obra com pendências')
                         self.notificar(f'❌ Erro ao finalizar obra: {e}', tipo='negative')
@@ -975,7 +975,7 @@ class ObraDialogsMixin:
                 try:
                     valor = float(valor_input.value) if valor_input.value is not None else 0.0
                     if valor < 0:
-                        self.notificar('⚠️ O valor medido não pode ser negativo!', tipo='warning')
+                        self.notificar('O valor medido não pode ser negativo!', tipo='warning')
                         return
 
                     sucesso = self.db.registrar_valor_medido(item_id, valor)
@@ -1015,16 +1015,16 @@ class ObraDialogsMixin:
                               checklist_container=None, **kwargs):
         """Atualiza obra e checklist a partir do dialog de detalhes"""
         if not nome or not cliente:
-            self.notificar('⚠️ Nome e Contrato são obrigatórios!', tipo='warning')
+            self.notificar('Nome e Contrato são obrigatórios!', tipo='warning')
             return
 
         if not valor or valor <= 0:
-            self.notificar('⚠️ Valor deve ser maior que zero!', tipo='warning')
+            self.notificar('Valor deve ser maior que zero!', tipo='warning')
             return
 
         total_obra = kwargs.get('total_obra')
         if not total_obra or total_obra <= 0:
-            self.notificar('⚠️ [FASE 3] Total da Obra é obrigatório e deve ser maior que zero!', tipo='warning')
+            self.notificar('Total da Obra é obrigatório e deve ser maior que zero!', tipo='warning')
             return
 
         if not self._usuario_pode_acessar_contrato(cliente):
@@ -1068,7 +1068,7 @@ class ObraDialogsMixin:
                 )
 
                 if not sucesso_obs:
-                    self.notificar('⚠️ Obra salva, mas houve erro ao atualizar observações.', tipo='warning')
+                    self.notificar('Obra salva, mas houve erro ao atualizar observações.', tipo='warning')
 
             recalculou = False
             datas_recalculadas = []
