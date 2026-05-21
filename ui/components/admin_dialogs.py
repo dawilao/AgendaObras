@@ -42,7 +42,7 @@ class AdminDialogsMixin:
                         ui.label('Este usuário é administrador e vê todos os contratos automaticamente.').style('font-size: 12px; color: #999; margin-bottom: 10px;')
 
                     if not contratos_disponiveis:
-                        ui.label('⚠️ Nenhum contrato cadastrado em contratos.db').style('color: #f44336; font-size: 13px;')
+                        ui.label('Nenhum contrato cadastrado em contratos.db').style('color: #f44336; font-size: 13px;')
                     else:
                         checkboxes = {}
                         with ui.column().classes('w-full').style('max-height: 350px; overflow-y: auto; border: 1px solid #e0e0e0; padding: 10px; border-radius: 6px;'):
