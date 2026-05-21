@@ -1,60 +1,72 @@
-# 🏗️ AgendaObras
+# AgendaObras
 
-Sistema de rastreamento de obras e demandas de engenharia com interface web e notificações automáticas.
+Sistema de rastreamento de obras e demandas de engenharia com interface web, checklist automático e notificações por e-mail.
 
-[![Python](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/)
-[![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
-
-## 🚀 Instalação
+## Instalação
 
 ```bash
-# Clone o repositório
-git clone https://github.com/dawilao/AgendaObras.git
-cd AgendaObras
-
-# Instale as dependências
 pip install -r requirements.txt
-
-# Execute a aplicação
 python AgendaObras.py
 ```
 
-Acesse em: `http://localhost:8080`
+Acesse em `http://localhost:8080`. No primeiro acesso, o sistema solicita a criação do usuário administrador.
 
-## ✨ Funcionalidades
+> **Windows:** execute com `PYTHONUTF8=1 python AgendaObras.py` para evitar erros de codificação Unicode.
 
-- **Gestão de Obras**: Cadastro e acompanhamento de obras
-- **Tarefas com Dependências**: Sistema de tarefas interligadas
-- **Notificações por Email**: Alertas automáticos com reiteração progressiva
-- **Tarefas Recorrentes**: Geração automática de tarefas periódicas
-- **Sistema de Versão**: Validação automática de atualizações
+## Funcionalidades
 
-## ⏰ Agendamento de e-mails (24/7)
+### Gestão de obras
+Cada obra é representada por um card com os campos: contrato, prefixo/agência, serviço, valor do parceiro, percentual, total, data de início, data de assinatura, data da AIO e data de conclusão.
 
-- O disparo automático roda **às 08:00** em **dias úteis (segunda a sexta)**.
-- Timezone de referência: **America/Sao_Paulo**.
-- Se o servidor voltar após 08:00 em um dia útil e ainda não tiver executado no dia, o sistema faz **catch-up imediato** (execução única).
-- Sábados e domingos são ignorados no disparo automático.
+### Checklist automático
+Ao criar uma obra, o sistema gera automaticamente um checklist de tarefas com prazos e dependências. As tarefas são liberadas progressivamente conforme as anteriores são concluídas. Algumas tarefas disparam inputs adicionais, como a data de assinatura do contrato e a data da AIO, que desbloqueiam tarefas subsequentes.
 
-## ⚙️ Configuração
+Tarefas com reiteração aceitam até 3 alertas progressivos (a cada 2 dias). Tarefas sem reiteração têm prazo fixo com alerta crítico no último dia. Após o prazo, a tarefa passa para "atrasada" e recebe alertas críticos diários até ser concluída.
 
-### Email (Opcional)
+### Medições mensais
+Obras iniciadas geram tarefas recorrentes mensais de MEDIÇÃO e CONFIRMAÇÃO DE MEDIÇÃO. O sistema controla o valor faturado por medição e, ao concluir a última medição, solicita a finalização da obra (com ou sem pendências).
 
-Copie `email_config.env.example` para `email_config.env` e configure:
+### Notificações por e-mail
+Os alertas são disparados automaticamente às **08:00 em dias úteis** (America/Sao_Paulo). Se o servidor reiniciar após esse horário sem ter disparado no dia, o envio ocorre imediatamente (catch-up).
+
+Os e-mails são agrupados por obra e classificados por tipo:
+- **Reiteração** (1ª, 2ª ou 3ª) — tarefas com prazo flexível pendentes
+- **Prazo fixo crítico** — tarefas com prazo fixo no dia limite
+- **Atrasada** — tarefas vencidas, enviadas diariamente
+- **Obra com pendências** — alerta diário para obras concluídas com pendências em aberto
+
+## Configuração de e-mail
+
+Copie `email_config.env.example` para `email_config.env` (aceita formato `.env` ou JSON):
 
 ```env
 SMTP_SERVER=smtp.gmail.com
 SMTP_PORT=587
 SMTP_USER=seu-email@gmail.com
 SMTP_PASSWORD=sua-senha-app
+EMAIL_REMETENTE=seu-email@gmail.com
+EMAIL_DESTINATARIOS=destinatario1@email.com,destinatario2@email.com
+EMAIL_CRITICO=gestor@email.com
 ```
 
-## 🛠️ Tecnologias
+Sem este arquivo, o sistema funciona normalmente mas não envia alertas.
 
-- **[NiceGUI](https://nicegui.io/)** - Interface web
-- **SQLite** - Banco de dados
-- **Python 3.13+** - Backend
+## Bancos de dados
 
-## 📄 Licença
+O sistema cria três arquivos SQLite na raiz do projeto:
 
-Licença MIT - veja [LICENSE](LICENSE) para detalhes.
+| Arquivo | Conteúdo |
+|---|---|
+| `agendaobras.db` | Obras, checklist, medições e valores |
+| `users.db` | Usuários e autenticação |
+| `contratos.db` | Vínculos de contratos |
+
+## Tecnologias
+
+- [NiceGUI](https://nicegui.io/) — interface web
+- SQLite — banco de dados
+- Python 3.12+
+
+## Licença
+
+MIT — veja [LICENSE](LICENSE).
