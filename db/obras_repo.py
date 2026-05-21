@@ -207,6 +207,11 @@ class ObrasRepository(BaseRepository):
             data_aio = kwargs.get('data_aio', None) or None
             data_acionamento = kwargs.get('data_acionamento', None) or None
 
+            valor_contrato = round(float(valor_contrato), 2)
+            valor_parceiro = round(float(valor_parceiro), 2) if valor_parceiro is not None else None
+            valor_percentual = round(float(valor_percentual), 2) if valor_percentual is not None else None
+            total_obra = round(float(total_obra), 2) if total_obra is not None else None
+
             data_inicio = data_inicio or None
             data_criacao = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 
@@ -311,6 +316,11 @@ class ObrasRepository(BaseRepository):
             data_assinatura = kwargs.get('data_assinatura', None) or None
             data_aio = kwargs.get('data_aio', None) or None
             data_acionamento = kwargs.get('data_acionamento', None) or None
+
+            valor_contrato = round(float(valor_contrato), 2)
+            valor_parceiro = round(float(valor_parceiro), 2) if valor_parceiro is not None else None
+            valor_percentual = round(float(valor_percentual), 2) if valor_percentual is not None else None
+            total_obra = round(float(total_obra), 2) if total_obra is not None else None
 
             data_inicio = data_inicio or None
 
