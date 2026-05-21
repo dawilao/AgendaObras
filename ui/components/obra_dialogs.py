@@ -967,15 +967,15 @@ class ObraDialogsMixin:
             ui.label('💰 Valor da Medição').style('font-size: 18px; font-weight: bold; margin-bottom: 8px;')
             ui.label('Informe o valor faturado referente a esta medição.').style('color: #666; margin-bottom: 10px;')
 
-            valor_input = ui.number('Valor Medido (R$)', format='%.2f', min=0.01).classes('w-full').props('outlined autofocus')
+            valor_input = ui.number('Valor Medido (R$)', format='%.2f', min=0).classes('w-full').props('outlined autofocus')
 
             ui.separator().classes('my-4')
 
             def confirmar():
                 try:
-                    valor = float(valor_input.value or 0)
-                    if valor <= 0:
-                        self.notificar('⚠️ O valor medido é obrigatório e deve ser maior que zero!', tipo='warning')
+                    valor = float(valor_input.value) if valor_input.value is not None else 0.0
+                    if valor < 0:
+                        self.notificar('⚠️ O valor medido não pode ser negativo!', tipo='warning')
                         return
 
                     sucesso = self.db.registrar_valor_medido(item_id, valor)
