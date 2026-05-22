@@ -8,6 +8,7 @@ from core.error_logger import log_error
 from utils.formatters import formatar_data_exibicao
 
 TAREFA_SOLICITACAO_ACESSO = 'SOLICITAÇÃO DE ACESSO'
+TAREFA_RENOVACAO_ACESSO = 'RENOVAÇÃO DE SOLICITAÇÃO DE ACESSO'
 
 
 class ObraCardMixin:
@@ -92,10 +93,19 @@ class ObraCardMixin:
                                 data_inicio = formatar_data_exibicao(dados_acesso['data_inicio_acesso'])
                                 data_fim = formatar_data_exibicao(dados_acesso['data_fim_acesso'])
                                 dias_ate_fim = (datetime.date.fromisoformat(dados_acesso['data_fim_acesso']) - datetime.date.today()).days
-                                cor_acesso = '#c62828' if dias_ate_fim <= 0 else '#e65100' if dias_ate_fim <= 15 else '#2e7d32'
+                                renovacao_concluida = any(
+                                    (i.get('descricao') or '').strip() == TAREFA_RENOVACAO_ACESSO and i.get('concluido')
+                                    for i in checklist
+                                )
+                                if renovacao_concluida:
+                                    cor_acesso = '#666'
+                                    estilo_label = 'color: #666; font-size: 13px;'
+                                else:
+                                    cor_acesso = '#c62828' if dias_ate_fim <= 0 else '#e65100' if dias_ate_fim <= 15 else '#2e7d32'
+                                    estilo_label = f'font-size: 13px; color: {cor_acesso}; font-weight: bold;'
                                 with ui.row().classes('items-center gap-2'):
                                     ui.icon('key').style(f'color: {cor_acesso}; font-size: 16px;')
-                                    ui.label(f'Acesso: {data_inicio} → {data_fim}').style(f'font-size: 13px; color: {cor_acesso}; font-weight: bold;')
+                                    ui.label(f'Acesso: {data_inicio} → {data_fim}').style(estilo_label)
 
                         ui.separator()
                         ui.label(f'Progresso: {progresso}%').style('font-size: 12px; font-weight: bold; color: #666;')

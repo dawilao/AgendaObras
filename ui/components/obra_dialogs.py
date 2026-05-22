@@ -420,7 +420,7 @@ class ObraDialogsMixin:
                 checklist_atualizado = self.db.obter_checklist(obra_id)
                 with checklist_container:
                     for it in checklist_atualizado:
-                        self.criar_item_checklist_editavel(it, checklist_estados, obra_id, atualizar_checklist)
+                        self.criar_item_checklist_editavel(it, checklist_estados, obra_id, atualizar_checklist, checklist_completo=checklist_atualizado)
 
                 obra_atualizada = self.db.obter_obra(obra_id) or obra
                 novo_status = status_visual_para_edicao(obra_atualizada, checklist_atualizado)
@@ -432,7 +432,7 @@ class ObraDialogsMixin:
 
             with checklist_container:
                 for item in checklist:
-                    self.criar_item_checklist_editavel(item, checklist_estados, obra_id, atualizar_checklist)
+                    self.criar_item_checklist_editavel(item, checklist_estados, obra_id, atualizar_checklist, checklist_completo=checklist)
 
             ui.separator()
 
@@ -482,7 +482,7 @@ class ObraDialogsMixin:
             self.abrir_dialog_datas_criticas_consolidado(obra_id, datas_pendentes, atualizar_checklist)
 
     def criar_item_checklist_editavel(self, item, checklist_estados, obra_id: int,
-                                      atualizar_checklist_fn=None):
+                                      atualizar_checklist_fn=None, checklist_completo=None):
         """Cria um item do checklist no modo de edição."""
         bloqueado = bool(item.get('bloqueado', 0))
         motivo_bloqueio = ''
@@ -626,27 +626,35 @@ class ObraDialogsMixin:
                                 ui.label(f'✓ Concluída em {data_concl_fmt}').style('font-size: 10px; color: #999; font-style: italic;')
 
                         if item['concluido'] and item.get('descricao') == TAREFA_SOLICITACAO_ACESSO:
+                            renovacao_concluida = any(
+                                (it.get('descricao') or '').strip() == TAREFA_RENOVACAO_ACESSO and it.get('concluido')
+                                for it in (checklist_completo or [])
+                            )
                             dados_acesso = self.db.obter_dados_acesso(item['id'])
                             with ui.row().classes('items-center gap-2').style('margin-top: 6px; flex-wrap: wrap;'):
                                 if dados_acesso and dados_acesso.get('data_fim_acesso'):
                                     inicio_fmt = formatar_data_exibicao(dados_acesso.get('data_inicio_acesso') or '')
                                     fim_fmt = formatar_data_exibicao(dados_acesso['data_fim_acesso'])
                                     periodo = f'{inicio_fmt} → {fim_fmt}' if inicio_fmt else fim_fmt
-                                    ui.label(f'Acesso: {periodo}').style(
-                                        'font-size: 12px; font-weight: 600; color: #1565c0;'
-                                        'background: #e3f2fd; padding: 3px 10px;'
-                                        'border-radius: 12px; border: 1px solid #90caf9;'
-                                    )
+                                    if renovacao_concluida:
+                                        ui.label(f'Acesso: {periodo}').style('color: #666; font-size: 13px;')
+                                    else:
+                                        ui.label(f'Acesso: {periodo}').style(
+                                            'font-size: 12px; font-weight: 600; color: #1565c0;'
+                                            'background: #e3f2fd; padding: 3px 10px;'
+                                            'border-radius: 12px; border: 1px solid #90caf9;'
+                                        )
                                 else:
                                     ui.label('Datas de acesso não informadas').style(
                                         'font-size: 12px; font-weight: 600; color: #bf360c;'
                                         'background: #fbe9e7; padding: 3px 10px;'
                                         'border-radius: 12px; border: 1px solid #ffab91;'
                                     )
-                                ui.button('Editar acesso', icon='edit_calendar',
-                                          on_click=lambda _obra_id=obra_id, _item=item: self.abrir_dialog_dados_acesso(
-                                              _obra_id, _item['id'], None, atualizar_checklist_fn
-                                          )).props('outline dense color=primary size=sm')
+                                if not renovacao_concluida:
+                                    ui.button('Editar acesso', icon='edit_calendar',
+                                              on_click=lambda _obra_id=obra_id, _item=item: self.abrir_dialog_dados_acesso(
+                                                  _obra_id, _item['id'], None, atualizar_checklist_fn
+                                              )).props('outline dense color=primary size=sm')
 
                         if not item['concluido'] and not bloqueado and dias_restantes is not None and dias_restantes < 0:
                             info_reiteracao = self.formatar_info_reiteracao(item)
@@ -1248,7 +1256,7 @@ class ObraDialogsMixin:
                     checklist = self.db.obter_checklist(obra_id)
                     with checklist_container:
                         for item in checklist:
-                            self.criar_item_checklist_editavel(item, checklist_estados, obra_id, atualizar_checklist_local)
+                            self.criar_item_checklist_editavel(item, checklist_estados, obra_id, atualizar_checklist_local, checklist_completo=checklist)
 
                     try:
                         obra_atual = self.db.obter_obra(obra_id) or obra_antiga or {}
