@@ -69,8 +69,16 @@ class ObraDialogsMixin:
 
             with ui.row().classes('w-full gap-2 flex-wrap'):
                 valor_input = ui.number(label='Valor do Contrato (R$) *', min=0, step=0.01, format='%.2f').classes('w-full sm:w-[32%]').props('outlined')
-                valor_parceiro_input = ui.number(label='Valor Parceiro (R$)', min=0, step=0.01, format='%.2f').classes('w-full sm:w-[32%]').props('outlined')
-                valor_percentual_input = ui.number(label='Valor % (%)', min=0, max=100, step=0.01, format='%.2f').classes('w-full sm:w-[32%]').props('outlined')
+                valor_percentual_input = ui.number(label='% Parceiro', min=0, max=100, step=0.01, format='%.2f').classes('w-full sm:w-[32%]').props('outlined')
+                valor_parceiro_input = ui.number(label='Valor Parceiro (R$)', min=0, step=0.01, format='%.2f').classes('w-full sm:w-[32%]').props('outlined readonly')
+
+            def _atualizar_parceiro_nova():
+                vc = float(valor_input.value or 0)
+                pct = float(valor_percentual_input.value or 0)
+                valor_parceiro_input.set_value(round(vc * pct / 100, 2))
+
+            valor_input.on_value_change(lambda e: _atualizar_parceiro_nova())
+            valor_percentual_input.on_value_change(lambda e: _atualizar_parceiro_nova())
 
             total_obra_input = ui.number(label='Total da Obra (R$) *', min=0, step=0.01, format='%.2f').classes('w-full').props('outlined').tooltip('💰 [OBRIGATÓRIO] Valor total da obra para rastreamento financeiro da Fase 3')
 
@@ -281,8 +289,17 @@ class ObraDialogsMixin:
 
             with ui.row().classes('w-full gap-2 flex-wrap'):
                 valor_input = ui.number(label='Valor do Contrato (R$)', value=obra['valor_contrato'], min=0, step=0.01, format='%.2f').classes('w-full sm:w-[32%]').props('outlined')
-                valor_parceiro_input = ui.number(label='Valor Parceiro (R$)', value=obra.get('valor_parceiro') or 0, min=0, step=0.01, format='%.2f').classes('w-full sm:w-[32%]').props('outlined')
-                valor_percentual_input = ui.number(label='Valor % (%)', value=obra.get('valor_percentual') or 0, min=0, max=100, step=0.01, format='%.2f').classes('w-full sm:w-[32%]').props('outlined')
+                valor_percentual_input = ui.number(label='% Parceiro', value=obra.get('valor_percentual') or 0, min=0, max=100, step=0.01, format='%.2f').classes('w-full sm:w-[32%]').props('outlined')
+                valor_parceiro_input = ui.number(label='Valor Parceiro (R$)', value=obra.get('valor_parceiro') or 0, min=0, step=0.01, format='%.2f').classes('w-full sm:w-[32%]').props('outlined readonly')
+
+            def _atualizar_parceiro_edicao():
+                vc = float(valor_input.value or 0)
+                pct = float(valor_percentual_input.value or 0)
+                valor_parceiro_input.set_value(round(vc * pct / 100, 2))
+
+            valor_input.on_value_change(lambda e: _atualizar_parceiro_edicao())
+            valor_percentual_input.on_value_change(lambda e: _atualizar_parceiro_edicao())
+            _atualizar_parceiro_edicao()
 
             total_obra_input = ui.number(label='Total da Obra (R$) *', value=obra.get('total_obra') or 0, min=0, step=0.01, format='%.2f').classes('w-full').props('outlined').tooltip('💰 [OBRIGATÓRIO] Valor total da obra para rastreamento financeiro da Fase 3')
 
@@ -1011,11 +1028,30 @@ class ObraDialogsMixin:
 
     def abrir_dialog_valor_medicao(self, obra_id: int, item_id: int, checkbox_obj, atualizar_checklist_fn):
         """Abre o diálogo para inserir o valor faturado no mês e só então conclui a tarefa."""
+        obra_data = self.db.obter_obra(obra_id)
+        pct_parceiro = float((obra_data or {}).get('valor_percentual') or 0)
+
         with ui.dialog() as dialog, ui.card().classes('responsive-dialog-sm').style('padding: 20px; min-width: 300px;'):
             ui.label('💰 Valor da Medição').style('font-size: 18px; font-weight: bold; margin-bottom: 8px;')
             ui.label('Informe o valor faturado referente a esta medição.').style('color: #666; margin-bottom: 10px;')
 
             valor_input = ui.number('Valor Medido (R$)', format='%.2f', min=0).classes('w-full').props('outlined autofocus')
+
+            if pct_parceiro > 0:
+                ui.label(f'% Parceiro cadastrado: {pct_parceiro:.2f}%').style(
+                    'font-size: 12px; color: #666; margin-top: 4px;'
+                )
+                label_split = ui.label('').style('font-size: 12px; color: #7b1fa2; font-weight: bold;')
+
+                def _atualizar_split():
+                    val = float(valor_input.value or 0)
+                    vp = round(val * pct_parceiro / 100, 2)
+                    ve = round(val - vp, 2)
+                    label_split.set_text(
+                        f'Parceiro: {self.helper.formatar_valor(vp)} | Empresa: {self.helper.formatar_valor(ve)}'
+                    )
+
+                valor_input.on_value_change(lambda e: _atualizar_split())
 
             ui.separator().classes('my-4')
 
@@ -1026,7 +1062,13 @@ class ObraDialogsMixin:
                         self.notificar('O valor medido não pode ser negativo!', tipo='warning')
                         return
 
-                    sucesso = self.db.registrar_valor_medido(item_id, valor)
+                    vp = round(valor * pct_parceiro / 100, 2)
+                    ve = round(valor - vp, 2)
+                    sucesso = self.db.registrar_valor_medido(
+                        item_id, valor,
+                        valor_parceiro_medicao=vp,
+                        valor_empresa_medicao=ve
+                    )
                     if not sucesso:
                         self.notificar('❌ Erro ao salvar o valor da medição no banco.', tipo='negative')
                         return
