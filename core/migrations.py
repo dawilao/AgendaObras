@@ -60,6 +60,7 @@ class MigrationManager:
         self.migrations.append(Migration(version=9, description="Adicionar coluna data_acionamento à tabela obras", upgrade=self._migration_009_add_data_acionamento))
         self.migrations.append(Migration(version=10, description="Adicionar colunas observacoes, obs_usuario e obs_data na tabela obras", upgrade=self._migration_010_add_observacoes))
         self.migrations.append(Migration(version=11, description="Adicionar tabela medicoes_obra e coluna status_conclusao_obra em obras", upgrade=self._migration_011_medicoes_e_status))
+        self.migrations.append(Migration(version=12, description="Lembrete de acesso: campos de vigência e template de renovação", upgrade=self._migration_012_acesso_renovacao))
 
     def _migration_001_add_tipo_recorrencia(self, conn: sqlite3.Connection):
         cursor = conn.cursor()
@@ -268,6 +269,39 @@ class MigrationManager:
             print("    ✅ Coluna status_conclusao_obra adicionada à tabela obras")
         else:
             print("    ⏭️  Coluna status_conclusao_obra já existe, pulando...")
+        conn.commit()
+
+    def _migration_012_acesso_renovacao(self, conn: sqlite3.Connection):
+        cursor = conn.cursor()
+
+        cursor.execute("PRAGMA table_info(checklist_templates)")
+        cols = [row[1] for row in cursor.fetchall()]
+        if 'auto_criar' not in cols:
+            cursor.execute("ALTER TABLE checklist_templates ADD COLUMN auto_criar INTEGER DEFAULT 1")
+            print("    ✅ Coluna auto_criar adicionada à tabela checklist_templates")
+        else:
+            print("    ⏭️  Coluna auto_criar já existe, pulando...")
+
+        cursor.execute("PRAGMA table_info(obra_checklist)")
+        cols = [row[1] for row in cursor.fetchall()]
+        for col_name, col_type in [('data_inicio_acesso', 'TEXT'), ('data_fim_acesso', 'TEXT'), ('tarefa_origem_id', 'INTEGER')]:
+            if col_name not in cols:
+                cursor.execute(f"ALTER TABLE obra_checklist ADD COLUMN {col_name} {col_type}")
+                print(f"    ✅ Coluna {col_name} adicionada à tabela obra_checklist")
+            else:
+                print(f"    ⏭️  Coluna {col_name} já existe, pulando...")
+
+        cursor.execute("SELECT id FROM checklist_templates WHERE nome = 'RENOVAÇÃO DE SOLICITAÇÃO DE ACESSO'")
+        if not cursor.fetchone():
+            cursor.execute("""
+                INSERT INTO checklist_templates
+                (nome, ordem, prazo_dias, tipo, base_calculo, recorrencia, auto_criar, possui_reiteracao)
+                VALUES ('RENOVAÇÃO DE SOLICITAÇÃO DE ACESSO', 16, 0, 'B', 'especifico', 'unica', 0, 0)
+            """)
+            print("    ✅ Template 'RENOVAÇÃO DE SOLICITAÇÃO DE ACESSO' inserido")
+        else:
+            print("    ⏭️  Template 'RENOVAÇÃO DE SOLICITAÇÃO DE ACESSO' já existe, pulando...")
+
         conn.commit()
 
     def _get_applied_versions(self) -> List[int]:

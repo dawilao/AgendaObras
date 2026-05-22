@@ -40,6 +40,8 @@ class ChecklistRepository(BaseRepository):
         for template in templates:
             if template['recorrencia'] == 'mensal':
                 continue
+            if ('auto_criar' in template.keys() and template['auto_criar'] == 0):
+                continue
 
             bloqueado = 0
             data_limite = None
@@ -141,7 +143,21 @@ class ChecklistRepository(BaseRepository):
         ''', (obra_id,))
         checklist = [dict(row) for row in cursor.fetchall()]
         conn.close()
-        return checklist
+
+        # Reposiciona tarefas de renovação logo abaixo da sua tarefa de origem.
+        renovacoes = {t['tarefa_origem_id']: t for t in checklist if t.get('tarefa_origem_id')}
+        if not renovacoes:
+            return checklist
+
+        ids_renovacao = {t['id'] for t in renovacoes.values()}
+        ordered: List[Dict] = []
+        for tarefa in checklist:
+            if tarefa['id'] in ids_renovacao:
+                continue
+            ordered.append(tarefa)
+            if tarefa['id'] in renovacoes:
+                ordered.append(renovacoes[tarefa['id']])
+        return ordered
 
     def obter_item_checklist(self, item_id: int) -> Optional[Dict]:
         conn = self.get_connection()
@@ -555,6 +571,108 @@ class ChecklistRepository(BaseRepository):
         except Exception as e:
             log_error(e, "db.checklist_repo", f"Calcular total a faturar - Obra: {obra_id}")
             return 0.0
+
+    def obter_tarefa_origem_id(self, tarefa_id: int) -> Optional[int]:
+        try:
+            conn = self.get_connection()
+            cursor = conn.cursor()
+            cursor.execute('SELECT tarefa_origem_id FROM obra_checklist WHERE id = ?', (tarefa_id,))
+            row = cursor.fetchone()
+            conn.close()
+            return row['tarefa_origem_id'] if row and row['tarefa_origem_id'] else None
+        except Exception as e:
+            log_error(e, "db.checklist_repo", f"Obter tarefa origem id - tarefa: {tarefa_id}")
+            if 'conn' in locals():
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+            return None
+
+    def obter_dados_acesso(self, tarefa_id: int) -> Optional[Dict]:
+        try:
+            conn = self.get_connection()
+            cursor = conn.cursor()
+            cursor.execute(
+                'SELECT data_inicio_acesso, data_fim_acesso FROM obra_checklist WHERE id = ?',
+                (tarefa_id,)
+            )
+            row = cursor.fetchone()
+            conn.close()
+            return dict(row) if row else None
+        except Exception as e:
+            log_error(e, "db.checklist_repo", f"Obter dados de acesso - tarefa: {tarefa_id}")
+            if 'conn' in locals():
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+            return None
+
+    def salvar_dados_acesso(self, tarefa_id: int, obra_id: int, data_inicio: str, data_fim: str) -> bool:
+        import datetime as _dt
+        try:
+            conn = self.get_connection()
+            cursor = conn.cursor()
+
+            cursor.execute(
+                'UPDATE obra_checklist SET data_inicio_acesso = ?, data_fim_acesso = ? WHERE id = ?',
+                (data_inicio or None, data_fim or None, tarefa_id)
+            )
+
+            if data_fim:
+                data_fim_date = _dt.date.fromisoformat(data_fim)
+                today = _dt.date.today()
+                deadline = data_fim_date - _dt.timedelta(days=15)
+                if deadline < today:
+                    deadline = today
+
+                cursor.execute(
+                    "SELECT id FROM checklist_templates WHERE nome = 'RENOVAÇÃO DE SOLICITAÇÃO DE ACESSO'",
+                )
+                tmpl = cursor.fetchone()
+                if not tmpl:
+                    log_error(Exception("Template de renovação não encontrado"), "db.checklist_repo", "salvar_dados_acesso")
+                    conn.commit()
+                    conn.close()
+                    return False
+                template_id = tmpl['id']
+
+                cursor.execute(
+                    'SELECT id FROM obra_checklist WHERE tarefa_origem_id = ?',
+                    (tarefa_id,)
+                )
+                existente = cursor.fetchone()
+
+                if existente:
+                    cursor.execute(
+                        """UPDATE obra_checklist
+                           SET data_limite = ?, status_notificacao = 'pendente',
+                               tentativas_reiteracao = 0
+                           WHERE id = ?""",
+                        (deadline.isoformat(), existente['id'])
+                    )
+                else:
+                    cursor.execute(
+                        """INSERT INTO obra_checklist
+                           (obra_id, template_id, descricao, prazo_dias, data_limite, tipo,
+                            base_calculo, concluido, recorrencia, status_notificacao, tarefa_origem_id)
+                           VALUES (?, ?, 'RENOVAÇÃO DE SOLICITAÇÃO DE ACESSO', 0, ?, 'B',
+                                   'especifico', 0, 'unica', 'pendente', ?)""",
+                        (obra_id, template_id, deadline.isoformat(), tarefa_id)
+                    )
+
+            conn.commit()
+            conn.close()
+            return True
+        except Exception as e:
+            log_error(e, "db.checklist_repo", f"Salvar dados de acesso - tarefa: {tarefa_id}")
+            if 'conn' in locals():
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+            return False
 
     def obter_valores_medicoes(self, obra_id: int) -> List[Dict]:
         try:
