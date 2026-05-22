@@ -18,6 +18,9 @@ from utils.formatters import (
 )
 from services.obra_service import status_visual_para_edicao, obra_tem_medicoes_concluidas
 
+TAREFA_SOLICITACAO_ACESSO = 'SOLICITAÇÃO DE ACESSO'
+TAREFA_RENOVACAO_ACESSO = 'RENOVAÇÃO DE SOLICITAÇÃO DE ACESSO'
+
 
 class ObraDialogsMixin:
     def nova_entrada(self):
@@ -541,14 +544,14 @@ class ObraDialogsMixin:
                         def on_change(e, item_id=item['id'], item_descricao=item.get('descricao', '')):
                             novo_valor = bool(e.value)
 
-                            if novo_valor and item_descricao == 'SOLICITAÇÃO DE ACESSO':
+                            if novo_valor and item_descricao == TAREFA_SOLICITACAO_ACESSO:
                                 try:
                                     self.abrir_dialog_dados_acesso(obra_id, item_id, e.sender, atualizar_checklist_fn)
                                 except Exception as exc:
                                     log_error(exc, 'agenda_obras', f'Erro ao abrir dialog de acesso - item {item_id}')
                                 return
 
-                            if novo_valor and item_descricao == 'RENOVAÇÃO DE SOLICITAÇÃO DE ACESSO':
+                            if novo_valor and item_descricao == TAREFA_RENOVACAO_ACESSO:
                                 try:
                                     self.abrir_dialog_nova_renovacao_acesso(obra_id, item_id, e.sender, atualizar_checklist_fn)
                                 except Exception as exc:
@@ -622,7 +625,7 @@ class ObraDialogsMixin:
                             if data_concl_fmt:
                                 ui.label(f'✓ Concluída em {data_concl_fmt}').style('font-size: 10px; color: #999; font-style: italic;')
 
-                        if item['concluido'] and item.get('descricao') == 'SOLICITAÇÃO DE ACESSO':
+                        if item['concluido'] and item.get('descricao') == TAREFA_SOLICITACAO_ACESSO:
                             dados_acesso = self.db.obter_dados_acesso(item['id'])
                             with ui.row().classes('items-center gap-2').style('margin-top: 6px; flex-wrap: wrap;'):
                                 if dados_acesso and dados_acesso.get('data_fim_acesso'):
