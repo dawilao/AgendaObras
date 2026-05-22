@@ -572,6 +572,23 @@ class ChecklistRepository(BaseRepository):
             log_error(e, "db.checklist_repo", f"Calcular total a faturar - Obra: {obra_id}")
             return 0.0
 
+    def obter_tarefa_origem_id(self, tarefa_id: int) -> Optional[int]:
+        try:
+            conn = self.get_connection()
+            cursor = conn.cursor()
+            cursor.execute('SELECT tarefa_origem_id FROM obra_checklist WHERE id = ?', (tarefa_id,))
+            row = cursor.fetchone()
+            conn.close()
+            return row['tarefa_origem_id'] if row and row['tarefa_origem_id'] else None
+        except Exception as e:
+            log_error(e, "db.checklist_repo", f"Obter tarefa origem id - tarefa: {tarefa_id}")
+            if 'conn' in locals():
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+            return None
+
     def obter_dados_acesso(self, tarefa_id: int) -> Optional[Dict]:
         try:
             conn = self.get_connection()

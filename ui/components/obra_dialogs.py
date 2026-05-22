@@ -548,6 +548,13 @@ class ObraDialogsMixin:
                                     log_error(exc, 'agenda_obras', f'Erro ao abrir dialog de acesso - item {item_id}')
                                 return
 
+                            if novo_valor and item_descricao == 'RENOVAÇÃO DE SOLICITAÇÃO DE ACESSO':
+                                try:
+                                    self.abrir_dialog_nova_renovacao_acesso(obra_id, item_id, e.sender, atualizar_checklist_fn)
+                                except Exception as exc:
+                                    log_error(exc, 'agenda_obras', f'Erro ao abrir dialog de nova renovação de acesso - item {item_id}')
+                                return
+
                             if novo_valor and item_descricao.startswith('CONFIRMAÇÃO DE MEDIÇÃO'):
                                 try:
                                     self.abrir_dialog_valor_medicao(obra_id, item_id, e.sender, atualizar_checklist_fn)
@@ -1108,6 +1115,34 @@ class ObraDialogsMixin:
             with ui.row().classes('w-full justify-end gap-2'):
                 ui.button('Cancelar', on_click=cancelar).props('flat color=red')
                 ui.button('Confirmar', on_click=confirmar).props('color=positive')
+
+        dialog.open()
+
+    def abrir_dialog_nova_renovacao_acesso(self, obra_id: int, item_id: int, checkbox_obj, atualizar_checklist_fn):
+        """Abre o diálogo para questionar o usuário se deseja criar uma nova tarefa de renovação de acesso após o prazo da tarefa anterior expirar."""
+        with ui.dialog() as dialog, ui.card().classes('responsive-dialog-sm').style('padding: 20px; min-width: 300px;'):
+            ui.label('Renovação de Acesso').style('font-size: 18px; font-weight: bold; margin-bottom: 8px;')
+            ui.label('Deseja atualizar as datas de acesso ou concluir a tarefa?').style('color: #666; margin-bottom: 14px;')
+
+            def atualizar_datas():
+                # Usa o item de origem (SOLICITAÇÃO DE ACESSO) para pré-preencher e salvar as datas
+                item_origem_id = self.db.obter_tarefa_origem_id(item_id) or item_id
+                self.abrir_dialog_dados_acesso(obra_id, item_origem_id, checkbox_obj, atualizar_checklist_fn)
+                dialog.close()
+
+            def concluir_tarefa():
+                if checkbox_obj is not None:
+                    try:
+                        self.db.marcar_item_checklist(item_id, True)
+                    except Exception:
+                        pass
+                dialog.close()
+                if atualizar_checklist_fn:
+                    ui.timer(0.05, atualizar_checklist_fn, once=True)
+
+            with ui.row().classes('w-full justify-end gap-2'):
+                ui.button('Concluir tarefa', on_click=concluir_tarefa).props('flat color=green')
+                ui.button('Atualizar Datas', on_click=atualizar_datas).props('color=primary')
 
         dialog.open()
 
