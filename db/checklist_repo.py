@@ -40,7 +40,7 @@ class ChecklistRepository(BaseRepository):
         for template in templates:
             if template['recorrencia'] == 'mensal':
                 continue
-            if template.get('auto_criar', 1) == 0:
+            if ('auto_criar' in template.keys() and template['auto_criar'] == 0):
                 continue
 
             bloqueado = 0
@@ -143,7 +143,21 @@ class ChecklistRepository(BaseRepository):
         ''', (obra_id,))
         checklist = [dict(row) for row in cursor.fetchall()]
         conn.close()
-        return checklist
+
+        # Reposiciona tarefas de renovação logo abaixo da sua tarefa de origem.
+        renovacoes = {t['tarefa_origem_id']: t for t in checklist if t.get('tarefa_origem_id')}
+        if not renovacoes:
+            return checklist
+
+        ids_renovacao = {t['id'] for t in renovacoes.values()}
+        ordered: List[Dict] = []
+        for tarefa in checklist:
+            if tarefa['id'] in ids_renovacao:
+                continue
+            ordered.append(tarefa)
+            if tarefa['id'] in renovacoes:
+                ordered.append(renovacoes[tarefa['id']])
+        return ordered
 
     def obter_item_checklist(self, item_id: int) -> Optional[Dict]:
         conn = self.get_connection()

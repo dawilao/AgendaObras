@@ -617,15 +617,26 @@ class ObraDialogsMixin:
 
                         if item['concluido'] and item.get('descricao') == 'SOLICITAÇÃO DE ACESSO':
                             dados_acesso = self.db.obter_dados_acesso(item['id'])
-                            if dados_acesso and dados_acesso.get('data_fim_acesso'):
-                                inicio_fmt = formatar_data_exibicao(dados_acesso.get('data_inicio_acesso') or '')
-                                fim_fmt = formatar_data_exibicao(dados_acesso['data_fim_acesso'])
-                                periodo = f'{inicio_fmt} → {fim_fmt}' if inicio_fmt else fim_fmt
-                                ui.label(f'Acesso: {periodo}').style('font-size: 10px; color: #1976d2;')
-                            with ui.row().classes('items-center gap-0').style('margin-top: 2px;'):
-                                ui.button(icon='edit', on_click=lambda _obra_id=obra_id, _item=item: self.abrir_dialog_dados_acesso(
-                                    _obra_id, _item['id'], None, atualizar_checklist_fn
-                                )).props('flat dense round size=xs color=grey').tooltip('Editar dados de acesso')
+                            with ui.row().classes('items-center gap-2').style('margin-top: 6px; flex-wrap: wrap;'):
+                                if dados_acesso and dados_acesso.get('data_fim_acesso'):
+                                    inicio_fmt = formatar_data_exibicao(dados_acesso.get('data_inicio_acesso') or '')
+                                    fim_fmt = formatar_data_exibicao(dados_acesso['data_fim_acesso'])
+                                    periodo = f'{inicio_fmt} → {fim_fmt}' if inicio_fmt else fim_fmt
+                                    ui.label(f'Acesso: {periodo}').style(
+                                        'font-size: 12px; font-weight: 600; color: #1565c0;'
+                                        'background: #e3f2fd; padding: 3px 10px;'
+                                        'border-radius: 12px; border: 1px solid #90caf9;'
+                                    )
+                                else:
+                                    ui.label('Datas de acesso não informadas').style(
+                                        'font-size: 12px; font-weight: 600; color: #bf360c;'
+                                        'background: #fbe9e7; padding: 3px 10px;'
+                                        'border-radius: 12px; border: 1px solid #ffab91;'
+                                    )
+                                ui.button('Editar acesso', icon='edit_calendar',
+                                          on_click=lambda _obra_id=obra_id, _item=item: self.abrir_dialog_dados_acesso(
+                                              _obra_id, _item['id'], None, atualizar_checklist_fn
+                                          )).props('outline dense color=primary size=sm')
 
                         if not item['concluido'] and not bloqueado and dias_restantes is not None and dias_restantes < 0:
                             info_reiteracao = self.formatar_info_reiteracao(item)
