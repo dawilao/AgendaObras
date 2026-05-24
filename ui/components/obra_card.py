@@ -256,6 +256,14 @@ class ObraCardMixin:
                             f'font-size: 13px; color: {cor_saldo}; font-weight: bold;'
                         )
 
+                        historico = self.db.obter_valores_medicoes(obra['id'])
+                        soma_parceiro_medido = round(
+                            sum((m.get('valor_parceiro_medicao') or 0) for m in historico), 2
+                        )
+                        soma_empresa_medido = round(
+                            sum((m.get('valor_empresa_medicao') or 0) for m in historico), 2
+                        )
+
                         valor_percentual = obra.get('valor_percentual') or 0
                         if valor_percentual > 0:
                             total_parceiro = round(valor_contrato * valor_percentual / 100, 2)
@@ -267,8 +275,13 @@ class ObraCardMixin:
                             ui.label(
                                 f'Valor Destinado à Empresa: {self.helper.formatar_valor(total_empresa)}'
                             ).style('font-size: 13px; color: #e65100; font-weight: bold;')
-
-                        historico = self.db.obter_valores_medicoes(obra['id'])
+                            if soma_parceiro_medido or soma_empresa_medido:
+                                ui.label(
+                                    f'↳ Parceiro medido até agora: {self.helper.formatar_valor(soma_parceiro_medido)}'
+                                ).style('font-size: 12px; color: #7b1fa2;')
+                                ui.label(
+                                    f'↳ Empresa medida até agora: {self.helper.formatar_valor(soma_empresa_medido)}'
+                                ).style('font-size: 12px; color: #e65100;')
                         if historico:
                             ui.separator().classes('my-2')
                             ui.label('Histórico de Medições').style(
