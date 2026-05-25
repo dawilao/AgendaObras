@@ -49,6 +49,7 @@ class AgendaObras(ObraCardMixin, ObraDialogsMixin, AdminDialogsMixin):
         self.body_container = None
         self.filtro_pesquisa = ""
         self._debounce_pesquisa = None
+        self._debounce_versao = 0
 
         # Verifica atualização antes de construir UI
         self.verificar_atualizacao()
@@ -555,13 +556,16 @@ class AgendaObras(ObraCardMixin, ObraDialogsMixin, AdminDialogsMixin):
                     'background-color: white; border-radius: 4px; margin-right: 10px;'
                 )
                 def _on_input_pesquisa():
+                    # Incrementa versão — garante que timers antigos que escapem
+                    # do cancel() (race condition) se tornem no-op
+                    self._debounce_versao += 1
+                    versao = self._debounce_versao
                     if self._debounce_pesquisa:
                         self._debounce_pesquisa.cancel()
-                    self._debounce_pesquisa = ui.timer(
-                        0.3,
-                        lambda: self.pesquisa(self.input_pesquisa.value),
-                        once=True,
-                    )
+                    def _disparar():
+                        if self._debounce_versao == versao:
+                            self.pesquisa(self.input_pesquisa.value)
+                    self._debounce_pesquisa = ui.timer(0.3, _disparar, once=True)
 
                 self.input_pesquisa.on('input', _on_input_pesquisa)
                 self.input_pesquisa.on('keydown.enter', lambda: self.pesquisa(self.input_pesquisa.value))
