@@ -98,28 +98,28 @@ class TestCalculosFinanceiros(unittest.TestCase):
 
     # -------------------------------------------------- total a faturar
     def test_saldo_igual_total_obra_sem_medicoes(self):
-        saldo = self.db.calcular_total_faturar(self.obra_id)
+        saldo = self.db.calcular_total_a_medir(self.obra_id)
         self.assertAlmostEqual(saldo, 200_000.0)
 
     def test_saldo_positivo(self):
         self.db.registrar_valor_medido(self._ids_confirmacao[0], 80_000.0)
-        saldo = self.db.calcular_total_faturar(self.obra_id)
+        saldo = self.db.calcular_total_a_medir(self.obra_id)
         self.assertAlmostEqual(saldo, 120_000.0)
 
     def test_saldo_zero_exatamente_faturado(self):
         self.db.registrar_valor_medido(self._ids_confirmacao[0], 200_000.0)
-        self.assertAlmostEqual(self.db.calcular_total_faturar(self.obra_id), 0.0)
+        self.assertAlmostEqual(self.db.calcular_total_a_medir(self.obra_id), 0.0)
 
     def test_saldo_negativo_acima_do_orcamento(self):
         """Quando medições ultrapassam total_obra o saldo deve ser negativo."""
         self.db.registrar_valor_medido(self._ids_confirmacao[0], 250_000.0)
-        saldo = self.db.calcular_total_faturar(self.obra_id)
+        saldo = self.db.calcular_total_a_medir(self.obra_id)
         self.assertLess(saldo, 0.0)
         self.assertAlmostEqual(saldo, -50_000.0)
 
     def test_arredondamento_duas_casas(self):
         self.db.registrar_valor_medido(self._ids_confirmacao[0], 33_333.333)
-        saldo = self.db.calcular_total_faturar(self.obra_id)
+        saldo = self.db.calcular_total_a_medir(self.obra_id)
         # Verifica que o resultado tem no máximo 2 casas decimais
         self.assertEqual(saldo, round(saldo, 2))
 

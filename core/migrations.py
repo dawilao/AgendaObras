@@ -61,6 +61,8 @@ class MigrationManager:
         self.migrations.append(Migration(version=10, description="Adicionar colunas observacoes, obs_usuario e obs_data na tabela obras", upgrade=self._migration_010_add_observacoes))
         self.migrations.append(Migration(version=11, description="Adicionar tabela medicoes_obra e coluna status_conclusao_obra em obras", upgrade=self._migration_011_medicoes_e_status))
         self.migrations.append(Migration(version=12, description="Lembrete de acesso: campos de vigência e template de renovação", upgrade=self._migration_012_acesso_renovacao))
+        self.migrations.append(Migration(version=13, description="Adicionar valor_parceiro_medicao e valor_empresa_medicao em medicoes_valores", upgrade=self._migration_013_parceiro_medicoes))
+        self.migrations.append(Migration(version=14, description="Adicionar valor_aditivo à tabela obras", upgrade=self._migration_014_add_valor_aditivo))
 
     def _migration_001_add_tipo_recorrencia(self, conn: sqlite3.Connection):
         cursor = conn.cursor()
@@ -302,6 +304,29 @@ class MigrationManager:
         else:
             print("    ⏭️  Template 'RENOVAÇÃO DE SOLICITAÇÃO DE ACESSO' já existe, pulando...")
 
+        conn.commit()
+
+    def _migration_013_parceiro_medicoes(self, conn: sqlite3.Connection):
+        cursor = conn.cursor()
+        cursor.execute("PRAGMA table_info(medicoes_valores)")
+        cols = [row[1] for row in cursor.fetchall()]
+        for col, tipo in [('valor_parceiro_medicao', 'REAL DEFAULT 0'),
+                          ('valor_empresa_medicao', 'REAL DEFAULT 0')]:
+            if col not in cols:
+                cursor.execute(f"ALTER TABLE medicoes_valores ADD COLUMN {col} {tipo}")
+                print(f"    ✅ Coluna {col} adicionada à tabela medicoes_valores")
+            else:
+                print(f"    ⏭️  Coluna {col} já existe, pulando...")
+        conn.commit()
+
+    def _migration_014_add_valor_aditivo(self, conn: sqlite3.Connection):
+        cursor = conn.cursor()
+        cursor.execute("PRAGMA table_info(obras)")
+        if 'valor_aditivo' not in [row[1] for row in cursor.fetchall()]:
+            cursor.execute("ALTER TABLE obras ADD COLUMN valor_aditivo REAL DEFAULT 0.0")
+            print("    ✅ Coluna valor_aditivo adicionada à tabela obras")
+        else:
+            print("    ⏭️  Coluna valor_aditivo já existe, pulando...")
         conn.commit()
 
     def _get_applied_versions(self) -> List[int]:

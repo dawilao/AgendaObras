@@ -492,7 +492,8 @@ class ChecklistRepository(BaseRepository):
 
     # ========== FASE 3 - VALORES MEDIDOS ========== #
 
-    def registrar_valor_medido(self, tarefa_id: int, valor_medido: float, mes_referencia: str = None) -> bool:
+    def registrar_valor_medido(self, tarefa_id: int, valor_medido: float, mes_referencia: str = None,
+                               valor_parceiro_medicao: float = 0.0, valor_empresa_medicao: float = 0.0) -> bool:
         try:
             conn = self.get_connection()
             cursor = conn.cursor()
@@ -508,9 +509,11 @@ class ChecklistRepository(BaseRepository):
             cursor.execute('DELETE FROM medicoes_valores WHERE tarefa_id = ?', (tarefa_id,))
             cursor.execute('''
                 INSERT INTO medicoes_valores
-                (obra_id, tarefa_id, valor_medido, data_medicao, mes_referencia)
-                VALUES (?, ?, ?, ?, ?)
-            ''', (obra_id, tarefa_id, valor_medido, data_medicao, mes_ref))
+                (obra_id, tarefa_id, valor_medido, data_medicao, mes_referencia,
+                 valor_parceiro_medicao, valor_empresa_medicao)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            ''', (obra_id, tarefa_id, valor_medido, data_medicao, mes_ref,
+                  valor_parceiro_medicao, valor_empresa_medicao))
             conn.commit()
             conn.close()
             return True
@@ -556,7 +559,7 @@ class ChecklistRepository(BaseRepository):
             log_error(e, "db.checklist_repo", f"Calcular percentual faturado - Obra: {obra_id}")
             return 0.0
 
-    def calcular_total_faturar(self, obra_id: int) -> float:
+    def calcular_total_a_medir(self, obra_id: int) -> float:
         try:
             conn = self.get_connection()
             cursor = conn.cursor()
@@ -569,7 +572,7 @@ class ChecklistRepository(BaseRepository):
             soma_valores = self.obter_soma_valores_medidos(obra_id)
             return round(total_obra - soma_valores, 2)
         except Exception as e:
-            log_error(e, "db.checklist_repo", f"Calcular total a faturar - Obra: {obra_id}")
+            log_error(e, "db.checklist_repo", f"Calcular total a medir - Obra: {obra_id}")
             return 0.0
 
     def obter_tarefa_origem_id(self, tarefa_id: int) -> Optional[int]:
@@ -681,6 +684,7 @@ class ChecklistRepository(BaseRepository):
             cursor.execute('''
                 SELECT
                     mv.id, mv.tarefa_id, mv.valor_medido, mv.data_medicao, mv.mes_referencia,
+                    mv.valor_parceiro_medicao, mv.valor_empresa_medicao,
                     oc.descricao as tarefa_descricao, oc.data_conclusao
                 FROM medicoes_valores mv
                 LEFT JOIN obra_checklist oc ON mv.tarefa_id = oc.id

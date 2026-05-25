@@ -69,10 +69,34 @@ class ObraDialogsMixin:
 
             with ui.row().classes('w-full gap-2 flex-wrap'):
                 valor_input = ui.number(label='Valor do Contrato (R$) *', min=0, step=0.01, format='%.2f').classes('w-full sm:w-[32%]').props('outlined')
-                valor_parceiro_input = ui.number(label='Valor Parceiro (R$)', min=0, step=0.01, format='%.2f').classes('w-full sm:w-[32%]').props('outlined')
-                valor_percentual_input = ui.number(label='Valor % (%)', min=0, max=100, step=0.01, format='%.2f').classes('w-full sm:w-[32%]').props('outlined')
+                valor_percentual_input = ui.number(label='% Parceiro', min=0, max=100, step=0.01, format='%.2f').classes('w-full sm:w-[32%]').props('outlined')
+                valor_parceiro_input = ui.number(label='Valor Parceiro (R$)', min=0, step=0.01, format='%.2f').classes('w-full sm:w-[32%]').props('outlined readonly')
 
-            total_obra_input = ui.number(label='Total da Obra (R$) *', min=0, step=0.01, format='%.2f').classes('w-full').props('outlined').tooltip('💰 [OBRIGATÓRIO] Valor total da obra para rastreamento financeiro da Fase 3')
+            def _atualizar_parceiro_nova():
+                vc = float(valor_input.value or 0)
+                pct = float(valor_percentual_input.value or 0)
+                valor_parceiro_input.set_value(round(vc * pct / 100, 2))
+
+            with ui.row().classes('w-full gap-2 flex-wrap'):
+                valor_aditivo_input = ui.number(
+                    label='Valor do Aditivo (R$)', value=0, step=0.01, format='%.2f'
+                ).classes('w-full sm:w-[49%]').props('outlined').tooltip(
+                    '💰 Aditivo contratual. Aceita negativo (desconto). Total da Obra = Contrato + Aditivo'
+                )
+                total_obra_input = ui.number(
+                    label='Total da Obra (R$)', value=0, step=0.01, format='%.2f'
+                ).classes('w-full sm:w-[49%]').props('outlined readonly').tooltip(
+                    '🔒 Calculado automaticamente: Valor do Contrato + Valor do Aditivo'
+                )
+
+            def _atualizar_total_obra_nova():
+                vc = float(valor_input.value or 0)
+                va = float(valor_aditivo_input.value or 0)
+                total_obra_input.set_value(round(vc + va, 2))
+
+            valor_input.on_value_change(lambda e: [_atualizar_parceiro_nova(), _atualizar_total_obra_nova()])
+            valor_percentual_input.on_value_change(lambda e: _atualizar_parceiro_nova())
+            valor_aditivo_input.on_value_change(lambda e: _atualizar_total_obra_nova())
 
             ui.separator().classes('my-4')
 
@@ -130,6 +154,7 @@ class ObraDialogsMixin:
                     servico=servico_input.value or None,
                     valor_parceiro=valor_parceiro_input.value or None,
                     valor_percentual=valor_percentual_input.value or None,
+                    valor_aditivo=valor_aditivo_input.value or 0,
                     total_obra=total_obra_input.value or None,
                     mes_execucao=mes_execucao_input.value or None,
                     ano_execucao=int(ano_execucao_input.value) if ano_execucao_input.value else None,
@@ -157,7 +182,7 @@ class ObraDialogsMixin:
 
         total_obra = kwargs.get('total_obra')
         if not total_obra or total_obra <= 0:
-            self.notificar('Total da Obra é obrigatório e deve ser maior que zero!', tipo='warning')
+            self.notificar('Total da Obra deve ser maior que zero. Verifique o Valor do Aditivo.', tipo='warning')
             return
 
         try:
@@ -281,10 +306,44 @@ class ObraDialogsMixin:
 
             with ui.row().classes('w-full gap-2 flex-wrap'):
                 valor_input = ui.number(label='Valor do Contrato (R$)', value=obra['valor_contrato'], min=0, step=0.01, format='%.2f').classes('w-full sm:w-[32%]').props('outlined')
-                valor_parceiro_input = ui.number(label='Valor Parceiro (R$)', value=obra.get('valor_parceiro') or 0, min=0, step=0.01, format='%.2f').classes('w-full sm:w-[32%]').props('outlined')
-                valor_percentual_input = ui.number(label='Valor % (%)', value=obra.get('valor_percentual') or 0, min=0, max=100, step=0.01, format='%.2f').classes('w-full sm:w-[32%]').props('outlined')
+                valor_percentual_input = ui.number(label='% Parceiro', value=obra.get('valor_percentual') or 0, min=0, max=100, step=0.01, format='%.2f').classes('w-full sm:w-[32%]').props('outlined')
+                valor_parceiro_input = ui.number(label='Valor Parceiro (R$)', value=obra.get('valor_parceiro') or 0, min=0, step=0.01, format='%.2f').classes('w-full sm:w-[32%]').props('outlined readonly')
 
-            total_obra_input = ui.number(label='Total da Obra (R$) *', value=obra.get('total_obra') or 0, min=0, step=0.01, format='%.2f').classes('w-full').props('outlined').tooltip('💰 [OBRIGATÓRIO] Valor total da obra para rastreamento financeiro da Fase 3')
+            def _atualizar_parceiro_edicao():
+                vc = float(valor_input.value or 0)
+                pct = float(valor_percentual_input.value or 0)
+                valor_parceiro_input.set_value(round(vc * pct / 100, 2))
+
+            _atualizar_parceiro_edicao()
+
+            # Backward-compat: se valor_aditivo não está salvo mas total_obra difere do contrato,
+            # infere o aditivo do gap para preservar o valor financeiro existente
+            _db_total_obra = obra.get('total_obra') or 0
+            _db_valor_contrato = obra.get('valor_contrato') or 0
+            _db_valor_aditivo = obra.get('valor_aditivo') or 0
+            initial_aditivo = _db_valor_aditivo if _db_valor_aditivo != 0 else round(_db_total_obra - _db_valor_contrato, 2)
+
+            with ui.row().classes('w-full gap-2 flex-wrap'):
+                valor_aditivo_input = ui.number(
+                    label='Valor do Aditivo (R$)', value=initial_aditivo, step=0.01, format='%.2f'
+                ).classes('w-full sm:w-[49%]').props('outlined').tooltip(
+                    '💰 Aditivo contratual. Aceita negativo (desconto). Total da Obra = Contrato + Aditivo'
+                )
+                total_obra_input = ui.number(
+                    label='Total da Obra (R$)', value=_db_total_obra, step=0.01, format='%.2f'
+                ).classes('w-full sm:w-[49%]').props('outlined readonly').tooltip(
+                    '🔒 Calculado automaticamente: Valor do Contrato + Valor do Aditivo'
+                )
+
+            def _atualizar_total_obra_edicao():
+                vc = float(valor_input.value or 0)
+                va = float(valor_aditivo_input.value or 0)
+                total_obra_input.set_value(round(vc + va, 2))
+
+            valor_input.on_value_change(lambda e: [_atualizar_parceiro_edicao(), _atualizar_total_obra_edicao()])
+            valor_percentual_input.on_value_change(lambda e: _atualizar_parceiro_edicao())
+            valor_aditivo_input.on_value_change(lambda e: _atualizar_total_obra_edicao())
+            _atualizar_total_obra_edicao()
 
             ui.separator().classes('my-4')
 
@@ -436,6 +495,96 @@ class ObraDialogsMixin:
 
             ui.separator()
 
+            # Guarda o % Parceiro original para detectar mudança na hora de salvar
+            pct_parceiro_original = float(obra.get('valor_percentual') or 0)
+
+            def _executar_salvar_obra():
+                """Realiza o salvamento efetivo da obra."""
+                self.atualizar_obra_dialog(
+                    dialog, obra_id, nome_input.value, contrato_input.value,
+                    valor_input.value, data_input.value, status_input.value, checklist_estados,
+                    checklist_container,
+                    contrato_ic=contrato_ic_input.value,
+                    pedido_sap=pedido_sap_input.value or None,
+                    prefixo_agencia=prefixo_agencia_input.value,
+                    servico=servico_input.value,
+                    valor_parceiro=valor_parceiro_input.value,
+                    valor_percentual=valor_percentual_input.value,
+                    valor_aditivo=valor_aditivo_input.value or 0,
+                    total_obra=total_obra_input.value,
+                    mes_execucao=mes_execucao_input.value,
+                    ano_execucao=int(ano_execucao_input.value) if ano_execucao_input.value else None,
+                    data_assinatura=data_assinatura_input.value if data_assinatura_input.value else None,
+                    data_aio=data_aio_input.value if data_aio_input.value else None,
+                    data_acionamento=data_acionamento_input.value if data_acionamento_input.value else None,
+                    observacoes=observacoes_input.value
+                )
+
+            def salvar_com_validacao_pct():
+                """Valida mudança de % Parceiro antes de salvar.
+
+                Se o % mudou e já existem medições concluídas com valor inserido,
+                exibe um diálogo de confirmação informando que os valores já
+                registrados não serão recalculados automaticamente.
+                """
+                novo_pct = float(valor_percentual_input.value or 0)
+                pct_mudou = abs(novo_pct - pct_parceiro_original) > 0.001
+
+                if pct_mudou:
+                    medicoes_concluidas = self.db.obter_valores_medicoes(obra_id)
+                    if medicoes_concluidas:
+                        qtd = len(medicoes_concluidas)
+                        label_plural = 'medição concluída' if qtd == 1 else 'medições concluídas'
+
+                        with ui.dialog() as dialog_confirma_pct, ui.card().classes('responsive-dialog-sm').style('padding: 20px;'):
+                            ui.label('⚠️ Alterar % Parceiro').style(
+                                'font-size: 18px; font-weight: bold; margin-bottom: 10px;'
+                            )
+                            ui.label(
+                                f'Esta obra possui {qtd} {label_plural} com valor já calculado '
+                                f'usando {pct_parceiro_original:.2f}% de parceiro.'
+                            ).style('color: #555; margin-bottom: 12px;')
+
+                            with ui.card().classes('w-full').style(
+                                'background: #fff8e1; border-left: 4px solid #f57c00; padding: 12px; margin-bottom: 12px;'
+                            ):
+                                ui.label('ℹ️ Atenção').style(
+                                    'font-weight: bold; color: #e65100; margin-bottom: 6px;'
+                                )
+                                ui.label(
+                                    'Os valores de parceiro/empresa já registrados nas medições '
+                                    'concluídas continuarão com a % anterior. '
+                                    'Para que o programa considere a % atual, desmarque a tarefa '
+                                    'de medição e conclua-a novamente.'
+                                ).style('font-size: 13px; color: #5d4037; line-height: 1.5;')
+
+                            ui.label('Deseja mesmo alterar o % Parceiro?').style(
+                                'font-weight: bold; margin-top: 6px;'
+                            )
+                            ui.separator()
+
+                            with ui.row().classes('w-full justify-end gap-2'):
+                                def _cancelar_mudanca_pct():
+                                    dialog_confirma_pct.close()
+                                    # Reverte o campo % Parceiro ao valor original salvo
+                                    valor_percentual_input.set_value(pct_parceiro_original)
+                                    vc = float(valor_input.value or 0)
+                                    valor_parceiro_input.set_value(round(vc * pct_parceiro_original / 100, 2))
+
+                                ui.button('Cancelar', on_click=_cancelar_mudanca_pct).props('flat')
+
+                                def _confirmar_mudanca_pct():
+                                    dialog_confirma_pct.close()
+                                    _executar_salvar_obra()
+
+                                ui.button('✅ Sim, alterar', on_click=_confirmar_mudanca_pct).props('color=warning')
+
+                        dialog_confirma_pct.open()
+                        return
+
+                # % não mudou ou não há medições concluídas → salva diretamente
+                _executar_salvar_obra()
+
             pode_excluir = permissoes['is_admin']
             with ui.row().classes('w-full justify-between'):
                 botao_excluir = ui.button(
@@ -448,24 +597,7 @@ class ObraDialogsMixin:
 
                 with ui.row().classes('gap-2'):
                     ui.button('Cancelar', on_click=lambda: fechar_dialog_com_autosalvamento()).props('flat')
-                    ui.button('💾 Salvar Alterações', on_click=lambda: self.atualizar_obra_dialog(
-                        dialog, obra_id, nome_input.value, contrato_input.value,
-                        valor_input.value, data_input.value, status_input.value, checklist_estados,
-                        checklist_container,
-                        contrato_ic=contrato_ic_input.value,
-                        pedido_sap=pedido_sap_input.value or None,
-                        prefixo_agencia=prefixo_agencia_input.value,
-                        servico=servico_input.value,
-                        valor_parceiro=valor_parceiro_input.value,
-                        valor_percentual=valor_percentual_input.value,
-                        total_obra=total_obra_input.value,
-                        mes_execucao=mes_execucao_input.value,
-                        ano_execucao=int(ano_execucao_input.value) if ano_execucao_input.value else None,
-                        data_assinatura=data_assinatura_input.value if data_assinatura_input.value else None,
-                        data_aio=data_aio_input.value if data_aio_input.value else None,
-                        data_acionamento=data_acionamento_input.value if data_acionamento_input.value else None,
-                        observacoes=observacoes_input.value
-                    )).props('color=primary')
+                    ui.button('💾 Salvar Alterações', on_click=salvar_com_validacao_pct).props('color=primary')
 
         dialog.open()
 
@@ -1011,11 +1143,30 @@ class ObraDialogsMixin:
 
     def abrir_dialog_valor_medicao(self, obra_id: int, item_id: int, checkbox_obj, atualizar_checklist_fn):
         """Abre o diálogo para inserir o valor faturado no mês e só então conclui a tarefa."""
+        obra_data = self.db.obter_obra(obra_id)
+        pct_parceiro = float((obra_data or {}).get('valor_percentual') or 0)
+
         with ui.dialog() as dialog, ui.card().classes('responsive-dialog-sm').style('padding: 20px; min-width: 300px;'):
             ui.label('💰 Valor da Medição').style('font-size: 18px; font-weight: bold; margin-bottom: 8px;')
             ui.label('Informe o valor faturado referente a esta medição.').style('color: #666; margin-bottom: 10px;')
 
             valor_input = ui.number('Valor Medido (R$)', format='%.2f', min=0).classes('w-full').props('outlined autofocus')
+
+            if pct_parceiro > 0:
+                ui.label(f'% Parceiro cadastrado: {pct_parceiro:.2f}%').style(
+                    'font-size: 12px; color: #666; margin-top: 4px;'
+                )
+                label_split = ui.label('').style('font-size: 12px; color: #7b1fa2; font-weight: bold;')
+
+                def _atualizar_split():
+                    val = float(valor_input.value or 0)
+                    vp = round(val * pct_parceiro / 100, 2)
+                    ve = round(val - vp, 2)
+                    label_split.set_text(
+                        f'Parceiro: {self.helper.formatar_valor(vp)} | Empresa: {self.helper.formatar_valor(ve)}'
+                    )
+
+                valor_input.on_value_change(lambda e: _atualizar_split())
 
             ui.separator().classes('my-4')
 
@@ -1026,7 +1177,13 @@ class ObraDialogsMixin:
                         self.notificar('O valor medido não pode ser negativo!', tipo='warning')
                         return
 
-                    sucesso = self.db.registrar_valor_medido(item_id, valor)
+                    vp = round(valor * pct_parceiro / 100, 2)
+                    ve = round(valor - vp, 2)
+                    sucesso = self.db.registrar_valor_medido(
+                        item_id, valor,
+                        valor_parceiro_medicao=vp,
+                        valor_empresa_medicao=ve
+                    )
                     if not sucesso:
                         self.notificar('❌ Erro ao salvar o valor da medição no banco.', tipo='negative')
                         return
@@ -1171,7 +1328,7 @@ class ObraDialogsMixin:
 
         total_obra = kwargs.get('total_obra')
         if not total_obra or total_obra <= 0:
-            self.notificar('Total da Obra é obrigatório e deve ser maior que zero!', tipo='warning')
+            self.notificar('Total da Obra deve ser maior que zero. Verifique o Valor do Aditivo.', tipo='warning')
             return
 
         if not self._usuario_pode_acessar_contrato(cliente):

@@ -773,7 +773,7 @@ class AgendaObras(ObraCardMixin, ObraDialogsMixin, AdminDialogsMixin):
                         'font-size: 14px; color: #666; margin-bottom: 10px; font-weight: 500;'
                     )
 
-                with ui.grid(columns='repeat(auto-fit, minmax(min(100%, 360px), 1fr))').classes('w-full gap-4'):
+                with ui.grid(columns='repeat(auto-fit, minmax(min(100%, 380px), 1fr))').classes('w-full gap-4'):
                     for obra in obras:
                         self.criar_card_obra(obra)
 

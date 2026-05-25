@@ -221,11 +221,18 @@ class ObraCardMixin:
                 with ui.tab_panel(tab_financeiro).style('max-height: 370px; overflow-y: auto;'):
                     with ui.column().classes('w-full gap-2'):
                         valor_contrato = obra.get('valor_contrato') or 0
+                        valor_aditivo = obra.get('valor_aditivo') or 0
                         total_obra = obra.get('total_obra') or 0
 
                         ui.label(f'Valor do Contrato: {self.helper.formatar_valor(valor_contrato)}').style(
                             'font-size: 13px; color: #666;'
                         )
+                        if valor_aditivo != 0:
+                            _cor_aditivo = '#d32f2f' if valor_aditivo < 0 else '#1565c0'
+                            _sinal = '−' if valor_aditivo < 0 else '+'
+                            ui.label(
+                                f'Valor do Aditivo: {_sinal} {self.helper.formatar_valor(abs(valor_aditivo))}'
+                            ).style(f'font-size: 13px; color: {_cor_aditivo};')
                         ui.label(f'Total da Obra: {self.helper.formatar_valor(total_obra)}').style(
                             'font-size: 13px; color: #2e7d32; font-weight: bold;'
                         )
@@ -234,29 +241,54 @@ class ObraCardMixin:
 
                         soma_medidos = self.db.obter_soma_valores_medidos(obra['id'])
                         percentual_faturado = (soma_medidos / total_obra * 100) if total_obra > 0 else 0.0
-                        total_faturar = total_obra - soma_medidos
+                        total_a_medir = total_obra - soma_medidos
 
-                        ui.label(f'Total Faturado: {self.helper.formatar_valor(soma_medidos)}').style(
+                        ui.label(f'Total Medido: {self.helper.formatar_valor(soma_medidos)}').style(
                             'font-size: 13px; color: #1976d2; font-weight: bold;'
                         )
 
                         cor_pct = '#d32f2f' if percentual_faturado > 100 else '#1976d2'
-                        ui.label(f'% Faturada da Obra: {percentual_faturado:.2f}%').style(
+                        ui.label(f'% Medida da Obra: {percentual_faturado:.2f}%').style(
                             f'font-size: 13px; color: {cor_pct}; font-weight: bold;'
                         )
                         ui.linear_progress(
                             min(percentual_faturado / 100, 1.0), show_value=False
                         ).style('height: 8px;').props(f'color={"negative" if percentual_faturado > 100 else "primary"}')
 
-                        cor_saldo = '#d32f2f' if total_faturar < 0 else '#2e7d32'
-                        label_saldo = f'Total a Faturar (Saldo): {self.helper.formatar_valor(total_faturar)}'
-                        if total_faturar < 0:
+                        cor_saldo = '#d32f2f' if total_a_medir < 0 else '#2e7d32'
+                        label_saldo = f'Total a Medir (Saldo): {self.helper.formatar_valor(total_a_medir)}'
+                        if total_a_medir < 0:
                             label_saldo += '  ⚠️ Acima do orçamento!'
                         ui.label(label_saldo).style(
                             f'font-size: 13px; color: {cor_saldo}; font-weight: bold;'
                         )
 
                         historico = self.db.obter_valores_medicoes(obra['id'])
+                        soma_parceiro_medido = round(
+                            sum((m.get('valor_parceiro_medicao') or 0) for m in historico), 2
+                        )
+                        soma_empresa_medido = round(
+                            sum((m.get('valor_empresa_medicao') or 0) for m in historico), 2
+                        )
+
+                        valor_percentual = obra.get('valor_percentual') or 0
+                        if valor_percentual > 0:
+                            total_parceiro = round(valor_contrato * valor_percentual / 100, 2)
+                            total_empresa = round(total_obra - total_parceiro, 2)
+                            ui.separator().classes('my-1')
+                            ui.label(
+                                f'Valor Total do Parceiro ({valor_percentual:.2f}%): {self.helper.formatar_valor(total_parceiro)}'
+                            ).style('font-size: 13px; color: #7b1fa2;')
+                            ui.label(
+                                f'Valor Destinado à Empresa: {self.helper.formatar_valor(total_empresa)}'
+                            ).style('font-size: 13px; color: #e65100; font-weight: bold;')
+                            if soma_parceiro_medido or soma_empresa_medido:
+                                ui.label(
+                                    f'↳ Parceiro medido até agora: {self.helper.formatar_valor(soma_parceiro_medido)}'
+                                ).style('font-size: 12px; color: #7b1fa2;')
+                                ui.label(
+                                    f'↳ Empresa medida até agora: {self.helper.formatar_valor(soma_empresa_medido)}'
+                                ).style('font-size: 12px; color: #e65100;')
                         if historico:
                             ui.separator().classes('my-2')
                             ui.label('Histórico de Medições').style(
@@ -275,12 +307,22 @@ class ObraCardMixin:
                                         data_fmt = datetime.datetime.strptime(data_conf, '%Y-%m-%d').strftime('%d/%m/%Y')
                                     except Exception:
                                         data_fmt = data_conf
+                                    vp_med = med.get('valor_parceiro_medicao') or 0
+                                    ve_med = med.get('valor_empresa_medicao') or 0
                                     with ui.row().classes('w-full items-center justify-between').style(
                                         'background: #f5f5f5; border-radius: 4px; padding: 4px 8px;'
                                     ):
                                         ui.label(f'Medição {mes_label}').style('font-size: 12px; color: #444;')
                                         with ui.row().classes('items-center gap-3'):
-                                            ui.label(self.helper.formatar_valor(med['valor_medido'])).style(
-                                                'font-size: 12px; color: #1976d2; font-weight: bold;'
-                                            )
+                                            with ui.column().classes('items-end gap-0'):
+                                                ui.label(f'Total: {self.helper.formatar_valor(med["valor_medido"])}').style(
+                                                    'font-size: 11px; color: #1976d2; font-weight: bold;'
+                                                )
+                                                if vp_med or ve_med:
+                                                    ui.label(f'P: {self.helper.formatar_valor(vp_med)}').style(
+                                                        'font-size: 10px; color: #7b1fa2;'
+                                                    )
+                                                    ui.label(f'E: {self.helper.formatar_valor(ve_med)}').style(
+                                                        'font-size: 10px; color: #e65100;'
+                                                    )
                                             ui.label(data_fmt).style('font-size: 11px; color: #999;')
