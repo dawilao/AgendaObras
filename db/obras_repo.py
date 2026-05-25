@@ -415,7 +415,6 @@ class ObrasRepository(BaseRepository):
             return
 
         if not nova_data or not nova_data.strip():
-            print(f"\n🔒 Data {campo_atualizado} removida. Bloqueando tarefas relacionadas...")
             cursor.execute('''
                 UPDATE obra_checklist
                 SET bloqueado = 1, data_limite = NULL, data_base_calculo = NULL
@@ -431,18 +430,7 @@ class ObrasRepository(BaseRepository):
 
             conn.commit()
             conn.close()
-            print(f"✅ Tarefas bloqueadas com sucesso\n")
             return
-
-        print(f"\n🔄 Recalculando tarefas com base_calculo='{base_calculo}' para obra {obra_id}...")
-        print(f"   Nova data base: {nova_data}")
-
-        cursor.execute('SELECT descricao, base_calculo, concluido, bloqueado, data_limite, recorrencia FROM obra_checklist WHERE obra_id = ?', (obra_id,))
-        todas = cursor.fetchall()
-        print(f"   === DEBUG: TODAS as tarefas da obra ===")
-        for t in todas:
-            print(f"   - {t['descricao']}: base={t['base_calculo']}, concluido={t['concluido']}, bloqueado={t['bloqueado']}, limite={t['data_limite']}, recorrencia={t['recorrencia']}")
-        print(f"   =====================================")
 
         if campo_atualizado == 'data_inicio':
             hoje = datetime.date.today()
@@ -453,18 +441,12 @@ class ObrasRepository(BaseRepository):
                     SET bloqueado = 0
                     WHERE obra_id = ? AND recorrencia = 'mensal' AND bloqueado = 1
                 ''', (obra_id,))
-                rows_updated = cursor.rowcount
-                if rows_updated > 0:
-                    print(f"   ✅ Desbloqueadas {rows_updated} tarefa(s) mensal(is)")
             else:
                 cursor.execute('''
                     UPDATE obra_checklist
                     SET bloqueado = 1
                     WHERE obra_id = ? AND recorrencia = 'mensal' AND concluido = 0
                 ''', (obra_id,))
-                rows_updated = cursor.rowcount
-                if rows_updated > 0:
-                    print(f"   🔒 Bloqueadas {rows_updated} tarefa(s) mensal(is)")
 
         cursor.execute('''
             SELECT * FROM obra_checklist
@@ -472,15 +454,11 @@ class ObrasRepository(BaseRepository):
         ''', (obra_id, base_calculo))
 
         tarefas = cursor.fetchall()
-        print(f"   Tarefas encontradas para recálculo: {len(tarefas)}")
-
         tarefas_atualizadas = 0
         for tarefa in tarefas:
             data_obj = datetime.datetime.strptime(nova_data, '%Y-%m-%d')
             prazo_dias = tarefa['prazo_dias']
             nova_data_limite = data_obj + datetime.timedelta(days=prazo_dias)
-
-            print(f"   📝 {tarefa['descricao']}: prazo={prazo_dias} dias, antiga={tarefa['data_limite']}, nova={nova_data_limite.strftime('%d/%m/%Y')}")
 
             cursor.execute('''
                 UPDATE obra_checklist
@@ -489,13 +467,10 @@ class ObrasRepository(BaseRepository):
                 WHERE id = ?
             ''', (nova_data_limite.strftime('%Y-%m-%d'), nova_data, tarefa['id']))
 
-            print(f"   ✅ Recalculado: {tarefa['descricao']} -> {nova_data_limite.strftime('%d/%m/%Y')}")
             tarefas_atualizadas += 1
 
         conn.commit()
         conn.close()
-
-        print(f"🔄 Recálculo concluído: {tarefas_atualizadas} tarefa(s) atualizada(s)\n")
         return tarefas_atualizadas
 
     def atualizar_data_critica(self, obra_id: int, campo: str, data: str):
