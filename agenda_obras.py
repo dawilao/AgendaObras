@@ -550,20 +550,11 @@ class AgendaObras(ObraCardMixin, ObraDialogsMixin, AdminDialogsMixin):
                     'font-weight: bold; margin-right: 10px; font-size: 14px;'
                 )
 
-                # debounce="300" é a prop nativa do q-input (Quasar): atrasa
-                # a atualização do v-model em 300ms após a última tecla. Toda
-                # a coalescência acontece no navegador — quando o evento chega
-                # ao Python, o valor já está estabilizado e o on_change dispara.
-                self.input_pesquisa = ui.input(
-                    placeholder='🔍 Pesquisar obras...',
-                    on_change=lambda e: self.pesquisa(e.value or ''),
-                ).classes('w-80').props('outlined dense debounce="300"').style(
+                self.input_pesquisa = ui.input(placeholder='🔍 Pesquisar obras...').classes('w-80').props('outlined dense').style(
                     'background-color: white; border-radius: 4px; margin-right: 10px;'
                 )
-                self.input_pesquisa.on(
-                    'keydown.enter',
-                    lambda: self.pesquisa(self.input_pesquisa.value or ''),
-                )
+                self.input_pesquisa.on('input', lambda: self.pesquisa(self.input_pesquisa.value))
+                self.input_pesquisa.on('keydown.enter', lambda: self.pesquisa(self.input_pesquisa.value))
 
                 ui.space()
 
