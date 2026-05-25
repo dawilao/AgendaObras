@@ -162,6 +162,13 @@ class ObraCardMixin:
                         )
 
                         for item in checklist:
+                            # Cálculo único por item — reutilizado no tooltip e no label inline
+                            dias_restantes = (
+                                self.calcular_dias_restantes_exibicao(item)
+                                if item.get('data_limite') and not item.get('bloqueado') and not item.get('concluido')
+                                else None
+                            )
+
                             if item['concluido']:
                                 data_conclusao = item.get('data_conclusao')
                                 data_conclusao_fmt = formatar_data_exibicao(data_conclusao) if data_conclusao else ''
@@ -176,8 +183,7 @@ class ObraCardMixin:
                                     tooltip_text = '🔒 Aguardando conclusão de tarefa anterior'
                                 else:
                                     tooltip_text = '🔒 Tarefa bloqueada'
-                            elif item.get('data_limite'):
-                                dias_restantes = self.calcular_dias_restantes_exibicao(item)
+                            elif dias_restantes is not None:
                                 sufixo_dias = ' dias úteis' if self.usa_dias_uteis_exibicao(item) else ' dias'
                                 data_formatada = formatar_data_exibicao(item['data_limite'])
                                 if dias_restantes < 0:
@@ -210,12 +216,10 @@ class ObraCardMixin:
                                     ui.icon('radio_button_unchecked').style('color: #ff9800; font-size: 14px;')
                                     with ui.column().classes('gap-0'):
                                         ui.label(item['descricao']).style('font-size: 11px; color: #666;')
-                                        if item.get('data_limite'):
-                                            dias_restantes = self.calcular_dias_restantes_exibicao(item)
-                                            if dias_restantes < 0:
-                                                info_reiteracao = self.formatar_info_reiteracao(item)
-                                                if info_reiteracao:
-                                                    ui.label(info_reiteracao).style('font-size: 9px; color: #ff5722; font-style: italic;')
+                                        if dias_restantes is not None and dias_restantes < 0:
+                                            info_reiteracao = self.formatar_info_reiteracao(item)
+                                            if info_reiteracao:
+                                                ui.label(info_reiteracao).style('font-size: 9px; color: #ff5722; font-style: italic;')
 
                 with ui.tab_panel(tab_financeiro).style('max-height: 370px; overflow-y: auto;'):
                     with ui.column().classes('w-full gap-2'):
