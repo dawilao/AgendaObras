@@ -88,11 +88,10 @@ class ObraCardMixin:
 
                         if item_acesso and item_acesso.get('concluido'):
                             ui.separator()
-                            dados_acesso = self.db.obter_dados_acesso(item_acesso['id'])
-                            if dados_acesso and dados_acesso.get('data_inicio_acesso') and dados_acesso.get('data_fim_acesso'):
-                                data_inicio = formatar_data_exibicao(dados_acesso['data_inicio_acesso'])
-                                data_fim = formatar_data_exibicao(dados_acesso['data_fim_acesso'])
-                                dias_ate_fim = (datetime.date.fromisoformat(dados_acesso['data_fim_acesso']) - datetime.date.today()).days
+                            if item_acesso.get('data_inicio_acesso') and item_acesso.get('data_fim_acesso'):
+                                data_inicio = formatar_data_exibicao(item_acesso['data_inicio_acesso'])
+                                data_fim = formatar_data_exibicao(item_acesso['data_fim_acesso'])
+                                dias_ate_fim = (datetime.date.fromisoformat(item_acesso['data_fim_acesso']) - datetime.date.today()).days
                                 renovacao_concluida = any(
                                     (i.get('descricao') or '').strip() == TAREFA_RENOVACAO_ACESSO and i.get('concluido')
                                     for i in checklist
