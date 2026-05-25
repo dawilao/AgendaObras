@@ -244,12 +244,12 @@ class ObraDialogsMixin:
                         try:
                             self.db.registrar_finalizacao_obra(obra_id, 'sem_pendencias')
                             obra['status_conclusao_obra'] = 'sem_pendencias'
+                            estado_dialog['modificado'] = True
                             self.notificar('✅ Pendências resolvidas. O card agora será exibido como Concluído.', tipo='positive')
                             try:
                                 dialog.close()
                             except Exception:
                                 pass
-                            ui.timer(0.05, self.renderizar_obras, once=True)
                         except Exception as e:
                             log_error(e, 'agenda_obras', 'Resolver pendências da obra')
                             self.notificar(f'❌ Erro ao resolver pendências: {e}', tipo='negative')
@@ -428,6 +428,7 @@ class ObraDialogsMixin:
                     ui.button('Alterar medições', on_click=None).props('flat color=primary size=sm disable').tooltip('Preencha a Data de início da obra para configurar as medições.')
 
             autosave_em_execucao = {'ativo': False}
+            estado_dialog = {'modificado': False}
 
             def autosalvar_ao_sair():
                 """Salva observações pendentes ao sair do diálogo de edição."""
@@ -459,6 +460,7 @@ class ObraDialogsMixin:
                             obra['observacoes'] = observacoes_nova
                             obra['obs_usuario'] = obs_usuario or ''
                             obra['obs_data'] = obs_data or ''
+                            estado_dialog['modificado'] = True
                         else:
                             self.notificar('Não foi possível salvar automaticamente as observações.', tipo='warning')
                 except Exception as e:
@@ -470,10 +472,16 @@ class ObraDialogsMixin:
                 autosalvar_ao_sair()
                 dialog.close()
 
-            dialog.on('hide', lambda e: [autosalvar_ao_sair(), self.renderizar_obras()])
+            def _ao_fechar_dialog(e):
+                autosalvar_ao_sair()
+                if estado_dialog['modificado']:
+                    self.renderizar_obras()
+
+            dialog.on('hide', _ao_fechar_dialog)
 
             def atualizar_checklist():
                 """Recarrega todos os itens do checklist a partir do banco"""
+                estado_dialog['modificado'] = True
                 checklist_estados.clear()
                 checklist_container.clear()
                 checklist_atualizado = self.db.obter_checklist(obra_id)
@@ -500,7 +508,7 @@ class ObraDialogsMixin:
 
             def _executar_salvar_obra():
                 """Realiza o salvamento efetivo da obra."""
-                self.atualizar_obra_dialog(
+                sucesso = self.atualizar_obra_dialog(
                     dialog, obra_id, nome_input.value, contrato_input.value,
                     valor_input.value, data_input.value, status_input.value, checklist_estados,
                     checklist_container,
@@ -519,6 +527,8 @@ class ObraDialogsMixin:
                     data_acionamento=data_acionamento_input.value if data_acionamento_input.value else None,
                     observacoes=observacoes_input.value
                 )
+                if sucesso:
+                    estado_dialog['modificado'] = True
 
             def salvar_com_validacao_pct():
                 """Valida mudança de % Parceiro antes de salvar.
@@ -1448,6 +1458,7 @@ class ObraDialogsMixin:
                     pass
 
             self.notificar('✅ Obra atualizada!', tipo='positive', timeout=3)
+            return True
 
         except Exception as e:
             log_error(e, "agenda_obras", f"Atualizar obra - ID: {obra_id}")

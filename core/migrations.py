@@ -63,6 +63,7 @@ class MigrationManager:
         self.migrations.append(Migration(version=12, description="Lembrete de acesso: campos de vigência e template de renovação", upgrade=self._migration_012_acesso_renovacao))
         self.migrations.append(Migration(version=13, description="Adicionar valor_parceiro_medicao e valor_empresa_medicao em medicoes_valores", upgrade=self._migration_013_parceiro_medicoes))
         self.migrations.append(Migration(version=14, description="Adicionar valor_aditivo à tabela obras", upgrade=self._migration_014_add_valor_aditivo))
+        self.migrations.append(Migration(version=15, description="Adicionar índices de performance em obra_checklist e medicoes_valores", upgrade=self._migration_015_add_performance_indexes))
 
     def _migration_001_add_tipo_recorrencia(self, conn: sqlite3.Connection):
         cursor = conn.cursor()
@@ -327,6 +328,19 @@ class MigrationManager:
             print("    ✅ Coluna valor_aditivo adicionada à tabela obras")
         else:
             print("    ⏭️  Coluna valor_aditivo já existe, pulando...")
+        conn.commit()
+
+    def _migration_015_add_performance_indexes(self, conn: sqlite3.Connection):
+        cursor = conn.cursor()
+        indexes = [
+            ('idx_oc_obra_id',  'CREATE INDEX IF NOT EXISTS idx_oc_obra_id  ON obra_checklist(obra_id)'),
+            ('idx_mv_obra_id',  'CREATE INDEX IF NOT EXISTS idx_mv_obra_id  ON medicoes_valores(obra_id)'),
+            ('idx_oc_depende',  'CREATE INDEX IF NOT EXISTS idx_oc_depende  ON obra_checklist(depende_item_id)'),
+            ('idx_oc_template', 'CREATE INDEX IF NOT EXISTS idx_oc_template ON obra_checklist(template_id)'),
+        ]
+        for nome, sql in indexes:
+            cursor.execute(sql)
+            print(f"    ✅ Índice {nome} criado")
         conn.commit()
 
     def _get_applied_versions(self) -> List[int]:
