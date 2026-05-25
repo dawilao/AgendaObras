@@ -48,6 +48,7 @@ class AgendaObras(ObraCardMixin, ObraDialogsMixin, AdminDialogsMixin):
         # Container do body (para atualização dinâmica)
         self.body_container = None
         self.filtro_pesquisa = ""
+        self._debounce_pesquisa = None
 
         # Verifica atualização antes de construir UI
         self.verificar_atualizacao()
@@ -553,7 +554,16 @@ class AgendaObras(ObraCardMixin, ObraDialogsMixin, AdminDialogsMixin):
                 self.input_pesquisa = ui.input(placeholder='🔍 Pesquisar obras...').classes('w-80').props('outlined dense').style(
                     'background-color: white; border-radius: 4px; margin-right: 10px;'
                 )
-                self.input_pesquisa.on('input', lambda: self.pesquisa(self.input_pesquisa.value))
+                def _on_input_pesquisa():
+                    if self._debounce_pesquisa:
+                        self._debounce_pesquisa.cancel()
+                    self._debounce_pesquisa = ui.timer(
+                        0.3,
+                        lambda: self.pesquisa(self.input_pesquisa.value),
+                        once=True,
+                    )
+
+                self.input_pesquisa.on('input', _on_input_pesquisa)
                 self.input_pesquisa.on('keydown.enter', lambda: self.pesquisa(self.input_pesquisa.value))
 
                 ui.space()
