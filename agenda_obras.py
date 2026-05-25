@@ -723,7 +723,7 @@ class AgendaObras(ObraCardMixin, ObraDialogsMixin, AdminDialogsMixin):
         """Corpo principal com grid de obras"""
         with ui.column().classes('w-full p-0'):
             with ui.card().classes('w-full').style('background-color: #fafafa;'):
-                ui.label('Obras Cadastradas').style('font-size: 20px; font-weight: bold; margin-bottom: 10px;')
+                ui.label(f'{len(self.db.listar_obras())} Obras Cadastradas').style('font-size: 20px; font-weight: bold; margin-bottom: 10px;')
 
                 self.body_container = ui.column().classes('w-full')
 
