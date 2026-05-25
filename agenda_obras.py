@@ -48,8 +48,6 @@ class AgendaObras(ObraCardMixin, ObraDialogsMixin, AdminDialogsMixin):
         # Container do body (para atualização dinâmica)
         self.body_container = None
         self.filtro_pesquisa = ""
-        self._debounce_pesquisa = None
-        self._debounce_versao = 0
 
         # Verifica atualização antes de construir UI
         self.verificar_atualizacao()
@@ -552,23 +550,20 @@ class AgendaObras(ObraCardMixin, ObraDialogsMixin, AdminDialogsMixin):
                     'font-weight: bold; margin-right: 10px; font-size: 14px;'
                 )
 
-                self.input_pesquisa = ui.input(placeholder='🔍 Pesquisar obras...').classes('w-80').props('outlined dense').style(
+                # debounce="300" é a prop nativa do q-input (Quasar): atrasa
+                # a atualização do v-model em 300ms após a última tecla. Toda
+                # a coalescência acontece no navegador — quando o evento chega
+                # ao Python, o valor já está estabilizado e o on_change dispara.
+                self.input_pesquisa = ui.input(
+                    placeholder='🔍 Pesquisar obras...',
+                    on_change=lambda e: self.pesquisa(e.value or ''),
+                ).classes('w-80').props('outlined dense debounce="300"').style(
                     'background-color: white; border-radius: 4px; margin-right: 10px;'
                 )
-                def _on_input_pesquisa():
-                    # Incrementa versão — garante que timers antigos que escapem
-                    # do cancel() (race condition) se tornem no-op
-                    self._debounce_versao += 1
-                    versao = self._debounce_versao
-                    if self._debounce_pesquisa:
-                        self._debounce_pesquisa.cancel()
-                    def _disparar():
-                        if self._debounce_versao == versao:
-                            self.pesquisa(self.input_pesquisa.value)
-                    self._debounce_pesquisa = ui.timer(0.3, _disparar, once=True)
-
-                self.input_pesquisa.on('input', _on_input_pesquisa)
-                self.input_pesquisa.on('keydown.enter', lambda: self.pesquisa(self.input_pesquisa.value))
+                self.input_pesquisa.on(
+                    'keydown.enter',
+                    lambda: self.pesquisa(self.input_pesquisa.value or ''),
+                )
 
                 ui.space()
 
