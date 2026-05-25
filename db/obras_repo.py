@@ -39,6 +39,7 @@ class ObrasRepository(BaseRepository):
                 servico TEXT,
                 valor_parceiro REAL,
                 valor_percentual REAL,
+                valor_aditivo REAL DEFAULT 0.0,
                 total_obra REAL,
                 mes_execucao TEXT,
                 ano_execucao INTEGER,
@@ -199,6 +200,7 @@ class ObrasRepository(BaseRepository):
             servico = kwargs.get('servico', None) or None
             valor_parceiro = kwargs.get('valor_parceiro', None) or None
             valor_percentual = kwargs.get('valor_percentual', None) or None
+            valor_aditivo = kwargs.get('valor_aditivo', None)
             total_obra = kwargs.get('total_obra', None) or None
             mes_execucao = kwargs.get('mes_execucao', None) or None
             ano_execucao = kwargs.get('ano_execucao', None)
@@ -210,6 +212,7 @@ class ObrasRepository(BaseRepository):
             valor_contrato = round(float(valor_contrato), 2)
             valor_parceiro = round(float(valor_parceiro), 2) if valor_parceiro is not None else None
             valor_percentual = round(float(valor_percentual), 2) if valor_percentual is not None else None
+            valor_aditivo = round(float(valor_aditivo), 2) if valor_aditivo is not None else 0.0
             total_obra = round(float(total_obra), 2) if total_obra is not None else None
 
             data_inicio = data_inicio or None
@@ -218,12 +221,12 @@ class ObrasRepository(BaseRepository):
             cursor.execute('''
                 INSERT INTO obras (nome_contrato, cliente, valor_contrato, data_inicio, status,
                                  contrato_ic, pedido_sap, prefixo_agencia, servico, valor_parceiro, valor_percentual,
-                                 total_obra, mes_execucao, ano_execucao, data_conclusao, data_assinatura, data_aio,
+                                 valor_aditivo, total_obra, mes_execucao, ano_execucao, data_conclusao, data_assinatura, data_aio,
                                  data_acionamento, data_criacao)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ''', (nome_contrato, cliente, valor_contrato, data_inicio, status,
                   contrato_ic, pedido_sap, prefixo_agencia, servico, valor_parceiro, valor_percentual,
-                  total_obra, mes_execucao, ano_execucao, data_conclusao, data_assinatura, data_aio,
+                  valor_aditivo, total_obra, mes_execucao, ano_execucao, data_conclusao, data_assinatura, data_aio,
                   data_acionamento, data_criacao))
 
             obra_id = cursor.lastrowid
@@ -309,6 +312,7 @@ class ObrasRepository(BaseRepository):
             servico = kwargs.get('servico', None) or None
             valor_parceiro = kwargs.get('valor_parceiro', None) or None
             valor_percentual = kwargs.get('valor_percentual', None) or None
+            valor_aditivo = kwargs.get('valor_aditivo', None)
             total_obra = kwargs.get('total_obra', None) or None
             mes_execucao = kwargs.get('mes_execucao', None) or None
             ano_execucao = kwargs.get('ano_execucao', None)
@@ -320,6 +324,7 @@ class ObrasRepository(BaseRepository):
             valor_contrato = round(float(valor_contrato), 2)
             valor_parceiro = round(float(valor_parceiro), 2) if valor_parceiro is not None else None
             valor_percentual = round(float(valor_percentual), 2) if valor_percentual is not None else None
+            valor_aditivo = round(float(valor_aditivo), 2) if valor_aditivo is not None else 0.0
             total_obra = round(float(total_obra), 2) if total_obra is not None else None
 
             data_inicio = data_inicio or None
@@ -328,12 +333,12 @@ class ObrasRepository(BaseRepository):
                 UPDATE obras
                 SET nome_contrato = ?, cliente = ?, valor_contrato = ?,
                     data_inicio = ?, status = ?, contrato_ic = ?, pedido_sap = ?, prefixo_agencia = ?,
-                    servico = ?, valor_parceiro = ?, valor_percentual = ?, total_obra = ?,
+                    servico = ?, valor_parceiro = ?, valor_percentual = ?, valor_aditivo = ?, total_obra = ?,
                     mes_execucao = ?, ano_execucao = ?, data_conclusao = ?,
                     data_assinatura = ?, data_aio = ?, data_acionamento = ?
                 WHERE id = ?
             ''', (nome_contrato, cliente, valor_contrato, data_inicio, status,
-                  contrato_ic, pedido_sap, prefixo_agencia, servico, valor_parceiro, valor_percentual, total_obra,
+                  contrato_ic, pedido_sap, prefixo_agencia, servico, valor_parceiro, valor_percentual, valor_aditivo, total_obra,
                   mes_execucao, ano_execucao, data_conclusao, data_assinatura, data_aio, data_acionamento, obra_id))
 
             requer_confirmacao = False

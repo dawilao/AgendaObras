@@ -77,10 +77,26 @@ class ObraDialogsMixin:
                 pct = float(valor_percentual_input.value or 0)
                 valor_parceiro_input.set_value(round(vc * pct / 100, 2))
 
-            valor_input.on_value_change(lambda e: _atualizar_parceiro_nova())
-            valor_percentual_input.on_value_change(lambda e: _atualizar_parceiro_nova())
+            with ui.row().classes('w-full gap-2 flex-wrap'):
+                valor_aditivo_input = ui.number(
+                    label='Valor do Aditivo (R$)', value=0, step=0.01, format='%.2f'
+                ).classes('w-full sm:w-[49%]').props('outlined').tooltip(
+                    '💰 Aditivo contratual. Aceita negativo (desconto). Total da Obra = Contrato + Aditivo'
+                )
+                total_obra_input = ui.number(
+                    label='Total da Obra (R$)', value=0, step=0.01, format='%.2f'
+                ).classes('w-full sm:w-[49%]').props('outlined readonly').tooltip(
+                    '🔒 Calculado automaticamente: Valor do Contrato + Valor do Aditivo'
+                )
 
-            total_obra_input = ui.number(label='Total da Obra (R$) *', min=0, step=0.01, format='%.2f').classes('w-full').props('outlined').tooltip('💰 [OBRIGATÓRIO] Valor total da obra para rastreamento financeiro da Fase 3')
+            def _atualizar_total_obra_nova():
+                vc = float(valor_input.value or 0)
+                va = float(valor_aditivo_input.value or 0)
+                total_obra_input.set_value(round(vc + va, 2))
+
+            valor_input.on_value_change(lambda e: [_atualizar_parceiro_nova(), _atualizar_total_obra_nova()])
+            valor_percentual_input.on_value_change(lambda e: _atualizar_parceiro_nova())
+            valor_aditivo_input.on_value_change(lambda e: _atualizar_total_obra_nova())
 
             ui.separator().classes('my-4')
 
@@ -138,6 +154,7 @@ class ObraDialogsMixin:
                     servico=servico_input.value or None,
                     valor_parceiro=valor_parceiro_input.value or None,
                     valor_percentual=valor_percentual_input.value or None,
+                    valor_aditivo=valor_aditivo_input.value or 0,
                     total_obra=total_obra_input.value or None,
                     mes_execucao=mes_execucao_input.value or None,
                     ano_execucao=int(ano_execucao_input.value) if ano_execucao_input.value else None,
@@ -165,7 +182,7 @@ class ObraDialogsMixin:
 
         total_obra = kwargs.get('total_obra')
         if not total_obra or total_obra <= 0:
-            self.notificar('Total da Obra é obrigatório e deve ser maior que zero!', tipo='warning')
+            self.notificar('Total da Obra deve ser maior que zero. Verifique o Valor do Aditivo.', tipo='warning')
             return
 
         try:
@@ -297,11 +314,36 @@ class ObraDialogsMixin:
                 pct = float(valor_percentual_input.value or 0)
                 valor_parceiro_input.set_value(round(vc * pct / 100, 2))
 
-            valor_input.on_value_change(lambda e: _atualizar_parceiro_edicao())
-            valor_percentual_input.on_value_change(lambda e: _atualizar_parceiro_edicao())
             _atualizar_parceiro_edicao()
 
-            total_obra_input = ui.number(label='Total da Obra (R$) *', value=obra.get('total_obra') or 0, min=0, step=0.01, format='%.2f').classes('w-full').props('outlined').tooltip('💰 [OBRIGATÓRIO] Valor total da obra para rastreamento financeiro da Fase 3')
+            # Backward-compat: se valor_aditivo não está salvo mas total_obra difere do contrato,
+            # infere o aditivo do gap para preservar o valor financeiro existente
+            _db_total_obra = obra.get('total_obra') or 0
+            _db_valor_contrato = obra.get('valor_contrato') or 0
+            _db_valor_aditivo = obra.get('valor_aditivo') or 0
+            initial_aditivo = _db_valor_aditivo if _db_valor_aditivo != 0 else round(_db_total_obra - _db_valor_contrato, 2)
+
+            with ui.row().classes('w-full gap-2 flex-wrap'):
+                valor_aditivo_input = ui.number(
+                    label='Valor do Aditivo (R$)', value=initial_aditivo, step=0.01, format='%.2f'
+                ).classes('w-full sm:w-[49%]').props('outlined').tooltip(
+                    '💰 Aditivo contratual. Aceita negativo (desconto). Total da Obra = Contrato + Aditivo'
+                )
+                total_obra_input = ui.number(
+                    label='Total da Obra (R$)', value=_db_total_obra, step=0.01, format='%.2f'
+                ).classes('w-full sm:w-[49%]').props('outlined readonly').tooltip(
+                    '🔒 Calculado automaticamente: Valor do Contrato + Valor do Aditivo'
+                )
+
+            def _atualizar_total_obra_edicao():
+                vc = float(valor_input.value or 0)
+                va = float(valor_aditivo_input.value or 0)
+                total_obra_input.set_value(round(vc + va, 2))
+
+            valor_input.on_value_change(lambda e: [_atualizar_parceiro_edicao(), _atualizar_total_obra_edicao()])
+            valor_percentual_input.on_value_change(lambda e: _atualizar_parceiro_edicao())
+            valor_aditivo_input.on_value_change(lambda e: _atualizar_total_obra_edicao())
+            _atualizar_total_obra_edicao()
 
             ui.separator().classes('my-4')
 
@@ -468,6 +510,7 @@ class ObraDialogsMixin:
                     servico=servico_input.value,
                     valor_parceiro=valor_parceiro_input.value,
                     valor_percentual=valor_percentual_input.value,
+                    valor_aditivo=valor_aditivo_input.value or 0,
                     total_obra=total_obra_input.value,
                     mes_execucao=mes_execucao_input.value,
                     ano_execucao=int(ano_execucao_input.value) if ano_execucao_input.value else None,
@@ -1285,7 +1328,7 @@ class ObraDialogsMixin:
 
         total_obra = kwargs.get('total_obra')
         if not total_obra or total_obra <= 0:
-            self.notificar('Total da Obra é obrigatório e deve ser maior que zero!', tipo='warning')
+            self.notificar('Total da Obra deve ser maior que zero. Verifique o Valor do Aditivo.', tipo='warning')
             return
 
         if not self._usuario_pode_acessar_contrato(cliente):
