@@ -8,6 +8,7 @@ import os
 import json
 from dotenv import load_dotenv
 from nicegui import ui
+from starlette.responses import RedirectResponse
 
 # Corrige paths quando executável (PyInstaller)
 if getattr(sys, 'frozen', False):
@@ -61,23 +62,21 @@ configurar_middleware()
 @ui.page('/login')
 def pagina_login():
     if verificar_autenticacao():
-        ui.navigate.to('/')
-        return
+        return RedirectResponse('/')
     LoginPage()
 
 
 @ui.page('/')
 def index():
     if not verificar_autenticacao():
-        ui.navigate.to('/login')
-        return
+        return RedirectResponse('/login')
     MainPage()
 
 
 @ui.page('/logout')
 def logout():
     fazer_logout()
-    ui.navigate.to('/login')
+    return RedirectResponse('/login')
 
 
 if __name__ in {"__main__", "__mp_main__"}:
