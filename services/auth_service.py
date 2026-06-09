@@ -14,11 +14,11 @@ ROTAS_PUBLICAS = {'/login', '/login/', '/_nicegui', '/favicon.ico'}
 
 
 def configurar_middleware():
-    """Registra o middleware de autenticação no app NiceGUI."""
+    """Registra o middleware HTTP no app NiceGUI."""
 
     @app.middleware('http')
     async def auth_middleware(request: Request, call_next):
-        # Permite rotas públicas e assets internos do NiceGUI
+        # Rotas públicas e assets internos passam sem inspeção
         path = request.url.path
         if (path in ROTAS_PUBLICAS
                 or path.startswith('/_nicegui')
@@ -26,13 +26,19 @@ def configurar_middleware():
                 or path.startswith('/_event')):
             return await call_next(request)
 
-        # Verifica autenticação via storage do usuário
-        # O storage.user é baseado em cookie de sessão gerenciado pelo NiceGUI
-        # Precisamos verificar via header do cookie, mas o NiceGUI resolve
-        # isso internamente ao acessar app.storage.user dentro de uma página.
-        # O middleware HTTP não tem acesso direto ao storage.user,
-        # então a verificação real é feita no decorator da página.
-        return await call_next(request)
+        # Nota: a verificação de autenticação para páginas NiceGUI (/,
+        # /biblioteca etc.) é feita nos decoradores @ui.page via
+        # verificar_autenticacao(). Para rotas FastAPI protegidas (ex:
+        # /uploads), a sessão HTTP (request.session) é verificada
+        # diretamente no handler, pois o SessionMiddleware do NiceGUI
+        # só popula request.session DEPOIS que este middleware executa.
+        response = await call_next(request)
+
+        # Headers de segurança adicionados a todas as respostas
+        response.headers['X-Content-Type-Options'] = 'nosniff'
+        response.headers['X-Frame-Options'] = 'SAMEORIGIN'
+        response.headers['Referrer-Policy'] = 'strict-origin-when-cross-origin'
+        return response
 
 
 def verificar_autenticacao() -> bool:
