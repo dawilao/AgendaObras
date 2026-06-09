@@ -7,7 +7,7 @@ import datetime
 import os
 from typing import Optional
 
-_CAMINHO_DRIVE = r'G:\Meu Drive\17 - MODELOS\PROGRAMAS\AgendaObras\app\db'
+_CAMINHO_DRIVE = r'db'
 _CAMINHO_LOCAL = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 TAREFAS_COM_DIAS_UTEIS = {'ANÁLISE', 'ANÁLISE - GESTOR'}

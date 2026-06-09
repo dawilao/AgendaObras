@@ -531,6 +531,7 @@ class AgendaObras(ObraCardMixin, ObraDialogsMixin, AdminDialogsMixin):
                 ui.button('➕ Nova Obra', on_click=lambda: [mobile_menu_dialog.close(), self.nova_entrada()]).classes('w-full').props('flat').style('justify-content: flex-start;')
                 ui.button('🔄 Atualizar', on_click=lambda: [mobile_menu_dialog.close(), self.atualizar_dados()]).classes('w-full').props('flat').style('justify-content: flex-start;')
                 ui.button('📖 Manual', on_click=lambda: [mobile_menu_dialog.close(), ui.navigate.to('https://docs.google.com/presentation/d/1paRtae89yfmLcyJaWgQrtZFM3FKy1MsOEauxMzdylPA/edit?usp=sharing', new_tab=True)]).classes('w-full').props('flat').style('justify-content: flex-start;')
+                ui.button('📚 Biblioteca', on_click=lambda: [mobile_menu_dialog.close(), ui.navigate.to('/biblioteca')]).classes('w-full').props('flat').style('justify-content: flex-start;')
 
                 if usuario.get('is_admin'):
                     ui.button('👥 Usuários', on_click=lambda: [mobile_menu_dialog.close(), self.abrir_gerenciar_usuarios()]).classes('w-full').props('flat').style('justify-content: flex-start;')
@@ -564,6 +565,10 @@ class AgendaObras(ObraCardMixin, ObraDialogsMixin, AdminDialogsMixin):
                 )
 
                 ui.button('📖 Manual', on_click=lambda: ui.navigate.to('https://docs.google.com/presentation/d/1paRtae89yfmLcyJaWgQrtZFM3FKy1MsOEauxMzdylPA/edit?usp=sharing', new_tab=True)).props('flat text-color=white').style(
+                    'font-weight: bold; font-size: 14px;'
+                )
+
+                ui.button('📚 Biblioteca', on_click=lambda: ui.navigate.to('/biblioteca')).props('flat text-color=white').style(
                     'font-weight: bold; font-size: 14px;'
                 )
 

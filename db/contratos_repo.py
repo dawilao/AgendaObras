@@ -7,7 +7,7 @@ import sqlite3
 from typing import List
 from core.error_logger import log_error
 
-_CAMINHO_DRIVE = r'G:\Meu Drive\17 - MODELOS\PROGRAMAS\AgendaObras\app\db'
+_CAMINHO_DRIVE = r'db'
 # Raiz do projeto (um nível acima de db/)
 _CAMINHO_LOCAL = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 

@@ -7,7 +7,7 @@ import sys
 import os
 import json
 from dotenv import load_dotenv
-from nicegui import ui
+from nicegui import ui, app
 
 # Corrige paths quando executável (PyInstaller)
 if getattr(sys, 'frozen', False):
@@ -21,6 +21,7 @@ from services.auth_service import configurar_middleware, verificar_autenticacao,
 # UI Pages
 from ui.pages.login import LoginPage
 from ui.pages.main import MainPage
+from ui.pages.biblioteca import BibliotecaPage
 
 
 def _carregar_storage_secret() -> str:
@@ -54,6 +55,10 @@ def _carregar_storage_secret() -> str:
     return os.getenv('NICEGUI_STORAGE_SECRET', '').strip().strip('"').strip("'")
 
 
+# Serve imagens da Biblioteca
+from db.biblioteca_repo import PASTA_UPLOADS
+app.add_static_files('/uploads', PASTA_UPLOADS)
+
 # Registra middleware de autenticação
 configurar_middleware()
 
@@ -78,6 +83,14 @@ def index():
 def logout():
     fazer_logout()
     ui.navigate.to('/login')
+
+
+@ui.page('/biblioteca')
+def pagina_biblioteca():
+    if not verificar_autenticacao():
+        ui.navigate.to('/login')
+        return
+    BibliotecaPage()
 
 
 if __name__ in {"__main__", "__mp_main__"}:
