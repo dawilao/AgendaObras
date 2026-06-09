@@ -171,9 +171,15 @@ class AgendaObras(ObraCardMixin, ObraDialogsMixin, AdminDialogsMixin):
                 flex-shrink: 0;
             }
 
+            /* ── Fundo global da aplicação ── */
+            .nicegui-content {
+                padding: 0 !important;
+                background: #f0f2f5 !important;
+                min-height: 100vh;
+            }
+
             /* ── Conteúdo principal ── */
             .ao-content-wrap {
-                background: #f0f2f5;
                 min-height: 100vh;
             }
             .ao-content-topbar {
@@ -182,7 +188,16 @@ class AgendaObras(ObraCardMixin, ObraDialogsMixin, AdminDialogsMixin):
                 padding: 16px 24px;
                 display: flex;
                 align-items: center;
-                gap: 12px;
+                gap: 14px;
+            }
+            .ao-obras-badge {
+                font-size: 12px;
+                font-weight: 700;
+                color: #1976d2;
+                background: #e8f0fe;
+                padding: 3px 12px;
+                border-radius: 20px;
+                letter-spacing: 0.01em;
             }
 
             /* ── Cards de obra modernizados ── */
@@ -890,14 +905,11 @@ class AgendaObras(ObraCardMixin, ObraDialogsMixin, AdminDialogsMixin):
         with ui.element('div').classes('ao-content-wrap w-full'):
             # Barra de título
             with ui.element('div').classes('ao-content-topbar'):
-                ui.html('<span class="material-icons" style="color:#1a2332;font-size:22px;">home</span>', sanitize=False)
                 ui.label('Obras').style('font-size: 20px; font-weight: 700; color: #1a2332;')
+                total = len(self.db.listar_obras())
                 self._total_obras_badge = ui.label(
-                    f'{len(self.db.listar_obras())} cadastradas'
-                ).style(
-                    'font-size: 12px; color: #9e9e9e; font-weight: 500; '
-                    'background: #f0f2f5; padding: 3px 10px; border-radius: 12px;'
-                )
+                    f'{total} cadastrada{"s" if total != 1 else ""}'
+                ).classes('ao-obras-badge')
 
             # Área de cards
             with ui.element('div').style('padding: 20px 24px;'):
