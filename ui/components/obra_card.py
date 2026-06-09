@@ -20,14 +20,22 @@ class ObraCardMixin:
 
         proxima_tarefa = next((item for item in checklist if not item['concluido'] and not item['bloqueado']), None)
 
-        with ui.card().classes('hover:shadow-lg transition-shadow').style(
-            f'border-left: 5px solid {cor}; min-height: 250px;'
+        with ui.card().classes('ao-obra-card').style(
+            f'border-top: 3px solid {cor}; min-height: 250px;'
         ):
-            with ui.row().classes('w-full items-center justify-between cursor-pointer').on('click', lambda o=obra: self.abrir_detalhes_obra(o['id'])):
-                ui.label(obra['nome_contrato']).style('font-size: 18px; font-weight: bold;')
-                ui.icon(icone).style(f'color: {cor}; font-size: 24px;')
+            with ui.row().classes('w-full items-center justify-between cursor-pointer').on(
+                'click', lambda o=obra: self.abrir_detalhes_obra(o['id'])
+            ).style('padding: 4px 4px 0;'):
+                ui.label(obra['nome_contrato']).style(
+                    'font-size: 15px; font-weight: 700; color: #1a2332; line-height: 1.3;'
+                )
+                with ui.element('div').style(
+                    f'background: {cor}22; border-radius: 20px; '
+                    'padding: 3px 8px; display: flex; align-items: center; gap: 4px; flex-shrink: 0;'
+                ):
+                    ui.icon(icone).style(f'color: {cor}; font-size: 14px;')
 
-            ui.separator()
+            ui.separator().style('margin: 6px 0 0;')
 
             with ui.tabs().classes('w-full') as tabs:
                 tab_info = ui.tab('Informações', icon='info')

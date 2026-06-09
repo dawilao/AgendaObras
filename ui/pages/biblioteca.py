@@ -75,37 +75,43 @@ class BibliotecaPage:
 
         /* Header */
         .biblioteca-header-btn-novo {
-            background: white !important;
-            color: #1565c0 !important;
-            font-weight: 700 !important;
+            background: rgba(255,255,255,0.12) !important;
+            color: white !important;
+            font-weight: 600 !important;
             font-size: 13px !important;
-            border-radius: 6px !important;
+            border-radius: 8px !important;
             padding: 0 14px !important;
             height: 34px !important;
             letter-spacing: 0.01em;
+            border: 1px solid rgba(255,255,255,0.18) !important;
+            transition: background 0.15s !important;
+        }
+        .biblioteca-header-btn-novo:hover {
+            background: rgba(255,255,255,0.2) !important;
         }
         .biblioteca-header-user {
             display: flex;
             align-items: center;
-            gap: 6px;
-            padding: 4px 10px;
+            gap: 7px;
+            padding: 4px 10px 4px 6px;
             border-radius: 20px;
-            background: rgba(255,255,255,0.15);
+            background: rgba(255,255,255,0.1);
             font-size: 13px;
-            color: white;
+            color: rgba(255,255,255,0.88);
             font-weight: 500;
+            border: 1px solid rgba(255,255,255,0.12);
         }
         .biblioteca-header-avatar {
             width: 28px;
             height: 28px;
             border-radius: 50%;
-            background: rgba(255,255,255,0.3);
+            background: rgba(100,181,246,0.2);
             display: flex;
             align-items: center;
             justify-content: center;
-            font-size: 12px;
+            font-size: 11px;
             font-weight: 700;
-            color: white;
+            color: #90caf9;
             flex-shrink: 0;
         }
 
@@ -115,8 +121,8 @@ class BibliotecaPage:
             flex-direction: row;
             width: 100%;
             box-sizing: border-box;
-            height: calc(100vh - 58px);
-            background: #f4f6f9;
+            height: calc(100vh - 56px);
+            background: #f0f2f5;
             overflow: hidden;
         }
 
@@ -156,7 +162,7 @@ class BibliotecaPage:
             flex-direction: column;
             gap: 4px;
             overflow-y: auto;
-            box-shadow: 2px 0 8px rgba(0,0,0,0.04);
+            box-shadow: 2px 0 12px rgba(0,0,0,0.04);
         }
         .biblioteca-sidebar-title {
             font-size: 11px;
@@ -225,33 +231,33 @@ class BibliotecaPage:
         /* Card */
         .bib-card {
             background: white;
-            border-radius: 10px;
+            border-radius: 12px;
             border: 1px solid #e8eaf0;
-            padding: 16px 18px 12px 18px;
+            padding: 18px 18px 14px 18px;
             cursor: pointer;
             transition: box-shadow 0.2s, border-color 0.2s, transform 0.15s;
             display: flex;
             flex-direction: column;
             gap: 8px;
-            min-height: 130px;
-            box-shadow: 0 1px 3px rgba(0,0,0,0.06);
+            min-height: 140px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.05);
         }
         .bib-card:hover {
-            box-shadow: 0 6px 20px rgba(0,0,0,0.10);
+            box-shadow: 0 10px 28px rgba(0,0,0,0.12);
             border-color: #c5cae9;
-            transform: translateY(-2px);
+            transform: translateY(-3px);
         }
         .bib-card-title {
             font-size: 15px;
             font-weight: 700;
-            color: #212121;
-            line-height: 1.3;
+            color: #1a2332;
+            line-height: 1.35;
             margin-bottom: 2px;
         }
         .bib-card-preview {
             font-size: 13px;
-            color: #757575;
-            line-height: 1.5;
+            color: #6b7280;
+            line-height: 1.55;
             flex: 1;
             overflow: hidden;
             display: -webkit-box;
@@ -260,17 +266,17 @@ class BibliotecaPage:
         }
         .bib-card-footer {
             font-size: 11px;
-            color: #bdbdbd;
-            margin-top: 4px;
+            color: #c0c4ce;
+            margin-top: 2px;
             display: flex;
             align-items: center;
             gap: 4px;
         }
         .biblioteca-tag-chip {
             display: inline-block;
-            background: #e8f0fe;
-            color: #1565c0;
-            border-radius: 12px;
+            background: #eef2ff;
+            color: #4f46e5;
+            border-radius: 20px;
             padding: 2px 10px;
             font-size: 11px;
             font-weight: 600;
@@ -320,21 +326,23 @@ class BibliotecaPage:
         nome_exibicao = f'{nome} {sobrenome}'.strip() or 'Usuário'
 
         with ui.header().classes('items-center').style(
-            'background: linear-gradient(135deg, #1976d2 0%, #1565c0 100%);'
-            'padding: 0 20px; height: 58px; gap: 12px; flex-wrap: nowrap;'
-            'box-shadow: 0 2px 8px rgba(0,0,0,0.18);'
+            'background: #0f172a;'
+            'padding: 0 20px; height: 56px; gap: 12px; flex-wrap: nowrap;'
+            'box-shadow: 0 2px 10px rgba(0,0,0,0.25);'
         ):
             ui.button(
                 icon='arrow_back',
                 on_click=lambda: ui.navigate.to('/')
-            ).props('flat round text-color=white').style('opacity: 0.85;').tooltip('Voltar ao Início')
+            ).props('flat round text-color=white').style('opacity: 0.7;').tooltip('Voltar ao Início')
 
             with ui.element('div').style(
-                'display: flex; align-items: center; gap: 10px; border-left: 1px solid rgba(255,255,255,0.25); padding-left: 14px;'
+                'display: flex; align-items: center; gap: 10px; '
+                'border-left: 1px solid rgba(255,255,255,0.1); padding-left: 14px;'
             ):
-                ui.label('📚').style('font-size: 20px; line-height: 1;')
+                ui.label('📚').style('font-size: 18px; line-height: 1;')
                 ui.label('Biblioteca').style(
-                    'font-size: clamp(16px, 2vw, 20px); color: white; font-weight: 700; letter-spacing: -0.01em;'
+                    'font-size: clamp(15px, 2vw, 18px); color: white; '
+                    'font-weight: 700; letter-spacing: -0.01em;'
                 )
 
             ui.space()
@@ -347,17 +355,19 @@ class BibliotecaPage:
             if self.is_admin:
                 ui.button(
                     '+ Novo Card', on_click=lambda: self._abrir_form_card(None)
-                ).classes('biblioteca-header-btn-novo').style('margin-right: 4px;')
+                ).classes('biblioteca-header-btn-novo').style('margin-right: 6px;')
 
             with ui.element('div').classes('biblioteca-header-user'):
                 with ui.element('div').classes('biblioteca-header-avatar'):
                     ui.label(iniciais)
-                ui.label(nome_exibicao).style('max-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;')
+                ui.label(nome_exibicao).style(
+                    'max-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;'
+                )
 
             ui.button(
                 icon='logout',
                 on_click=lambda: ui.navigate.to('/logout')
-            ).props('flat round text-color=white').style('opacity: 0.85;').tooltip('Sair')
+            ).props('flat round text-color=white').style('opacity: 0.6;').tooltip('Sair')
 
     # ── Body ──────────────────────────────────────────────────────────────────
 

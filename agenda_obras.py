@@ -61,52 +61,155 @@ class AgendaObras(ObraCardMixin, ObraDialogsMixin, AdminDialogsMixin):
         self.footer()
 
     def configurar_layout_responsivo(self):
-        """Injeta ajustes CSS para melhorar a experiência em celular e notebook."""
+        """Injeta CSS global: sidebar, cards, dialogs e grid responsivo."""
         ui.add_head_html('''
         <style>
+            /* ── Dialogs ── */
             .responsive-dialog {
                 width: min(96vw, 900px) !important;
                 max-width: 96vw !important;
             }
-
             .responsive-dialog-sm {
                 width: min(96vw, 560px) !important;
                 max-width: 96vw !important;
             }
-
             .responsive-dialog-lg {
                 width: min(96vw, 980px) !important;
                 max-width: 96vw !important;
             }
 
-            @media (max-width: 768px) {
-                .agenda-header {
-                    padding: 10px !important;
-                }
-
-                .agenda-title {
-                    margin-right: 8px !important;
-                    font-size: 22px !important;
-                }
+            /* ── Desktop: oculta o mini-header mobile e reseta padding ── */
+            @media (min-width: 1024px) {
+                .ao-mobile-header { display: none !important; }
+                .q-page-container { padding-top: 0 !important; }
             }
 
-            /* Grid de obras responsivo */
+            /* ── Sidebar: estrutura geral ── */
+            /* Drawer ocupa toda a largura e distribui filhos em coluna */
+            .q-drawer__content {
+                display: flex !important;
+                flex-direction: column !important;
+                align-items: stretch !important;
+                width: 100% !important;
+            }
+            .q-drawer__content > div,
+            .q-drawer__content > * {
+                width: 100% !important;
+                box-sizing: border-box !important;
+            }
+
+            .ao-nav-section-title {
+                font-size: 10px;
+                font-weight: 700;
+                text-transform: uppercase;
+                letter-spacing: 0.1em;
+                color: rgba(255,255,255,0.3);
+                padding: 14px 20px 4px;
+                display: block;
+            }
+
+            /* Container dos itens de nav: deve ser coluna flex */
+            .ao-nav-list {
+                display: flex !important;
+                flex-direction: column !important;
+                width: 100%;
+                box-sizing: border-box;
+            }
+
+            .ao-nav-item {
+                display: flex !important;
+                align-items: center;
+                gap: 10px;
+                padding: 9px 16px;
+                margin: 1px 8px;
+                border-radius: 8px;
+                color: rgba(255,255,255,0.65);
+                font-size: 13.5px;
+                font-weight: 500;
+                cursor: pointer;
+                transition: background 0.15s, color 0.15s;
+                user-select: none;
+                /* preenche a largura do container menos as margens laterais */
+                width: calc(100% - 16px);
+                box-sizing: border-box;
+                flex-shrink: 0;
+            }
+            .ao-nav-item:hover {
+                background: rgba(255,255,255,0.08);
+                color: rgba(255,255,255,0.95);
+            }
+            .ao-nav-item.ao-nav-active {
+                background: rgba(25,118,210,0.22);
+                color: #90caf9;
+            }
+            .ao-nav-icon {
+                font-size: 18px !important;
+                flex-shrink: 0;
+                opacity: 0.85;
+            }
+            .ao-sidebar-avatar {
+                width: 32px;
+                height: 32px;
+                border-radius: 50%;
+                background: rgba(100,181,246,0.15);
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                font-size: 13px;
+                font-weight: 700;
+                color: #90caf9;
+                flex-shrink: 0;
+            }
+            .ao-user-section {
+                border-top: 1px solid rgba(255,255,255,0.07);
+                padding: 12px;
+                display: flex !important;
+                align-items: center;
+                gap: 8px;
+                width: 100%;
+                box-sizing: border-box;
+                flex-shrink: 0;
+            }
+
+            /* ── Conteúdo principal ── */
+            .ao-content-wrap {
+                background: #f0f2f5;
+                min-height: 100vh;
+            }
+            .ao-content-topbar {
+                background: white;
+                border-bottom: 1px solid #e8eaf0;
+                padding: 16px 24px;
+                display: flex;
+                align-items: center;
+                gap: 12px;
+            }
+
+            /* ── Cards de obra modernizados ── */
+            .ao-obra-card {
+                border-radius: 12px !important;
+                border: 1px solid #e8eaf0 !important;
+                box-shadow: 0 2px 8px rgba(0,0,0,0.05) !important;
+                transition: box-shadow 0.2s, transform 0.15s, border-color 0.2s !important;
+                overflow: hidden !important;
+            }
+            .ao-obra-card:hover {
+                box-shadow: 0 8px 28px rgba(0,0,0,0.12) !important;
+                transform: translateY(-3px) !important;
+                border-color: #c5cae9 !important;
+            }
+
+            /* ── Grid responsivo ── */
             .obras-grid {
                 display: grid;
                 gap: 1rem;
                 grid-template-columns: repeat(3, minmax(0, 1fr));
             }
-
             @media (max-width: 1100px) {
-                .obras-grid {
-                    grid-template-columns: repeat(2, minmax(0, 1fr));
-                }
+                .obras-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
             }
-
             @media (max-width: 640px) {
-                .obras-grid {
-                    grid-template-columns: 1fr;
-                }
+                .obras-grid { grid-template-columns: 1fr; }
             }
         </style>
         ''')
@@ -502,94 +605,147 @@ class AgendaObras(ObraCardMixin, ObraDialogsMixin, AdminDialogsMixin):
 
     # ========== UI ========== #
     def header(self):
-        """Cabeçalho da aplicação"""
+        """Sidebar lateral de navegação + mini-header para mobile."""
         usuario = obter_usuario_logado()
+        nome = usuario.get('nome', '')
+        sobrenome = usuario.get('sobrenome', '')
+        iniciais = (nome[:1] + sobrenome[:1]).upper() if nome or sobrenome else '?'
+        nome_exibicao = f'{nome} {sobrenome}'.strip() or 'Usuário'
 
-        with ui.header().classes('items-center agenda-header').style('background-color: #1976d2; padding: 15px; gap: 8px; flex-wrap: nowrap;'):
+        # ── Mini-header visível apenas em mobile ──────────────────────────────
+        with ui.header().classes('items-center ao-mobile-header agenda-header').style(
+            'background: #0f172a; height: 52px; padding: 0 14px; gap: 10px; '
+            'flex-wrap: nowrap; box-shadow: 0 2px 8px rgba(0,0,0,0.25);'
+        ):
+            ui.button(
+                icon='menu', on_click=lambda: nav_drawer.toggle()
+            ).props('flat round text-color=white').tooltip('Abrir menu')
             ui.label('🏗️ AgendaObras').classes('agenda-title').style(
-                'font-size: clamp(22px, 2.4vw, 28px); color: white; font-weight: bold; margin-right: 10px;'
+                'color: white; font-weight: 700; font-size: 18px; flex: 1;'
             )
 
-            # Menu mobile (hamburger)
-            with ui.dialog() as mobile_menu_dialog, ui.card().classes('responsive-dialog-sm').style('padding: 16px; max-height: 85vh; overflow-y: auto;'):
-                ui.label('Menu').style('font-size: 18px; font-weight: bold; color: #1976d2; margin-bottom: 10px;')
+        # ── Sidebar de navegação ───────────────────────────────────────────────
+        with ui.left_drawer(
+            fixed=True, top_corner=True, bottom_corner=True
+        ).style(
+            'background: #0f172a; padding: 0; '
+            'display: flex; flex-direction: column; align-items: stretch;'
+        ).props('width=240 breakpoint=1024 show-if-above') as nav_drawer:
 
-                mobile_search_input = ui.input(placeholder='🔍 Pesquisar obras...').classes('w-full').props('outlined dense')
-                mobile_search_input.on(
-                    'keydown.enter',
-                    lambda: [self.pesquisa(mobile_search_input.value), mobile_menu_dialog.close()]
+            # Logo
+            with ui.element('div').style(
+                'padding: 24px 18px 18px; '
+                'border-bottom: 1px solid rgba(255,255,255,0.07);'
+                'flex-shrink: 0; width: 100%; box-sizing: border-box;'
+            ):
+                ui.label('🏗️ AgendaObras').style(
+                    'color: white; font-size: 24px; font-weight: 700; '
+                    'letter-spacing: -0.03em; line-height: 1.2; display: block;'
+                )
+                ui.label('Rastreador de Demandas').style(
+                    'color: rgba(255,255,255,0.35); font-size: 14px; '
+                    'margin-top: 4px; display: block; letter-spacing: 0.01em;'
                 )
 
-                with ui.row().classes('w-full gap-2').style('margin-top: 8px;'):
-                    ui.button(
-                        'Pesquisar',
-                        on_click=lambda: [self.pesquisa(mobile_search_input.value), mobile_menu_dialog.close()]
-                    ).classes('w-full').props('outline color=primary')
+            # Campo de pesquisa
+            with ui.element('div').style(
+                'padding: 14px 12px 6px; flex-shrink: 0; '
+                'width: 100%; box-sizing: border-box;'
+            ):
+                self.input_pesquisa = (
+                    ui.input(placeholder='Pesquisar obras...')
+                    .props('outlined dense dark clearable')
+                    .classes('w-full')
+                )
+                self.input_pesquisa.on(
+                    'input', lambda: self.pesquisa(self.input_pesquisa.value)
+                )
+                self.input_pesquisa.on(
+                    'keydown.enter', lambda: self.pesquisa(self.input_pesquisa.value)
+                )
+                self.input_pesquisa.on('clear', lambda: self.pesquisa(''))
 
-                ui.separator().style('margin: 10px 0;')
-
-                ui.button('➕ Nova Obra', on_click=lambda: [mobile_menu_dialog.close(), self.nova_entrada()]).classes('w-full').props('flat').style('justify-content: flex-start;')
-                ui.button('🔄 Atualizar', on_click=lambda: [mobile_menu_dialog.close(), self.atualizar_dados()]).classes('w-full').props('flat').style('justify-content: flex-start;')
-                ui.button('📖 Manual', on_click=lambda: [mobile_menu_dialog.close(), ui.navigate.to('https://docs.google.com/presentation/d/1paRtae89yfmLcyJaWgQrtZFM3FKy1MsOEauxMzdylPA/edit?usp=sharing', new_tab=True)]).classes('w-full').props('flat').style('justify-content: flex-start;')
-                ui.button('📚 Biblioteca', on_click=lambda: [mobile_menu_dialog.close(), ui.navigate.to('/biblioteca')]).classes('w-full').props('flat').style('justify-content: flex-start;')
-
-                if usuario.get('is_admin'):
-                    ui.button('👥 Usuários', on_click=lambda: [mobile_menu_dialog.close(), self.abrir_gerenciar_usuarios()]).classes('w-full').props('flat').style('justify-content: flex-start;')
-                    ui.button('📄 Contratos', on_click=lambda: [mobile_menu_dialog.close(), self.abrir_gerenciar_contratos()]).classes('w-full').props('flat').style('justify-content: flex-start;')
-
-                ui.separator().style('margin: 10px 0;')
+            # Botão principal
+            with ui.element('div').style(
+                'padding: 4px 12px 10px; flex-shrink: 0; '
+                'width: 100%; box-sizing: border-box;'
+            ):
                 ui.button(
-                    f'👤 {usuario.get("nome", "")} {usuario.get("sobrenome", "")}',
-                    on_click=lambda: [mobile_menu_dialog.close(), self.abrir_perfil_usuario()]
-                ).classes('w-full').props('flat').style('justify-content: flex-start;')
-                ui.button('Sair', on_click=lambda: [mobile_menu_dialog.close(), ui.navigate.to('/logout')]).classes('w-full').props('flat').style('justify-content: flex-start; color: #d32f2f;')
-
-            ui.button(icon='menu', on_click=mobile_menu_dialog.open).classes('sm:hidden ml-auto').props('flat round text-color=white').tooltip('Abrir menu')
-
-            # Ações desktop
-            with ui.row().classes('items-center gap-2 max-sm:hidden ml-4 flex-1 min-w-0').style('flex-wrap: nowrap;'):
-                ui.button('➕ Nova Obra', on_click=self.nova_entrada).props('flat text-color=white').style(
-                    'font-weight: bold; margin-right: 10px; font-size: 14px;'
+                    '+ Nova Obra', on_click=self.nova_entrada
+                ).classes('w-full').props('unelevated color=primary').style(
+                    'font-weight: 600; font-size: 13px; border-radius: 8px; height: 36px; width: 100%;'
                 )
 
-                self.input_pesquisa = ui.input(placeholder='🔍 Pesquisar obras...').classes('w-80').props('outlined dense').style(
-                    'background-color: white; border-radius: 4px; margin-right: 10px;'
-                )
-                self.input_pesquisa.on('input', lambda: self.pesquisa(self.input_pesquisa.value))
-                self.input_pesquisa.on('keydown.enter', lambda: self.pesquisa(self.input_pesquisa.value))
+            ui.separator().style(
+                'border-color: rgba(255,255,255,0.07); margin: 0; '
+                'width: 100%; flex-shrink: 0;'
+            )
 
-                ui.space()
+            # Itens de navegação (área scrollável)
+            with ui.element('div').style(
+                'flex: 1; overflow-y: auto; padding: 4px 0; '
+                'display: flex; flex-direction: column; width: 100%; box-sizing: border-box;'
+            ):
+                with ui.element('div').classes('ao-nav-list'):
+                    ui.html('<div class="ao-nav-section-title">Menu</div>', sanitize=False)
 
-                ui.button('🔄 Atualizar', on_click=self.atualizar_dados).props('flat text-color=white').style(
-                    'font-weight: bold; font-size: 14px;'
-                )
+                    with ui.element('div').classes('ao-nav-item ao-nav-active'):
+                        ui.html('<span class="material-icons ao-nav-icon">home</span>', sanitize=False)
+                        ui.label('Obras')
 
-                ui.button('📖 Manual', on_click=lambda: ui.navigate.to('https://docs.google.com/presentation/d/1paRtae89yfmLcyJaWgQrtZFM3FKy1MsOEauxMzdylPA/edit?usp=sharing', new_tab=True)).props('flat text-color=white').style(
-                    'font-weight: bold; font-size: 14px;'
-                )
-
-                ui.button('📚 Biblioteca', on_click=lambda: ui.navigate.to('/biblioteca')).props('flat text-color=white').style(
-                    'font-weight: bold; font-size: 14px;'
-                )
-
-                if usuario.get('is_admin'):
-                    with ui.button('⚙️ Administração').props('flat text-color=white').style(
-                        'font-weight: bold; margin-left: 5px; font-size: 14px;'
+                    with ui.element('div').classes('ao-nav-item').on(
+                        'click', lambda: ui.navigate.to('/biblioteca')
                     ):
-                        with ui.menu():
-                            ui.menu_item('👥 Usuários', on_click=self.abrir_gerenciar_usuarios)
-                            ui.menu_item('📄 Contratos', on_click=self.abrir_gerenciar_contratos)
+                        ui.html('<span class="material-icons ao-nav-icon">menu_book</span>', sanitize=False)
+                        ui.label('Biblioteca')
 
-                with ui.row().classes('items-center gap-2').style('margin-left: 10px;'):
-                    self.user_button = ui.button(
-                        f'👤 {usuario.get("nome", "")} {usuario.get("sobrenome", "")}',
-                        on_click=self.abrir_perfil_usuario
-                    ).props('flat text-color=white').style(
-                        'font-size: 14px; font-weight: 500;'
+                    with ui.element('div').classes('ao-nav-item').on(
+                        'click', lambda: ui.navigate.to(
+                            'https://docs.google.com/presentation/d/1paRtae89yfmLcyJaWgQrtZFM3FKy1MsOEauxMzdylPA/edit?usp=sharing',
+                            new_tab=True
+                        )
+                    ):
+                        ui.html('<span class="material-icons ao-nav-icon">help_outline</span>', sanitize=False)
+                        ui.label('Manual')
+
+                    with ui.element('div').classes('ao-nav-item').on('click', self.atualizar_dados):
+                        ui.html('<span class="material-icons ao-nav-icon">refresh</span>', sanitize=False)
+                        ui.label('Atualizar')
+
+                    if usuario.get('is_admin'):
+                        ui.html('<div class="ao-nav-section-title">Administração</div>', sanitize=False)
+                        with ui.element('div').classes('ao-nav-item').on(
+                            'click', self.abrir_gerenciar_usuarios
+                        ):
+                            ui.html('<span class="material-icons ao-nav-icon">group</span>', sanitize=False)
+                            ui.label('Usuários')
+                        with ui.element('div').classes('ao-nav-item').on(
+                            'click', self.abrir_gerenciar_contratos
+                        ):
+                            ui.html('<span class="material-icons ao-nav-icon">description</span>', sanitize=False)
+                            ui.label('Contratos')
+
+            # Perfil do usuário (fixo no rodapé da sidebar)
+            with ui.element('div').classes('ao-user-section'):
+                with ui.element('div').classes('ao-sidebar-avatar'):
+                    ui.label(iniciais)
+                with ui.element('div').style(
+                    'flex: 1; min-width: 0; cursor: pointer;'
+                ).on('click', self.abrir_perfil_usuario):
+                    self.user_button = ui.label(nome_exibicao).style(
+                        'color: rgba(255,255,255,0.88); font-size: 13px; font-weight: 500; '
+                        'overflow: hidden; text-overflow: ellipsis; white-space: nowrap; '
+                        'display: block;'
                     )
-                    ui.button('Sair', on_click=lambda: ui.navigate.to('/logout')).props('flat dense text-color=white').style(
-                        'font-size: 13px; font-weight: bold;'
+                    ui.label('Ver perfil').style(
+                        'color: rgba(255,255,255,0.3); font-size: 11px; display: block;'
                     )
+                ui.button(
+                    icon='logout',
+                    on_click=lambda: ui.navigate.to('/logout')
+                ).props('flat round').style(
+                    'color: rgba(255,255,255,0.4); flex-shrink: 0;'
+                ).tooltip('Sair')
 
     def abrir_perfil_usuario(self):
         """Abre diálogo de perfil do usuário logado com opções para editar dados pessoais e senha."""
@@ -686,7 +842,7 @@ class AgendaObras(ObraCardMixin, ObraDialogsMixin, AdminDialogsMixin):
                     atualizar_usuario_sessao(nome, sobrenome, email)
 
                     if hasattr(self, 'user_button'):
-                        self.user_button.text = f'👤 {nome} {sobrenome}'
+                        self.user_button.set_text(f'{nome} {sobrenome}')
 
                     if nova_senha:
                         auth_db.redefinir_senha(user_id, nova_senha)
@@ -731,12 +887,21 @@ class AgendaObras(ObraCardMixin, ObraDialogsMixin, AdminDialogsMixin):
 
     def body(self):
         """Corpo principal com grid de obras"""
-        with ui.column().classes('w-full p-0'):
-            with ui.card().classes('w-full').style('background-color: #fafafa;'):
-                ui.label(f'{len(self.db.listar_obras())} Obras Cadastradas').style('font-size: 20px; font-weight: bold; margin-bottom: 10px;')
+        with ui.element('div').classes('ao-content-wrap w-full'):
+            # Barra de título
+            with ui.element('div').classes('ao-content-topbar'):
+                ui.html('<span class="material-icons" style="color:#1a2332;font-size:22px;">home</span>', sanitize=False)
+                ui.label('Obras').style('font-size: 20px; font-weight: 700; color: #1a2332;')
+                self._total_obras_badge = ui.label(
+                    f'{len(self.db.listar_obras())} cadastradas'
+                ).style(
+                    'font-size: 12px; color: #9e9e9e; font-weight: 500; '
+                    'background: #f0f2f5; padding: 3px 10px; border-radius: 12px;'
+                )
 
+            # Área de cards
+            with ui.element('div').style('padding: 20px 24px;'):
                 self.body_container = ui.column().classes('w-full')
-
                 self.renderizar_obras()
 
     def renderizar_obras(self):
