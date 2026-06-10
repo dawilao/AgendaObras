@@ -923,7 +923,6 @@ class BibliotecaPage:
             ).style(
                 'background-color: #1976d2; color: white; margin-bottom: 12px;'
             )
-            ui.separator()
             renderizar_lista()
 
         dlg.open()
