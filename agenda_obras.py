@@ -91,6 +91,7 @@ class AgendaObras(ObraCardMixin, ObraDialogsMixin, AdminDialogsMixin):
                 flex-direction: column !important;
                 align-items: stretch !important;
                 width: 100% !important;
+                gap: .5rem;
             }
             .q-drawer__content > div,
             .q-drawer__content > * {
