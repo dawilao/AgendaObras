@@ -58,7 +58,6 @@ class AgendaObras(ObraCardMixin, ObraDialogsMixin, AdminDialogsMixin):
         # Construção da UI
         self.header()
         self.body()
-        self.footer()
 
     def configurar_layout_responsivo(self):
         """Injeta CSS global: sidebar, cards, dialogs e grid responsivo."""
@@ -763,6 +762,11 @@ class AgendaObras(ObraCardMixin, ObraDialogsMixin, AdminDialogsMixin):
                     'color: rgba(255,255,255,0.4); flex-shrink: 0;'
                 ).tooltip('Sair')
 
+            ui.label(f'AgendaObras v{VERSION} | © {datetime.datetime.now().year}').style(
+                'color: rgba(255,255,255,0.18); font-size: 10px; text-align: center; '
+                'padding: 8px 0 10px; flex-shrink: 0;'
+            )
+
     def abrir_perfil_usuario(self):
         """Abre diálogo de perfil do usuário logado com opções para editar dados pessoais e senha."""
         usuario = obter_usuario_logado()
@@ -893,13 +897,6 @@ class AgendaObras(ObraCardMixin, ObraDialogsMixin, AdminDialogsMixin):
                 )
 
         dialog.open()
-
-    def footer(self):
-        """Rodapé da aplicação"""
-        with ui.footer().style('background-color: #f5f5f5; padding: 15px; text-align: center;'):
-            ui.label(f'AgendaObras v{VERSION} | © {datetime.datetime.now().year}').style(
-                'color: #666; font-size: 12px;'
-            )
 
     def body(self):
         """Corpo principal com grid de obras"""

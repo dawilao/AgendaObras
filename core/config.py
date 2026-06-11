@@ -81,6 +81,8 @@ EMAIL_DISPARO_CATCHUP = True
 GITHUB_REPO_URL = "https://github.com/dawilao/AgendaObras"
 VERSION_JSON_URL = "https://raw.githubusercontent.com/dawilao/AgendaObras/main/version.json"
 
+BIBLIOTECA_PDF_MAX_MB = int(_obter_variavel_ambiente('BIBLIOTECA_PDF_MAX_MB', '5'))
+
 
 @dataclass
 class EmailConfig:

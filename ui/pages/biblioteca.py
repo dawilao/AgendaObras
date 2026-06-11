@@ -13,8 +13,10 @@ from nicegui import ui
 
 from db.biblioteca_repo import BibliotecaRepository, PASTA_UPLOADS
 from services.auth_service import obter_usuario_logado
+from core.config import BIBLIOTECA_PDF_MAX_MB
 from core.error_logger import log_error
 from utils.image_utils import processar_e_salvar_imagem
+from utils.pdf_utils import processar_e_salvar_pdf
 
 
 # ── Helpers de módulo ─────────────────────────────────────────────────────────
@@ -49,6 +51,8 @@ class BibliotecaPage:
         self._tag_checkboxes: dict = {}
         self._tags_lista_container = None
         self._imagem_path: Optional[str] = None
+        self._pdf_path: Optional[str] = None
+        self._pdf_nome_original: Optional[str] = None
 
         self._injetar_css()
         self._header()
@@ -566,6 +570,8 @@ class BibliotecaPage:
             footer_txt = f'👤 {card.get("criado_por", "?")}  ·  {criado_em_fmt}'
             if editado_em:
                 footer_txt += f'  ·  ✏️ {_formatar_datetime(editado_em)}'
+            if card.get('pdf_path'):
+                footer_txt += '  ·  📄 PDF'
             ui.html(
                 f'<div class="bib-card-footer">{footer_txt}</div>',
                 sanitize=False
@@ -617,6 +623,50 @@ class BibliotecaPage:
                     sanitize=False,
                 )
 
+            if card.get('pdf_path'):
+                nome_pdf = card.get('pdf_nome_original') or os.path.basename(card['pdf_path'])
+                nome_arquivo_pdf = os.path.basename(card['pdf_path'])
+                url_pdf = f'/uploads/{nome_arquivo_pdf}'
+                with ui.row().classes('items-center gap-2').style(
+                    'margin-top: 14px; padding: 10px 12px; background: #fef2f2; '
+                    'border-radius: 8px; border: 1px solid #fecaca;'
+                ):
+                    ui.icon('picture_as_pdf').style('color: #dc2626; font-size: 22px; flex-shrink: 0;')
+                    ui.label(nome_pdf).style(
+                        'font-size: 13px; color: #374151; flex: 1; word-break: break-all;'
+                    )
+                    ui.html(
+                        f'<a href="{url_pdf}" target="_blank" style="text-decoration:none;">'
+                        f'<button style="padding:4px 10px;color:#1976d2;border:1px solid #1976d2;'
+                        f'border-radius:4px;cursor:pointer;font-size:12px;background:transparent;'
+                        f'display:flex;align-items:center;gap:4px;">'
+                        f'<span class="material-icons" style="font-size:16px;">visibility</span>'
+                        f'Visualizar</button></a>',
+                        sanitize=False
+                    )
+                    ui.html(
+                        f'<a href="{url_pdf}" download="{nome_pdf}" style="text-decoration:none;">'
+                        f'<button style="padding:4px 10px;color:#1976d2;border:1px solid #1976d2;'
+                        f'border-radius:4px;cursor:pointer;font-size:12px;background:transparent;'
+                        f'display:flex;align-items:center;gap:4px;">'
+                        f'<span class="material-icons" style="font-size:16px;">download</span>'
+                        f'Download</button></a>',
+                        sanitize=False
+                    )
+                    if self.is_admin:
+                        def _remover_pdf_card(cid=card_id):
+                            try:
+                                self.repo.editar_card(cid, pdf_path='', pdf_nome_original='')
+                                ui.notify('PDF removido.', type='positive')
+                                dlg.close()
+                                self._renderizar_cards()
+                            except Exception as ex:
+                                log_error(ex, 'ui.pages.biblioteca', f'remover pdf card={cid}')
+                                ui.notify('Erro ao remover PDF.', type='negative')
+                        ui.button(
+                            icon='delete_forever', on_click=_remover_pdf_card
+                        ).props('flat dense').style('color: #dc2626;').tooltip('Remover PDF')
+
             ui.separator()
 
             criado_em_fmt = _formatar_datetime(card.get('criado_em'))
@@ -655,6 +705,8 @@ class BibliotecaPage:
         all_tags = self.repo.listar_tags()
 
         self._imagem_path = None
+        self._pdf_path = None
+        self._pdf_nome_original = None
 
         with ui.dialog().props('persistent') as dlg, ui.card().classes(
             'responsive-dialog'
@@ -695,35 +747,118 @@ class BibliotecaPage:
                 value=card.get('conteudo', '') if card else ''
             ).classes('w-full').style('min-height: 200px; margin-bottom: 12px;')
 
+            # Upload de PDF
+            _pdf_max_bytes = BIBLIOTECA_PDF_MAX_MB * 1024 * 1024
+            with ui.column().classes('w-full').style('gap: 4px; margin-bottom: 12px;'):
+                ui.label('Documento PDF (opcional)').style(
+                    'font-size: 13px; font-weight: 500; color: #555;'
+                )
+
+                # Container do PDF existente (apenas em edição)
+                pdf_existente_row = ui.row().classes('items-center gap-2 w-full').style(
+                    'padding: 8px 12px; background: #fef2f2; '
+                    'border-radius: 8px; border: 1px solid #fecaca;'
+                )
+                pdf_existente_row.set_visibility(bool(is_edit and card and card.get('pdf_path')))
+                if is_edit and card and card.get('pdf_path'):
+                    nome_pdf_atual = card.get('pdf_nome_original') or os.path.basename(card['pdf_path'])
+                    with pdf_existente_row:
+                        ui.icon('picture_as_pdf').style('color: #dc2626; font-size: 20px; flex-shrink: 0;')
+                        ui.label(nome_pdf_atual).style(
+                            'font-size: 13px; color: #374151; flex: 1; word-break: break-all;'
+                        )
+                        def _remover_pdf_form():
+                            self._pdf_path = ''
+                            self._pdf_nome_original = ''
+                            pdf_existente_row.set_visibility(False)
+                        ui.button(
+                            icon='delete', on_click=_remover_pdf_form
+                        ).props('flat dense').style('color: #dc2626;').tooltip('Remover PDF')
+
+                pdf_status = ui.label('').style('font-size: 12px; color: #666;')
+
+                async def on_pdf_upload(e):
+                    dados = await e.file.read()
+                    if len(dados) > _pdf_max_bytes:
+                        ui.notify(
+                            f'PDF muito grande (máx {BIBLIOTECA_PDF_MAX_MB} MB).', type='negative'
+                        )
+                        return
+                    try:
+                        caminho = processar_e_salvar_pdf(dados, PASTA_UPLOADS)
+                        self._pdf_path = caminho
+                        self._pdf_nome_original = e.file.name
+                        tamanho_mb = len(dados) / 1024 / 1024
+                        pdf_existente_row.set_visibility(False)
+                        pdf_status.set_text(f'Novo PDF: {e.file.name} ({tamanho_mb:.1f} MB)')
+                    except ValueError as ex:
+                        ui.notify(str(ex), type='negative')
+                    except Exception as ex:
+                        log_error(ex, 'ui.pages.biblioteca', f'on_pdf_upload: {e.file.name}')
+                        ui.notify('Erro ao processar PDF.', type='negative')
+
+                ui.upload(
+                    label='Selecionar PDF',
+                    on_upload=on_pdf_upload,
+                    auto_upload=True,
+                    max_files=1,
+                ).props(f'accept=".pdf" max-file-size="{_pdf_max_bytes}"').classes('w-full')
+
             # Upload de imagem
-            ui.label('Imagem (opcional)').style(
-                'font-size: 13px; font-weight: 500; color: #555; margin-bottom: 4px;'
-            )
-            imagem_status = ui.label('').style('font-size: 12px; color: #666; margin-bottom: 4px;')
-            if is_edit and card and card.get('imagem_path'):
-                imagem_status.set_text('Imagem atual mantida — envie uma nova para substituir.')
+            with ui.column().classes('w-full').style('gap: 4px; margin-bottom: 12px;'):
+                ui.label('Imagem (opcional)').style(
+                    'font-size: 13px; font-weight: 500; color: #555;'
+                )
 
-            async def on_upload(e):
-                dados_originais = await e.file.read()
-                try:
-                    caminho = processar_e_salvar_imagem(dados_originais, PASTA_UPLOADS)
-                    self._imagem_path = caminho
-                    tamanho_kb = os.path.getsize(caminho) // 1024
-                    original_kb = len(dados_originais) // 1024
-                    imagem_status.set_text(
-                        f'Imagem processada: {e.file.name} '
-                        f'({original_kb} KB → {tamanho_kb} KB)'
-                    )
-                except Exception as ex:
-                    log_error(ex, 'ui.pages.biblioteca', f'on_upload: {e.file.name}')
-                    ui.notify(f'Erro ao processar imagem: {ex}', type='negative')
+                # Container da imagem existente (apenas em edição)
+                img_existente_row = ui.row().classes('items-center gap-2 w-full').style(
+                    'padding: 8px 12px; background: #fef2f2; '
+                    'border-radius: 8px; border: 1px solid #fecaca;'
+                )
+                img_existente_row.set_visibility(bool(is_edit and card and card.get('imagem_path')))
+                if is_edit and card and card.get('imagem_path'):
+                    nome_img_atual = os.path.basename(card['imagem_path'])
+                    url_img_atual = f'/uploads/{nome_img_atual}'
+                    with img_existente_row:
+                        ui.icon('image').style('color: #dc2626; font-size: 20px; flex-shrink: 0;')
+                        ui.image(url_img_atual).style(
+                            'width: 40px; height: 40px; object-fit: cover; '
+                            'border-radius: 4px; flex-shrink: 0;'
+                        )
+                        ui.label(nome_img_atual).style(
+                            'font-size: 13px; color: #374151; flex: 1; word-break: break-all;'
+                        )
+                        def _remover_imagem_form():
+                            self._imagem_path = ''
+                            img_existente_row.set_visibility(False)
+                        ui.button(
+                            icon='delete', on_click=_remover_imagem_form
+                        ).props('flat dense').style('color: #dc2626;').tooltip('Remover imagem')
 
-            ui.upload(
-                label='Selecionar imagem',
-                on_upload=on_upload,
-                auto_upload=True,
-                max_files=1,
-            ).props('accept="image/*"').classes('w-full').style('margin-bottom: 12px;')
+                imagem_status = ui.label('').style('font-size: 12px; color: #666;')
+
+                async def on_upload(e):
+                    dados_originais = await e.file.read()
+                    try:
+                        caminho = processar_e_salvar_imagem(dados_originais, PASTA_UPLOADS)
+                        self._imagem_path = caminho
+                        tamanho_kb = os.path.getsize(caminho) // 1024
+                        original_kb = len(dados_originais) // 1024
+                        img_existente_row.set_visibility(False)
+                        imagem_status.set_text(
+                            f'Nova imagem: {e.file.name} '
+                            f'({original_kb} KB → {tamanho_kb} KB)'
+                        )
+                    except Exception as ex:
+                        log_error(ex, 'ui.pages.biblioteca', f'on_upload: {e.file.name}')
+                        ui.notify(f'Erro ao processar imagem: {ex}', type='negative')
+
+                ui.upload(
+                    label='Selecionar imagem',
+                    on_upload=on_upload,
+                    auto_upload=True,
+                    max_files=1,
+                ).props('accept="image/*"').classes('w-full')
 
             def salvar():
                 titulo = (titulo_input.value or '').strip()
@@ -745,13 +880,18 @@ class BibliotecaPage:
                 try:
                     if is_edit:
                         self.repo.editar_card(
-                            card_id, titulo, conteudo, self._imagem_path
+                            card_id, titulo, conteudo,
+                            imagem_path=self._imagem_path,
+                            pdf_path=self._pdf_path,
+                            pdf_nome_original=self._pdf_nome_original,
                         )
                         self.repo.vincular_tags_card(card_id, tag_ids_sel)
                     else:
                         nome_u = f'{self.usuario.get("nome", "")} {self.usuario.get("sobrenome", "")}'.strip()
                         novo_id = self.repo.criar_card(
-                            titulo, conteudo, self._imagem_path, nome_u
+                            titulo, conteudo, self._imagem_path, nome_u,
+                            pdf_path=self._pdf_path,
+                            pdf_nome_original=self._pdf_nome_original,
                         )
                         self.repo.vincular_tags_card(novo_id, tag_ids_sel)
 

@@ -81,6 +81,17 @@ class BibliotecaRepository(BaseRepository):
                 conn.commit()
             except sqlite3.OperationalError:
                 pass
+            # Migração: adiciona colunas de PDF se ainda não existirem
+            try:
+                conn.execute('ALTER TABLE cards ADD COLUMN pdf_path TEXT')
+                conn.commit()
+            except sqlite3.OperationalError:
+                pass
+            try:
+                conn.execute('ALTER TABLE cards ADD COLUMN pdf_nome_original TEXT')
+                conn.commit()
+            except sqlite3.OperationalError:
+                pass
             conn.commit()
         finally:
             conn.close()
@@ -143,6 +154,7 @@ class BibliotecaRepository(BaseRepository):
                 placeholders = ','.join('?' * len(tag_ids))
                 rows = conn.execute(f'''
                     SELECT DISTINCT c.id, c.titulo, c.conteudo, c.imagem_path,
+                                    c.pdf_path, c.pdf_nome_original,
                                     c.criado_por, c.criado_em, c.editado_em
                     FROM cards c
                     JOIN card_tags ct ON ct.card_id = c.id
@@ -152,6 +164,7 @@ class BibliotecaRepository(BaseRepository):
             else:
                 rows = conn.execute(
                     '''SELECT id, titulo, conteudo, imagem_path,
+                              pdf_path, pdf_nome_original,
                               criado_por, criado_em, editado_em
                        FROM cards ORDER BY criado_em DESC'''
                 ).fetchall()
@@ -207,14 +220,19 @@ class BibliotecaRepository(BaseRepository):
         conteudo: str,
         imagem_path: Optional[str],
         criado_por: str,
+        pdf_path: Optional[str] = None,
+        pdf_nome_original: Optional[str] = None,
     ) -> int:
         agora = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         conn = self.get_connection()
         try:
             cur = conn.execute(
-                '''INSERT INTO cards (titulo, conteudo, imagem_path, criado_por, criado_em)
-                   VALUES (?, ?, ?, ?, ?)''',
-                (titulo.strip(), conteudo, imagem_path, criado_por, agora),
+                '''INSERT INTO cards
+                       (titulo, conteudo, imagem_path, criado_por, criado_em,
+                        pdf_path, pdf_nome_original)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)''',
+                (titulo.strip(), conteudo, imagem_path, criado_por, agora,
+                 pdf_path, pdf_nome_original),
             )
             conn.commit()
             return cur.lastrowid
@@ -227,34 +245,49 @@ class BibliotecaRepository(BaseRepository):
     def editar_card(
         self,
         card_id: int,
-        titulo: str,
-        conteudo: str,
+        titulo: Optional[str] = None,
+        conteudo: Optional[str] = None,
         imagem_path: Optional[str] = None,
+        pdf_path: Optional[str] = None,
+        pdf_nome_original: Optional[str] = None,
     ) -> bool:
         agora = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         conn = self.get_connection()
         try:
-            if imagem_path is not None:
-                # Remove arquivo anterior se existir
-                row = conn.execute(
-                    'SELECT imagem_path FROM cards WHERE id = ?', (card_id,)
-                ).fetchone()
-                if row and row['imagem_path']:
-                    _remover_arquivo(row['imagem_path'], CAMINHO_BIBLIOTECA_DB)
+            row = conn.execute(
+                'SELECT titulo, conteudo, imagem_path, pdf_path FROM cards WHERE id = ?',
+                (card_id,)
+            ).fetchone()
+            if not row:
+                return False
 
-                conn.execute(
-                    '''UPDATE cards
-                       SET titulo = ?, conteudo = ?, imagem_path = ?, editado_em = ?
-                       WHERE id = ?''',
-                    (titulo.strip(), conteudo, imagem_path, agora, card_id),
-                )
+            novo_titulo = titulo.strip() if titulo is not None else row['titulo']
+            novo_conteudo = conteudo if conteudo is not None else row['conteudo']
+
+            if imagem_path is not None:
+                if row['imagem_path']:
+                    _remover_arquivo(row['imagem_path'], CAMINHO_BIBLIOTECA_DB)
             else:
-                conn.execute(
-                    '''UPDATE cards
-                       SET titulo = ?, conteudo = ?, editado_em = ?
-                       WHERE id = ?''',
-                    (titulo.strip(), conteudo, agora, card_id),
-                )
+                imagem_path = row['imagem_path']
+
+            if pdf_path is not None:
+                # pdf_path='' significa remoção explícita
+                if row['pdf_path']:
+                    _remover_arquivo(row['pdf_path'], CAMINHO_BIBLIOTECA_DB)
+                novo_pdf_path = pdf_path or None
+                novo_pdf_nome = pdf_nome_original or None
+            else:
+                novo_pdf_path = row['pdf_path']
+                novo_pdf_nome = pdf_nome_original  # permite atualizar só o nome se necessário
+
+            conn.execute(
+                '''UPDATE cards
+                   SET titulo = ?, conteudo = ?, imagem_path = ?,
+                       pdf_path = ?, pdf_nome_original = ?, editado_em = ?
+                   WHERE id = ?''',
+                (novo_titulo, novo_conteudo, imagem_path,
+                 novo_pdf_path, novo_pdf_nome, agora, card_id),
+            )
             conn.commit()
             return True
         except Exception as e:
@@ -268,10 +301,13 @@ class BibliotecaRepository(BaseRepository):
         try:
             conn.execute('PRAGMA foreign_keys = ON')
             row = conn.execute(
-                'SELECT imagem_path FROM cards WHERE id = ?', (card_id,)
+                'SELECT imagem_path, pdf_path FROM cards WHERE id = ?', (card_id,)
             ).fetchone()
-            if row and row['imagem_path']:
-                _remover_arquivo(row['imagem_path'], CAMINHO_BIBLIOTECA_DB)
+            if row:
+                if row['imagem_path']:
+                    _remover_arquivo(row['imagem_path'], CAMINHO_BIBLIOTECA_DB)
+                if row['pdf_path']:
+                    _remover_arquivo(row['pdf_path'], CAMINHO_BIBLIOTECA_DB)
 
             conn.execute('DELETE FROM cards WHERE id = ?', (card_id,))
             conn.commit()
