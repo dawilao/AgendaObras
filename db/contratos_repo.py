@@ -90,6 +90,42 @@ class ContratosDatabase:
             if conn:
                 conn.close()
 
+    def listar_contratos_com_id(self) -> List[dict]:
+        """Retorna [{id, nome}] de todos os contratos."""
+        conn = None
+        try:
+            conn = self.get_connection()
+            cursor = conn.cursor()
+            cursor.execute('SELECT id, nome FROM contratos ORDER BY nome ASC')
+            return [dict(row) for row in cursor.fetchall()]
+        except Exception as e:
+            log_error(e, "contratos_database", "Listar contratos com id")
+            return []
+        finally:
+            if conn:
+                conn.close()
+
+    def listar_contratos_usuario_com_id(self, usuario_id: int) -> List[dict]:
+        """Retorna [{id, nome}] dos contratos vinculados ao usuário."""
+        conn = None
+        try:
+            conn = self.get_connection()
+            cursor = conn.cursor()
+            cursor.execute('''
+                SELECT c.id, c.nome
+                FROM contratos c
+                JOIN contrato_usuarios cu ON cu.contrato_nome = c.nome
+                WHERE cu.usuario_id = ?
+                ORDER BY c.nome ASC
+            ''', (usuario_id,))
+            return [dict(row) for row in cursor.fetchall()]
+        except Exception as e:
+            log_error(e, "contratos_database", f"Listar contratos com id do usuário {usuario_id}")
+            return []
+        finally:
+            if conn:
+                conn.close()
+
     def vincular_usuario_contrato(self, usuario_id: int, contrato_nome: str) -> bool:
         conn = None
         try:

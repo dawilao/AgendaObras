@@ -715,6 +715,12 @@ class AgendaObras(ObraCardMixin, ObraDialogsMixin, AdminDialogsMixin):
                         ui.label('Biblioteca')
 
                     with ui.element('div').classes('ao-nav-item').on(
+                        'click', lambda: ui.navigate.to('/cotacoes')
+                    ):
+                        ui.html('<span class="material-icons ao-nav-icon">table_chart</span>', sanitize=False)
+                        ui.label('Base de Cotações')
+
+                    with ui.element('div').classes('ao-nav-item').on(
                         'click', lambda: ui.navigate.to(
                             'https://docs.google.com/presentation/d/1paRtae89yfmLcyJaWgQrtZFM3FKy1MsOEauxMzdylPA/edit?usp=sharing',
                             new_tab=True

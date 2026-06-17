@@ -9,6 +9,15 @@ email_config.env
 # Arquivos do nicegui
 .nicegui/
 
+# Arquivos da pasta de erros
+erros/
+
+# Pasta others
+/others
+
+# Arquivos patch
+*.patch
+
 # Arquivos desnecessários
 commit.txt
 new.txt

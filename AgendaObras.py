@@ -25,6 +25,7 @@ from services.auth_service import configurar_middleware, verificar_autenticacao,
 from ui.pages.login import LoginPage
 from ui.pages.main import MainPage
 from ui.pages.biblioteca import BibliotecaPage
+from ui.pages.cotacoes import CotacoesPage
 
 
 def _carregar_storage_secret() -> str:
@@ -137,6 +138,14 @@ def pagina_biblioteca():
         ui.navigate.to('/login')
         return
     BibliotecaPage()
+
+
+@ui.page('/cotacoes')
+def pagina_cotacoes():
+    if not verificar_autenticacao():
+        ui.navigate.to('/login')
+        return
+    CotacoesPage()
 
 
 if __name__ in {"__main__", "__mp_main__"}:
