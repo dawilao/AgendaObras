@@ -10,18 +10,27 @@ from utils.formatters import formatar_data_exibicao
 TAREFA_SOLICITACAO_ACESSO = 'SOLICITAÇÃO DE ACESSO'
 TAREFA_RENOVACAO_ACESSO = 'RENOVAÇÃO DE SOLICITAÇÃO DE ACESSO'
 
+_BG_STATUS = {
+    'green':  'rgba(0, 255, 13, 0.05)',
+    'red':    'rgba(255, 0, 0, 0.05)',
+    'orange': 'rgba(255, 145, 0, 0.05)',
+    'gray':   'transparent',
+}
+
 
 class ObraCardMixin:
-    def criar_card_obra(self, obra):
+    def criar_card_obra(self, obra, checklist=None):
         """Cria um card individual de obra"""
-        checklist = self.db.obter_checklist(obra['id'])
+        if checklist is None:
+            checklist = self.db.obter_checklist(obra['id'])
         progresso = self.helper.calcular_progresso(checklist)
         cor, icone, status_texto = self.helper.obter_status_visual(obra, checklist)
 
         proxima_tarefa = next((item for item in checklist if not item['concluido'] and not item['bloqueado']), None)
 
+        bg = _BG_STATUS.get(cor, 'transparent')
         with ui.card().classes('ao-obra-card').style(
-            f'border-top: 3px solid {cor}; min-height: 250px;'
+            f'border-top: 3px solid {cor}; min-height: 250px; background-color: {bg};'
         ):
             with ui.row().classes('w-full items-center justify-between cursor-pointer').on(
                 'click', lambda o=obra: self.abrir_detalhes_obra(o['id'])
@@ -42,7 +51,7 @@ class ObraCardMixin:
                 tab_checklist = ui.tab('Checklist', icon='checklist')
                 tab_financeiro = ui.tab('Financeiro', icon='attach_money')
 
-            with ui.tab_panels(tabs, value=tab_info).classes('w-full'):
+            with ui.tab_panels(tabs, value=tab_info).classes('w-full').style('background: transparent;'):
                 # Aba de Informações Gerais
                 with ui.tab_panel(tab_info):
                     with ui.column().classes('w-full gap-2'):

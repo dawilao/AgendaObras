@@ -7,6 +7,20 @@ import datetime
 from typing import List, Dict
 from core.error_logger import log_error
 
+GRADE_TABS = [
+    ('todos', 'Todos'),
+    ('em_andamento', 'Em Andamento'),
+    ('atrasado', 'Atrasado'),
+    ('concluido', 'Concluído'),
+]
+
+KANBAN_COLUNAS = [
+    ('nao_iniciada', 'Não iniciada', 'gray', 'hourglass_empty'),
+    ('em_andamento', 'Em andamento', 'orange', 'schedule'),
+    ('atrasada', 'Atrasada', 'red', 'warning'),
+    ('concluido', 'Concluído', 'green', 'check_circle'),
+]
+
 
 class ObrasHelper:
     @staticmethod
@@ -92,6 +106,26 @@ class ObrasHelper:
         except Exception as e:
             log_error(e, "obras_helper", f"Obter status visual - obra_id: {obra.get('id', 'N/A')}")
             return ('gray', 'error', 'Erro')
+
+    @staticmethod
+    def obter_bucket_grade(status_texto: str) -> str:
+        """Mapeia status_texto para uma das 3 abas de filtro da Grade."""
+        if status_texto == 'Atrasada':
+            return 'atrasado'
+        if status_texto in ('Concluído', 'Concluída com Pendências'):
+            return 'concluido'
+        return 'em_andamento'  # Não Iniciada, Em Andamento, Pronta para concluir
+
+    @staticmethod
+    def obter_bucket_kanban(status_texto: str) -> str:
+        """Mapeia status_texto para uma das 4 colunas fixas do Kanban."""
+        if status_texto == 'Não Iniciada':
+            return 'nao_iniciada'
+        if status_texto == 'Atrasada':
+            return 'atrasada'
+        if status_texto in ('Concluído', 'Concluída com Pendências'):
+            return 'concluido'
+        return 'em_andamento'  # Em Andamento, Pronta para concluir
 
     # ========== FASE 3 - FUNÇÕES FINANCEIRAS ========== #
     @staticmethod

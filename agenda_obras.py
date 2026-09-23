@@ -14,7 +14,7 @@ from secrets import randbelow
 from typing import Dict, Optional, Tuple
 from db import Database, TAREFAS_COM_DIAS_UTEIS
 from services.email_service import EmailService
-from utils.obras_helper import ObrasHelper
+from utils.obras_helper import ObrasHelper, GRADE_TABS
 from services.notificador import NotificadorPrazos
 from core.version_checker import VersionChecker
 from core.config import VERSION
@@ -25,9 +25,10 @@ from db.contratos_repo import ContratosDatabase
 from ui.components.obra_card import ObraCardMixin
 from ui.components.obra_dialogs import ObraDialogsMixin
 from ui.components.admin_dialogs import AdminDialogsMixin
+from ui.components.obra_kanban import ObraKanbanMixin
 
 
-class AgendaObras(ObraCardMixin, ObraDialogsMixin, AdminDialogsMixin):
+class AgendaObras(ObraCardMixin, ObraDialogsMixin, AdminDialogsMixin, ObraKanbanMixin):
     def __init__(self):
         self.title = "AgendaObras"
         self.description = "Rastreador de Demandas de Engenharia"
@@ -48,6 +49,8 @@ class AgendaObras(ObraCardMixin, ObraDialogsMixin, AdminDialogsMixin):
         # Container do body (para atualização dinâmica)
         self.body_container = None
         self.filtro_pesquisa = ""
+        self.view_mode = 'grid'        # 'grid' | 'kanban'
+        self.filtro_status = 'todos'   # 'todos' | 'em_andamento' | 'atrasado' | 'concluido'
 
         # Verifica atualização antes de construir UI
         self.verificar_atualizacao()
@@ -225,6 +228,104 @@ class AgendaObras(ObraCardMixin, ObraDialogsMixin, AdminDialogsMixin):
             }
             @media (max-width: 640px) {
                 .obras-grid { grid-template-columns: 1fr; }
+            }
+
+            /* ── Toggle de visualização Grade/Kanban ── */
+            .ao-view-toggle {
+                display: flex;
+                align-items: center;
+                background: #f0f2f5;
+                border-radius: 8px;
+                padding: 3px;
+                gap: 2px;
+                flex-shrink: 0;
+            }
+            .ao-view-toggle-btn {
+                min-width: 34px !important;
+                padding: 4px 10px !important;
+                border-radius: 6px !important;
+                color: #7a8699 !important;
+                background: transparent !important;
+                box-shadow: none !important;
+            }
+            .ao-view-toggle-btn.ao-view-toggle-btn-active {
+                background: white !important;
+                color: #1976d2 !important;
+                box-shadow: 0 1px 3px rgba(0,0,0,0.12) !important;
+            }
+
+            /* ── Abas de status (somente Grade) ── */
+            .ao-status-tabs-wrap {
+                background: white;
+                border-bottom: 1px solid #e8eaf0;
+                padding: 0 24px;
+            }
+
+            /* ── Kanban board ── */
+            .ao-kanban-board {
+                display: flex;
+                gap: 16px;
+                overflow-x: auto;
+                padding-bottom: 8px;
+                align-items: stretch;
+                height: calc(100vh - 108px);
+                min-height: 360px;
+            }
+            .ao-kanban-column {
+                flex: 1 1 280px;
+                min-width: 280px;
+                background: #f5f6f8;
+                border-radius: 12px;
+                padding: 12px;
+                display: flex;
+                flex-direction: column;
+                min-height: 0;
+            }
+            .ao-kanban-column-header {
+                display: flex;
+                align-items: center;
+                justify-content: space-between;
+                padding: 4px 4px 10px;
+                border-bottom: 3px solid #ccc;
+                flex-shrink: 0;
+            }
+            .ao-kanban-column-count {
+                font-size: 11px;
+                font-weight: 700;
+                color: #666;
+                background: white;
+                border-radius: 12px;
+                padding: 1px 8px;
+            }
+            .ao-kanban-column-body {
+                overflow-y: auto;
+                display: flex;
+                flex-direction: column;
+                gap: 8px;
+                padding-top: 8px;
+                flex: 1 1 auto;
+                min-height: 0;
+            }
+            .ao-kanban-card {
+                background: white;
+                border-radius: 8px;
+                border: 1px solid #e8eaf0;
+                padding: 10px 12px;
+                cursor: pointer;
+                transition: box-shadow 0.15s, transform 0.15s;
+            }
+            .ao-kanban-card:hover {
+                box-shadow: 0 4px 14px rgba(0,0,0,0.1);
+                transform: translateY(-2px);
+            }
+            .ao-kanban-card-title { font-size: 13px; font-weight: 700; color: #1a2332; }
+            .ao-kanban-card-cliente { font-size: 11px; color: #666; margin-top: 1px; }
+            .ao-kanban-column-empty {
+                font-size: 12px;
+                color: #999;
+                text-align: center;
+                padding: 20px 8px;
+                font-style: italic;
             }
         </style>
         ''')
@@ -899,7 +1000,7 @@ class AgendaObras(ObraCardMixin, ObraDialogsMixin, AdminDialogsMixin):
         dialog.open()
 
     def body(self):
-        """Corpo principal com grid de obras"""
+        """Corpo principal com grid/kanban de obras"""
         with ui.element('div').classes('ao-content-wrap w-full'):
             # Barra de título
             with ui.element('div').classes('ao-content-topbar'):
@@ -909,13 +1010,60 @@ class AgendaObras(ObraCardMixin, ObraDialogsMixin, AdminDialogsMixin):
                     f'{total} cadastrada{"s" if total != 1 else ""}'
                 ).classes('ao-obras-badge')
 
-            # Área de cards
+                ui.space()
+
+                with ui.element('div').classes('ao-view-toggle'):
+                    self.btn_view_grid = ui.button(
+                        icon='grid_view', on_click=lambda: self.set_view_mode('grid')
+                    ).props('flat dense').classes('ao-view-toggle-btn').tooltip('Grade')
+                    self.btn_view_kanban = ui.button(
+                        icon='view_kanban', on_click=lambda: self.set_view_mode('kanban')
+                    ).props('flat dense').classes('ao-view-toggle-btn').tooltip('Kanban')
+
+            # Abas de filtro por status (somente na visão em Grade)
+            self.status_tabs_container = ui.element('div').classes('ao-status-tabs-wrap')
+            with self.status_tabs_container:
+                self._montar_tabs_status()
+
+            # Área de cards / kanban
             with ui.element('div').style('padding: 20px 24px;'):
                 self.body_container = ui.column().classes('w-full')
+                self._sync_view_toggle_buttons()
                 self.renderizar_obras()
 
+    def _montar_tabs_status(self):
+        """Cria as abas de filtro por status da Grade (Todos/Em Andamento/Atrasado/Concluído)."""
+        with ui.tabs(value=self.filtro_status, on_change=self._on_tab_status_change).props(
+            'dense no-caps active-color=primary indicator-color=primary'
+        ).classes('ao-status-tabs') as self.status_tabs:
+            for chave, rotulo in GRADE_TABS:
+                ui.tab(name=chave, label=rotulo)
+
+    def _on_tab_status_change(self, e):
+        """Atualiza o filtro de status da Grade e re-renderiza."""
+        self.filtro_status = e.value
+        self.renderizar_obras()
+
+    def set_view_mode(self, modo: str):
+        """Alterna entre visão em Grade e Kanban."""
+        if modo not in ('grid', 'kanban') or self.view_mode == modo:
+            return
+        self.view_mode = modo
+        self._sync_view_toggle_buttons()
+        self.renderizar_obras()
+
+    def _sync_view_toggle_buttons(self):
+        """Sincroniza destaque visual dos botões de toggle e visibilidade das abas de status."""
+        if self.view_mode == 'grid':
+            self.btn_view_grid.classes(add='ao-view-toggle-btn-active')
+            self.btn_view_kanban.classes(remove='ao-view-toggle-btn-active')
+        else:
+            self.btn_view_kanban.classes(add='ao-view-toggle-btn-active')
+            self.btn_view_grid.classes(remove='ao-view-toggle-btn-active')
+        self.status_tabs_container.set_visibility(self.view_mode == 'grid')
+
     def renderizar_obras(self):
-        """Renderiza o grid de cards das obras"""
+        """Renderiza a grade ou o kanban de obras conforme self.view_mode"""
         self.body_container.clear()
 
         with self.body_container:
@@ -938,29 +1086,77 @@ class AgendaObras(ObraCardMixin, ObraDialogsMixin, AdminDialogsMixin):
                 )
 
             if not obras:
-                with ui.card().classes('w-full').style('padding: 40px; text-align: center;'):
-                    if self.filtro_pesquisa:
-                        ui.icon('search_off').style('font-size: 48px; color: #bbb; margin-bottom: 10px;')
-                        ui.label('Nenhuma obra encontrada').style('font-size: 18px; color: #999;')
-                        ui.label(f'Não há obras que correspondam a "{self.filtro_pesquisa}"').style('font-size: 14px; color: #bbb;')
-                        ui.button('Limpar pesquisa', on_click=self.atualizar_dados).props('outlined').style('margin-top: 15px;')
-                    else:
-                        if not permissoes['is_admin'] and not permissoes['contratos_vinculados']:
-                            ui.label('Nenhum contrato vinculado ao seu usuário').style('font-size: 18px; color: #999;')
-                            ui.label('Solicite a um administrador o vínculo com um contrato.').style('font-size: 14px; color: #bbb;')
-                        else:
-                            ui.label('Nenhuma obra cadastrada').style('font-size: 18px; color: #999;')
-                            ui.label('Clique em "Nova Obra" para começar').style('font-size: 14px; color: #bbb;')
-            else:
-                total = len(obras)
-                if self.filtro_pesquisa:
-                    ui.label(f'{total} obra{"s" if total != 1 else ""} encontrada{"s" if total != 1 else ""}').style(
-                        'font-size: 14px; color: #666; margin-bottom: 10px; font-weight: 500;'
-                    )
+                self._renderizar_estado_vazio_sem_obras(permissoes)
+                return
 
-                with ui.grid(columns='repeat(auto-fit, minmax(min(100%, 380px), 1fr))').classes('w-full gap-4'):
-                    for obra in obras:
-                        self.criar_card_obra(obra)
+            # Checklist e status calculados uma única vez por obra,
+            # reaproveitados tanto no agrupamento quanto na renderização do card.
+            obras_info = []
+            for obra in obras:
+                checklist = self.db.obter_checklist(obra['id'])
+                cor, icone, status_texto = self.helper.obter_status_visual(obra, checklist)
+                obras_info.append({
+                    'obra': obra,
+                    'checklist': checklist,
+                    'cor': cor,
+                    'icone': icone,
+                    'status_texto': status_texto,
+                })
+
+            if self.view_mode == 'kanban':
+                self.renderizar_kanban(obras_info)
+                return
+
+            self._renderizar_grade(obras_info)
+
+    def _renderizar_estado_vazio_sem_obras(self, permissoes):
+        """Estado vazio quando não há nenhuma obra retornada pela busca/permissões."""
+        with ui.card().classes('w-full').style('padding: 40px; text-align: center;'):
+            if self.filtro_pesquisa:
+                ui.icon('search_off').style('font-size: 48px; color: #bbb; margin-bottom: 10px;')
+                ui.label('Nenhuma obra encontrada').style('font-size: 18px; color: #999;')
+                ui.label(f'Não há obras que correspondam a "{self.filtro_pesquisa}"').style('font-size: 14px; color: #bbb;')
+                ui.button('Limpar pesquisa', on_click=self.atualizar_dados).props('outlined').style('margin-top: 15px;')
+            else:
+                if not permissoes['is_admin'] and not permissoes['contratos_vinculados']:
+                    ui.label('Nenhum contrato vinculado ao seu usuário').style('font-size: 18px; color: #999;')
+                    ui.label('Solicite a um administrador o vínculo com um contrato.').style('font-size: 14px; color: #bbb;')
+                else:
+                    ui.label('Nenhuma obra cadastrada').style('font-size: 18px; color: #999;')
+                    ui.label('Clique em "Nova Obra" para começar').style('font-size: 14px; color: #bbb;')
+
+    def _renderizar_grade(self, obras_info):
+        """Renderiza o grid de cards, aplicando o filtro de aba de status."""
+        if self.filtro_status != 'todos':
+            obras_filtradas = [
+                i for i in obras_info
+                if self.helper.obter_bucket_grade(i['status_texto']) == self.filtro_status
+            ]
+        else:
+            obras_filtradas = obras_info
+
+        total = len(obras_info)
+        if self.filtro_pesquisa:
+            ui.label(f'{total} obra{"s" if total != 1 else ""} encontrada{"s" if total != 1 else ""}').style(
+                'font-size: 14px; color: #666; margin-bottom: 10px; font-weight: 500;'
+            )
+
+        if not obras_filtradas:
+            with ui.card().classes('w-full').style('padding: 40px; text-align: center;'):
+                ui.icon('filter_alt_off').style('font-size: 48px; color: #bbb; margin-bottom: 10px;')
+                ui.label('Nenhuma obra nesta aba').style('font-size: 18px; color: #999;')
+                ui.button('Ver todas', on_click=self._resetar_filtro_status).props('outlined').style('margin-top: 15px;')
+            return
+
+        with ui.grid(columns='repeat(auto-fit, minmax(min(100%, 380px), 1fr))').classes('w-full gap-4'):
+            for info in obras_filtradas:
+                self.criar_card_obra(info['obra'], checklist=info['checklist'])
+
+    def _resetar_filtro_status(self):
+        """Reseta o filtro de aba para 'Todos' e sincroniza a UI das abas."""
+        self.filtro_status = 'todos'
+        self.status_tabs.value = 'todos'
+        self.renderizar_obras()
 
     # ========== Funções dos botões ========== #
     def pesquisa(self, texto: str):
