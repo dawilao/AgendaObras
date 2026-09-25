@@ -24,6 +24,36 @@ KANBAN_COLUNAS = [
 
 class ObrasHelper:
     @staticmethod
+    def nome_usuario(usuario: Dict) -> str:
+        return f"{usuario.get('nome') or ''} {usuario.get('sobrenome') or ''}".strip() or (usuario.get('email') or '')
+
+    @staticmethod
+    def montar_contexto_coordenadores(usuarios: List[Dict], vinculos: List[Dict]):
+        """Retorna (usuarios_por_id, vinculados_por_contrato) para resolver coordenadores sem
+        consultar os bancos a cada card. Admins acessam todos os contratos e não contam como vinculados."""
+        usuarios_por_id = {u['id']: u for u in usuarios}
+        vinculados_por_contrato: Dict[str, List[str]] = {}
+        for vinculo in vinculos:
+            usuario = usuarios_por_id.get(vinculo['usuario_id'])
+            if not usuario or usuario.get('is_admin'):
+                continue
+            contrato = (vinculo['contrato_nome'] or '').strip()
+            vinculados_por_contrato.setdefault(contrato, []).append(ObrasHelper.nome_usuario(usuario))
+        for nomes in vinculados_por_contrato.values():
+            nomes.sort(key=str.casefold)
+        return usuarios_por_id, vinculados_por_contrato
+
+    @staticmethod
+    def resolver_coordenador(obra: Dict, usuarios_por_id: Dict, vinculados_por_contrato: Dict):
+        """Retorna (texto, automatico). Responsável definido na obra tem prioridade; senão,
+        os usuários vinculados ao contrato. texto é None quando não há ninguém."""
+        coordenador = usuarios_por_id.get(obra.get('coordenador_id'))
+        if coordenador:
+            return ObrasHelper.nome_usuario(coordenador), False
+        nomes = vinculados_por_contrato.get((obra.get('cliente') or '').strip(), [])
+        return (', '.join(nomes) if nomes else None), True
+
+    @staticmethod
     def formatar_valor(valor: float) -> str:
         """Formata valor para moeda brasileira"""
         try:

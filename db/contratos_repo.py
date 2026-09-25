@@ -158,6 +158,20 @@ class ContratosDatabase:
             if conn:
                 conn.close()
 
+    def listar_vinculos(self) -> List[dict]:
+        """Todos os vínculos usuário ↔ contrato, para montar mapas sem consultar por obra."""
+        conn = None
+        try:
+            conn = self.get_connection()
+            rows = conn.execute('SELECT contrato_nome, usuario_id FROM contrato_usuarios').fetchall()
+            return [dict(row) for row in rows]
+        except Exception as e:
+            log_error(e, "contratos_database", "Listar vínculos")
+            return []
+        finally:
+            if conn:
+                conn.close()
+
     def contar_contratos_por_usuario(self) -> dict:
         conn = None
         try:

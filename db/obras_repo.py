@@ -482,6 +482,22 @@ class ObrasRepository(BaseRepository):
         conn.commit()
         conn.close()
 
+    def atualizar_coordenador_obra(self, obra_id: int, coordenador_id: Optional[int]) -> bool:
+        """Define o responsável da obra; None volta ao automático (vinculados ao contrato)."""
+        conn = None
+        try:
+            conn = self.get_connection()
+            conn.execute('UPDATE obras SET coordenador_id = ? WHERE id = ?',
+                         (int(coordenador_id) if coordenador_id else None, obra_id))
+            conn.commit()
+            return True
+        except Exception as e:
+            log_error(e, "db.obras_repo", f"Atualizar coordenador da obra - ID: {obra_id}")
+            return False
+        finally:
+            if conn:
+                conn.close()
+
     def atualizar_observacoes_obra(self, obra_id: int, observacoes: Optional[str],
                                    obs_usuario: Optional[str], obs_data: Optional[str]) -> bool:
         try:

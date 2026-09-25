@@ -64,6 +64,7 @@ class MigrationManager:
         self.migrations.append(Migration(version=13, description="Adicionar valor_parceiro_medicao e valor_empresa_medicao em medicoes_valores", upgrade=self._migration_013_parceiro_medicoes))
         self.migrations.append(Migration(version=14, description="Adicionar valor_aditivo à tabela obras", upgrade=self._migration_014_add_valor_aditivo))
         self.migrations.append(Migration(version=15, description="Adicionar índices de performance em obra_checklist e medicoes_valores", upgrade=self._migration_015_add_performance_indexes))
+        self.migrations.append(Migration(version=17, description="Adicionar coordenador_id (responsável da obra) à tabela obras", upgrade=self._migration_017_add_coordenador))
 
     def _migration_001_add_tipo_recorrencia(self, conn: sqlite3.Connection):
         cursor = conn.cursor()
@@ -328,6 +329,17 @@ class MigrationManager:
             print("    ✅ Coluna valor_aditivo adicionada à tabela obras")
         else:
             print("    ⏭️  Coluna valor_aditivo já existe, pulando...")
+        conn.commit()
+
+    def _migration_017_add_coordenador(self, conn: sqlite3.Connection):
+        # NULL = automático: o card usa os usuários vinculados ao contrato.
+        cursor = conn.cursor()
+        cursor.execute("PRAGMA table_info(obras)")
+        if 'coordenador_id' not in [row[1] for row in cursor.fetchall()]:
+            cursor.execute("ALTER TABLE obras ADD COLUMN coordenador_id INTEGER")
+            print("    ✅ Coluna coordenador_id adicionada à tabela obras")
+        else:
+            print("    ⏭️  Coluna coordenador_id já existe, pulando...")
         conn.commit()
 
     def _migration_015_add_performance_indexes(self, conn: sqlite3.Connection):

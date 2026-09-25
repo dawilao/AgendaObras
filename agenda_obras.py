@@ -1089,6 +1089,8 @@ class AgendaObras(ObraCardMixin, ObraDialogsMixin, AdminDialogsMixin, ObraKanban
                 self._renderizar_estado_vazio_sem_obras(permissoes)
                 return
 
+            self._coordenadores_ctx = self._contexto_coordenadores()
+
             # Checklist e status calculados uma única vez por obra,
             # reaproveitados tanto no agrupamento quanto na renderização do card.
             obras_info = []

@@ -6,6 +6,7 @@ from nicegui import ui
 import datetime
 from core.error_logger import log_error
 from utils.formatters import formatar_data_exibicao
+from db.auth_repo import AuthDatabase
 
 TAREFA_SOLICITACAO_ACESSO = 'SOLICITAÇÃO DE ACESSO'
 TAREFA_RENOVACAO_ACESSO = 'RENOVAÇÃO DE SOLICITAÇÃO DE ACESSO'
@@ -19,6 +20,12 @@ _BG_STATUS = {
 
 
 class ObraCardMixin:
+    def _contexto_coordenadores(self):
+        """Usuários e vínculos de contrato lidos uma vez; reaproveitados por todos os cards."""
+        return self.helper.montar_contexto_coordenadores(
+            AuthDatabase().listar_usuarios(), self.contratos_db.listar_vinculos()
+        )
+
     def criar_card_obra(self, obra, checklist=None):
         """Cria um card individual de obra"""
         if checklist is None:
@@ -93,6 +100,16 @@ class ObraCardMixin:
                                         log_error(e2, "agenda_obras", "Parse de data_criacao em renderizar_obras")
                                         data_criacao_formatada = obra['data_criacao']
                                 ui.label(f'Criado em: {data_criacao_formatada}').style('color: #666; font-size: 13px;')
+
+                        contexto = getattr(self, '_coordenadores_ctx', None) or self._contexto_coordenadores()
+                        coordenador, automatico = self.helper.resolver_coordenador(obra, *contexto)
+                        with ui.row().classes('items-center no-wrap'):
+                            ui.icon('person').style('color: #666; font-size: 16px;')
+                            if coordenador:
+                                rotulo = ui.label(f'Coordenador: {coordenador}').style('color: #666; font-size: 13px;')
+                                rotulo.tooltip('Vinculado ao contrato' if automatico else 'Responsável definido nesta obra')
+                            else:
+                                ui.label('Coordenador não definido').style('color: #999; font-style: italic; font-size: 13px;')
 
                         with ui.row().classes('items-center'):
                             ui.icon('flag').style(f'color: {cor}; font-size: 16px;')

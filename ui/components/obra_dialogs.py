@@ -284,6 +284,30 @@ class ObraDialogsMixin:
                 elif contrato_fora_da_lista:
                     ui.label('⚠️ O contrato atual não existe na lista. Selecione um contrato válido para salvar.').style('color: #f44336; font-size: 12px;')
 
+                # Coordenador: automático (vinculados ao contrato) ou um responsável escolhido para esta obra.
+                usuarios_por_id, vinculados_por_contrato = self._contexto_coordenadores()
+
+                def _opcoes_coordenador(contrato):
+                    vinculados = vinculados_por_contrato.get((contrato or '').strip(), [])
+                    automatico = f"Automático — {', '.join(vinculados)}" if vinculados else 'Automático — ninguém vinculado ao contrato'
+                    usuarios = sorted(usuarios_por_id.values(), key=lambda u: self.helper.nome_usuario(u).casefold())
+                    # 0 = automático (ids de usuário começam em 1; None deixaria o select vazio).
+                    return {0: automatico, **{u['id']: self.helper.nome_usuario(u) for u in usuarios}}
+
+                coordenador_atual = obra.get('coordenador_id')
+                coordenador_input = ui.select(
+                    _opcoes_coordenador(contrato_input.value),
+                    label='Coordenador / Responsável',
+                    value=coordenador_atual if coordenador_atual in usuarios_por_id else 0,
+                ).classes('w-full').props('outlined').tooltip(
+                    '👤 Automático usa os usuários vinculados ao contrato. Escolha um nome para definir o responsável desta obra.'
+                )
+
+                def _atualizar_opcoes_coordenador(e):
+                    coordenador_input.set_options(_opcoes_coordenador(e.value), value=coordenador_input.value)
+
+                contrato_input.on_value_change(_atualizar_opcoes_coordenador)
+
                 with ui.row().classes('w-full gap-2 flex-wrap'):
                     contrato_ic_input = ui.input(label='Contrato (IC)', value=obra.get('contrato_ic') or '').classes('w-full').props('outlined')
                     pedido_sap_input = ui.input(label='Pedido SAP', value=obra.get('pedido_sap') or '').classes('w-full').props('outlined')
@@ -513,6 +537,7 @@ class ObraDialogsMixin:
                     valor_input.value, data_input.value, status_input.value, checklist_estados,
                     checklist_container,
                     contrato_ic=contrato_ic_input.value,
+                    coordenador_id=coordenador_input.value or None,
                     pedido_sap=pedido_sap_input.value or None,
                     prefixo_agencia=prefixo_agencia_input.value,
                     servico=servico_input.value,
@@ -1357,11 +1382,15 @@ class ObraDialogsMixin:
                 kwargs['data_acionamento'] = converter_data_para_iso(kwargs['data_acionamento'])
 
             observacoes_nova = (kwargs.pop('observacoes', '') or '').strip()
+            salvar_coordenador = 'coordenador_id' in kwargs
+            coordenador_id = kwargs.pop('coordenador_id', None)
 
             obra_antiga = self.db.obter_obra(obra_id)
 
             status = status_edicao_para_banco(status)
             requer_recalculo = self.db.atualizar_obra(obra_id, nome, cliente, valor, data_inicio, status, **kwargs)
+            if salvar_coordenador and coordenador_id != (obra_antiga or {}).get('coordenador_id'):
+                self.db.atualizar_coordenador_obra(obra_id, coordenador_id)
 
             observacoes_antiga = ((obra_antiga or {}).get('observacoes') or '').strip()
             if observacoes_nova != observacoes_antiga:
