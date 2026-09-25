@@ -691,13 +691,24 @@ def render_mail_page(store, authorize, available_works=None, demo=False, user_em
                     ui.label(f"{total} e-mail{'s' if total != 1 else ''}").classes('com-count gt-xs')
                 ui.space()
                 ui.label(age).classes('com-meta gt-xs')
-            if seguro_factory and wid != 'pending':
-                render_insurance(wid, conversations, repository, shared)
-            for g in conversations:
-                if not seguro_factory or topic_label(g['subject']) != 'Seguro e garantia':
-                    render_conversation(g, wid, repository, shared)
-            if not conversations:
-                ui.label('Nenhuma conversa neste filtro.').classes('com-muted').style('padding: 12px 16px;')
+
+        # Conteúdo montado só na primeira abertura da pasta: com todas as obras
+        # montadas de uma vez (seguros incluídos) a tela levava segundos para abrir.
+        filled = False
+        def fill(_=None):
+            nonlocal filled
+            if not section.value or filled:
+                return
+            filled = True
+            with section:
+                if seguro_factory and wid != 'pending':
+                    render_insurance(wid, conversations, repository, shared)
+                for g in conversations:
+                    if not seguro_factory or topic_label(g['subject']) != 'Seguro e garantia':
+                        render_conversation(g, wid, repository, shared)
+                if not conversations:
+                    ui.label('Nenhuma conversa neste filtro.').classes('com-muted').style('padding: 12px 16px;')
+        section.on_value_change(fill)
 
     with ui.column().classes('mail-wrap gap-3').style('margin-top: 16px;'):
         @ui.refreshable
