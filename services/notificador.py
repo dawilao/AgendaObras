@@ -17,6 +17,8 @@ from core.config import (
     EMAIL_DISPARO_MINUTO,
     EMAIL_DISPARO_TIMEZONE,
     EMAIL_DISPARO_CATCHUP,
+    EMAIL_DISPARO_RETRY_MINUTOS,
+    EMAIL_DISPARO_MAX_TENTATIVAS,
 )
 
 # Flag global para controlar se o notificador já está executando
@@ -139,6 +141,9 @@ class NotificadorPrazos:
         self.hora_disparo = EMAIL_DISPARO_HORA
         self.minuto_disparo = EMAIL_DISPARO_MINUTO
         self.habilitar_catchup = EMAIL_DISPARO_CATCHUP
+        self.intervalo_retry = datetime.timedelta(minutes=EMAIL_DISPARO_RETRY_MINUTOS)
+        self.max_tentativas_dia = EMAIL_DISPARO_MAX_TENTATIVAS
+        self._falhas_por_dia: Dict[datetime.date, int] = {}
         try:
             self.fuso_horario = ZoneInfo(EMAIL_DISPARO_TIMEZONE)
         except Exception as e:
@@ -322,6 +327,10 @@ class NotificadorPrazos:
         if agora > horario_alvo and not self.habilitar_catchup:
             return False
 
+        # Após falhas repetidas, desiste do dia e aguarda o próximo horário agendado.
+        if self._falhas_por_dia.get(hoje, 0) >= self.max_tentativas_dia:
+            return False
+
         return True
 
     def _aguardar_ate(self, instante_alvo: datetime.datetime):
@@ -360,7 +369,18 @@ class NotificadorPrazos:
                 origem = 'catch-up' if agora > horario_alvo else 'agendado'
                 if origem == 'catch-up':
                     print(f"[CATCH-UP] Executando em modo catch-up às {agora.strftime('%H:%M:%S')} (horário alvo: {horario_alvo.strftime('%H:%M:%S')})")
-                self._executar_ciclo_diario(origem=origem)
+                if self._executar_ciclo_diario(origem=origem):
+                    continue
+
+                # Falhou: espera o intervalo antes de tentar de novo, em vez de repetir em loop.
+                falhas = self._falhas_por_dia.get(hoje, 0) + 1
+                self._falhas_por_dia = {hoje: falhas}
+                if falhas < self.max_tentativas_dia:
+                    nova_tentativa = self._agora_referencia() + self.intervalo_retry
+                    print(f"[RETRY] Tentativa {falhas}/{self.max_tentativas_dia} falhou. Nova tentativa às {nova_tentativa.strftime('%H:%M:%S')}")
+                    self._aguardar_ate(nova_tentativa)
+                else:
+                    print(f"[RETRY] {falhas} tentativas falharam hoje. Verificação suspensa até o próximo horário agendado.")
                 continue
 
             proximo_horario = self._proximo_horario_execucao(agora)
@@ -451,12 +471,13 @@ class NotificadorPrazos:
                     if self._enviar_email_agrupado_por_obra(obra_id, dados_obra):
                         total_emails_enviados += 1
 
+                total_tarefas = sum(
+                    len(tarefas)
+                    for obra in alertas_por_obra.values()
+                    for tarefas in obra['tarefas'].values()
+                )
+
                 if total_emails_enviados > 0:
-                    total_tarefas = sum(
-                        len(tarefas)
-                        for obra in alertas_por_obra.values()
-                        for tarefas in obra['tarefas'].values()
-                    )
                     print(f"\n📧 {total_emails_enviados} email(s) enviado(s) para {total_tarefas} tarefa(s)\n")
                     obras_com_emails = [dados['info']['nome_contrato'] for obra_id, dados in alertas_por_obra.items() if any(dados['tarefas'].values())]
 

@@ -78,6 +78,9 @@ EMAIL_DISPARO_HORA = 8
 EMAIL_DISPARO_MINUTO = 0
 EMAIL_DISPARO_TIMEZONE = 'America/Sao_Paulo'
 EMAIL_DISPARO_CATCHUP = True
+# Se o ciclo diário falhar, tenta de novo após este intervalo, até o limite de tentativas no dia.
+EMAIL_DISPARO_RETRY_MINUTOS = 30
+EMAIL_DISPARO_MAX_TENTATIVAS = 3
 GITHUB_REPO_URL = "https://github.com/dawilao/AgendaObras"
 VERSION_JSON_URL = "https://raw.githubusercontent.com/dawilao/AgendaObras/main/version.json"
 
