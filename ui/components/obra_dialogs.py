@@ -429,6 +429,18 @@ class ObraDialogsMixin:
 
             ui.separator()
 
+            ui.label('🛡️ Seguros').style('font-size: 16px; font-weight: bold; color: #1976d2; margin-top: 10px;')
+            from services.seguro_service import SeguroService
+            from ui.components.seguro_panel import render_seguro
+            from db.seguro_repo import TIPOS_SEGURO
+            for tipo, nome in TIPOS_SEGURO.items():
+                with ui.expansion(nome, icon='verified_user').classes('w-full').style(
+                    'border: 1px solid #e8eaf0; border-radius: 12px;'
+                ):
+                    render_seguro(SeguroService(self.db.db_name, tipo=tipo), obra_id)
+
+            ui.separator()
+
             ui.label('📋 Checklist de Atividades').style('font-size: 18px; font-weight: bold; margin-top: 10px;')
 
             checklist_estados = {}

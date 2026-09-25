@@ -810,6 +810,12 @@ class AgendaObras(ObraCardMixin, ObraDialogsMixin, AdminDialogsMixin, ObraKanban
                         ui.label('Obras')
 
                     with ui.element('div').classes('ao-nav-item').on(
+                        'click', lambda: ui.navigate.to('/comunicacoes')
+                    ):
+                        ui.html('<span class="material-icons ao-nav-icon">mail</span>', sanitize=False)
+                        ui.label('Comunicações')
+
+                    with ui.element('div').classes('ao-nav-item').on(
                         'click', lambda: ui.navigate.to('/biblioteca')
                     ):
                         ui.html('<span class="material-icons ao-nav-icon">menu_book</span>', sanitize=False)

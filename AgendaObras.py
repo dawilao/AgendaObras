@@ -25,6 +25,8 @@ from services.auth_service import configurar_middleware, verificar_autenticacao,
 from ui.pages.login import LoginPage
 from ui.pages.main import MainPage
 from ui.pages.biblioteca import BibliotecaPage
+from ui.pages.comunicacoes import ComunicacoesPage
+from comunicacoes.session import disconnect_user
 
 
 def _carregar_storage_secret() -> str:
@@ -127,6 +129,8 @@ def index():
 
 @ui.page('/logout')
 def logout():
+    # Interrompe qualquer atualização de e-mail em andamento deste usuário.
+    disconnect_user(app.storage.user.get('user_id'))
     fazer_logout()
     ui.navigate.to('/login')
 
@@ -137,6 +141,14 @@ def pagina_biblioteca():
         ui.navigate.to('/login')
         return
     BibliotecaPage()
+
+
+@ui.page('/comunicacoes')
+def pagina_comunicacoes():
+    if not verificar_autenticacao():
+        ui.navigate.to('/login')
+        return
+    ComunicacoesPage()
 
 
 if __name__ in {"__main__", "__mp_main__"}:

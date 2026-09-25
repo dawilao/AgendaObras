@@ -65,6 +65,8 @@ class AuthDatabase:
                 )
             ''')
             colunas = {row['name'] for row in conn.execute('PRAGMA table_info(usuarios)').fetchall()}
+            if 'pode_validar_seguro' not in colunas:
+                conn.execute('ALTER TABLE usuarios ADD COLUMN pode_validar_seguro INTEGER NOT NULL DEFAULT 0')
             if 'receber_alerta_critico' not in colunas:
                 conn.execute('ALTER TABLE usuarios ADD COLUMN receber_alerta_critico INTEGER DEFAULT 1')
             conn.commit()
@@ -118,7 +120,7 @@ class AuthDatabase:
     def listar_usuarios(self) -> List[Dict]:
         conn = self.get_connection()
         try:
-            rows = conn.execute('SELECT id, nome, sobrenome, email, is_admin, receber_alerta_critico, data_criacao FROM usuarios ORDER BY nome').fetchall()
+            rows = conn.execute('SELECT id, nome, sobrenome, email, is_admin, receber_alerta_critico, pode_validar_seguro, data_criacao FROM usuarios ORDER BY nome').fetchall()
             return [dict(r) for r in rows]
         except Exception as e:
             log_error(e, "auth_database", "Listar usuários")
@@ -129,7 +131,7 @@ class AuthDatabase:
     def obter_usuario_por_id(self, user_id: int) -> Optional[Dict]:
         conn = self.get_connection()
         try:
-            row = conn.execute('SELECT id, nome, sobrenome, email, is_admin, receber_alerta_critico, data_criacao FROM usuarios WHERE id = ?', (user_id,)).fetchone()
+            row = conn.execute('SELECT id, nome, sobrenome, email, is_admin, receber_alerta_critico, pode_validar_seguro, data_criacao FROM usuarios WHERE id = ?', (user_id,)).fetchone()
             return dict(row) if row else None
         except Exception as e:
             log_error(e, "auth_database", f"Obter usuário {user_id}")

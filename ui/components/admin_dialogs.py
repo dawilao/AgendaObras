@@ -113,6 +113,17 @@ class AdminDialogsMixin:
                                             'color: #999; font-size: 12px;'
                                         )
 
+                                    pode_validar_seguro = bool(u.get('pode_validar_seguro'))
+                                    with ui.row().classes('items-center gap-2'):
+                                        ui.label('Validar seguro e boleto:').style('color: #999; font-size: 12px;')
+                                        ui.switch(
+                                            value=pode_validar_seguro,
+                                            on_change=lambda e, uid=u['id']: alternar_validador_seguro(uid, e.value),
+                                        ).props('dense').style('transform: scale(0.9);')
+                                        ui.label('Pode validar' if pode_validar_seguro else 'Somente consulta').style(
+                                            'color: #999; font-size: 12px;'
+                                        )
+
                                 pode_excluir = (
                                     u['id'] != usuario_logado.get('id')
                                     and not (u['is_admin'] and total_admins <= 1)
@@ -144,6 +155,15 @@ class AdminDialogsMixin:
                                             '🗑️',
                                             on_click=lambda uid=user_id, un=user_nome: confirmar_exclusao(uid, un)
                                         ).props('flat dense round').style('color: #f44336;').tooltip('Excluir usuário')
+
+            def alternar_validador_seguro(user_id: int, valor: bool):
+                from services.seguro_service import definir_permissao_seguro
+                try:
+                    definir_permissao_seguro(user_id, valor)
+                    ui.notification('Permissão de validação de seguro atualizada.', type='positive', timeout=3)
+                except (PermissionError, ValueError) as error:
+                    ui.notification(str(error), type='warning', timeout=3)
+                renderizar_lista()
 
             def alternar_alerta_critico(user_id: int, user_nome: str, receber_alerta_critico: bool):
                 usuario_logado = obter_usuario_logado()

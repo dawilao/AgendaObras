@@ -4,7 +4,13 @@ email_config.env
 # Arquivos de bancos de dados
 *.db
 *.db-journal
+*.db-wal
+*.db-shm
 *.env
+
+# Dados da página Comunicações (e-mails e anexos importados)
+dados_comunicacoes/
+db/comunicacoes/
 
 # Arquivos do nicegui
 .nicegui/
