@@ -10,6 +10,7 @@ from nicegui import ui, app
 import datetime
 import os
 import sqlite3
+import threading
 from secrets import randbelow
 from typing import Dict, Optional, Tuple
 from db import Database, TAREFAS_COM_DIAS_UTEIS
@@ -28,23 +29,33 @@ from ui.components.admin_dialogs import AdminDialogsMixin
 from ui.components.obra_kanban import ObraKanbanMixin
 
 
+_servicos = None
+_servicos_lock = threading.Lock()
+
+
+def obter_servicos():
+    """Cria Database, EmailService e NotificadorPrazos uma única vez por processo."""
+    global _servicos
+    with _servicos_lock:
+        if _servicos is None:
+            db = Database()
+            email_service = EmailService(db)
+            notificador = NotificadorPrazos(db, email_service)
+            notificador.iniciar_verificacao()
+            _servicos = (db, email_service, notificador)
+        return _servicos
+
+
 class AgendaObras(ObraCardMixin, ObraDialogsMixin, AdminDialogsMixin, ObraKanbanMixin):
     def __init__(self):
         self.title = "AgendaObras"
         self.description = "Rastreador de Demandas de Engenharia"
         self.timeout_padrao = 3
 
-        # Inicializa banco de dados
-        self.db = Database()
+        # Serviços compartilhados (criados uma vez por processo, no startup)
+        self.db, self.email_service, self.notificador = obter_servicos()
         self.contratos_db = ContratosDatabase()
         self.helper = ObrasHelper()
-
-        # Inicializa serviços
-        self.email_service = EmailService(self.db)
-
-        # Inicializa notificador de prazos
-        self.notificador = NotificadorPrazos(self.db, self.email_service)
-        self.notificador.iniciar_verificacao()
 
         # Container do body (para atualização dinâmica)
         self.body_container = None

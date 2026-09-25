@@ -27,6 +27,7 @@ from ui.pages.main import MainPage
 from ui.pages.biblioteca import BibliotecaPage
 from ui.pages.comunicacoes import ComunicacoesPage
 from comunicacoes.session import disconnect_user
+from agenda_obras import obter_servicos
 
 
 def _carregar_storage_secret() -> str:
@@ -65,6 +66,9 @@ from db.biblioteca_repo import PASTA_UPLOADS
 
 # Registra middleware de autenticação
 configurar_middleware()
+
+# Cria banco, e-mail e notificador de prazos ao subir o servidor
+app.on_startup(obter_servicos)
 
 
 def _validar_storage_secret(secret: str) -> None:
