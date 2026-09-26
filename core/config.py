@@ -88,6 +88,8 @@ VERSION_JSON_URL = "https://raw.githubusercontent.com/dawilao/AgendaObras/main/v
 BIBLIOTECA_PDF_MAX_MB = int(_obter_variavel_ambiente('BIBLIOTECA_PDF_MAX_MB', '5'))
 # Tamanho máximo de um e-mail importado nas Comunicações (mensagem inteira, anexos em base64).
 COMUNICACOES_MAX_MB = int(_obter_variavel_ambiente('AGENDA_MAIL_MAX_MB', '15'))
+# Compactação sem perda dos anexos em disco (lzma e deduplicação dentro de ZIPs). 0 desliga.
+COMUNICACOES_COMPACTAR = _obter_variavel_ambiente('AGENDA_MAIL_COMPACTAR', '1') != '0'
 
 APP_TIMEZONE_PADRAO = 'America/Sao_Paulo'
 

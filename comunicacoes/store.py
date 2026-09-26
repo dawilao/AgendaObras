@@ -82,9 +82,20 @@ class MailStore:
                        (now(), actor, 'cadastro_obra', json.dumps({'before': dict(old) if old else None,
                          'after': {'id': str(wid), 'name': name, 'ic': ic, 'confirmed': confirmed}}, ensure_ascii=False)))
 
+    def _known(self, fingerprint, source):
+        with self.connect() as db:
+            return bool(db.execute('SELECT 1 FROM sources WHERE mailbox=? AND folder=? AND validity=? AND uid=?', source).fetchone()
+                        or db.execute('SELECT 1 FROM messages WHERE fingerprint=?', (fingerprint,)).fetchone())
+
+    def _store_attachments(self, parsed):
+        return [(a['name'], a['type'], *self.blobs.put(a['data'])) for a in parsed['attachments']]
+
     def import_message(self, raw, source, actor='importacao'):
         parsed = parse_message(raw)
         works = self.works()
+        # Anexos vão ao disco (com compactação) antes de travar o banco para escrita.
+        # Numa corrida, o pior caso é um arquivo sem referência, que o compactar --orfaos remove.
+        stored = None if self._known(parsed['key'], source) else self._store_attachments(parsed)
         with self.connect() as db:
             db.execute('BEGIN IMMEDIATE')
             existing_source = db.execute('SELECT message_id FROM sources WHERE mailbox=? AND folder=? AND validity=? AND uid=?', source).fetchone()
@@ -111,9 +122,11 @@ class MailStore:
                           json.dumps(parsed['references']), match.status, match.obra_id,
                           match.suggestion, match.reason, now()))
                 mid = cur.lastrowid
-                # Conteúdo vai para o disco (uma cópia por sha256); o banco guarda só metadados.
+                # Conteúdo fica no disco (uma cópia por sha256); o banco guarda só metadados.
+                if stored is None:  # Visto como já importado na checagem prévia; garante os arquivos.
+                    stored = self._store_attachments(parsed)
                 db.executemany('INSERT INTO attachments(message_id,name,mime,sha256,size) VALUES(?,?,?,?,?)',
-                               [(mid, a['name'], a['type'], *self.blobs.put(a['data'])) for a in parsed['attachments']])
+                               [(mid, *item) for item in stored])
                 db.execute('INSERT INTO audit(message_id,at,actor,action,details) VALUES(?,?,?,?,?)',
                            (mid, now(), actor, 'importacao', match.reason))
             db.execute('INSERT INTO sources(mailbox,folder,validity,uid,message_id,note) VALUES(?,?,?,?,?,?)',

@@ -5,6 +5,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import imaplib
+import sqlite3
 import tempfile
 import unittest
 from email.message import EmailMessage
@@ -76,6 +77,26 @@ class MailTests(unittest.TestCase):
         self.assertEqual((first, first), (second, third))
         self.assertEqual(len(self.store.messages()), 1)
         self.assertEqual(len(self.store.detail(first)[3]), 3)
+
+    def test_attachments_written_before_locking_and_once_per_message(self):
+        calls, original_put = [], self.store.blobs.put
+
+        def put(data, nested=False):
+            # Com o banco travado por outra escrita, este BEGIN IMMEDIATE falharia na hora.
+            db = sqlite3.connect(self.store.path, timeout=0)
+            try:
+                db.execute('BEGIN IMMEDIATE')
+                db.rollback()
+            finally:
+                db.close()
+            calls.append(data)
+            return original_put(data, nested)
+
+        self.store.blobs.put = put
+        mid, _ = self.store.import_message(mail(attachment=True), self.source())
+        self.store.import_message(mail(attachment=True), self.source('2', 'Sent'))
+        self.assertEqual(calls, [b'example'])
+        self.assertEqual(self.store.attachment(self.store.detail(mid)[1][0]['id'])['payload'], b'example')
 
     def test_same_mid_different_content_conflict(self):
         self.store.import_message(mail(), self.source())
