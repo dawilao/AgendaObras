@@ -29,6 +29,9 @@ from ui.components.admin_dialogs import AdminDialogsMixin
 from ui.components.obra_kanban import ObraKanbanMixin
 
 
+# Múltiplo de 1, 2, 3 e 4 colunas: a última linha da grade fica sempre completa.
+OBRAS_POR_PAGINA = 24
+
 _servicos = None
 _servicos_lock = threading.Lock()
 
@@ -62,6 +65,7 @@ class AgendaObras(ObraCardMixin, ObraDialogsMixin, AdminDialogsMixin, ObraKanban
         self.filtro_pesquisa = ""
         self.view_mode = 'grid'        # 'grid' | 'kanban'
         self.filtro_status = 'todos'   # 'todos' | 'em_andamento' | 'atrasado' | 'concluido'
+        self.pagina_atual = 1          # paginação da Grade (OBRAS_POR_PAGINA cards por página)
 
         # Verifica atualização antes de construir UI
         self.verificar_atualizacao()
@@ -1059,6 +1063,7 @@ class AgendaObras(ObraCardMixin, ObraDialogsMixin, AdminDialogsMixin, ObraKanban
     def _on_tab_status_change(self, e):
         """Atualiza o filtro de status da Grade e re-renderiza."""
         self.filtro_status = e.value
+        self.pagina_atual = 1
         self.renderizar_obras()
 
     def set_view_mode(self, modo: str):
@@ -1066,6 +1071,7 @@ class AgendaObras(ObraCardMixin, ObraDialogsMixin, AdminDialogsMixin, ObraKanban
         if modo not in ('grid', 'kanban') or self.view_mode == modo:
             return
         self.view_mode = modo
+        self.pagina_atual = 1
         self._sync_view_toggle_buttons()
         self.renderizar_obras()
 
@@ -1167,13 +1173,43 @@ class AgendaObras(ObraCardMixin, ObraDialogsMixin, AdminDialogsMixin, ObraKanban
                 ui.button('Ver todas', on_click=self._resetar_filtro_status).props('outlined').style('margin-top: 15px;')
             return
 
-        with ui.grid(columns='repeat(auto-fit, minmax(min(100%, 380px), 1fr))').classes('w-full gap-4'):
-            for info in obras_filtradas:
-                self.criar_card_obra(info['obra'], checklist=info['checklist'])
+        grade_container = ui.column().classes('w-full gap-4')
+        self._renderizar_pagina_grade(grade_container, obras_filtradas)
+
+    def _renderizar_pagina_grade(self, container, obras_filtradas):
+        """Monta só os cards da página atual; trocar de página não consulta o banco de novo."""
+        total = len(obras_filtradas)
+        # Após excluir/filtrar, a página guardada pode não existir mais: paginar() ajusta.
+        pagina, self.pagina_atual, total_paginas, inicio = self.helper.paginar(
+            obras_filtradas, self.pagina_atual, OBRAS_POR_PAGINA
+        )
+
+        def ir_para(e):
+            if e.value == self.pagina_atual:
+                return
+            self.pagina_atual = e.value
+            self._renderizar_pagina_grade(container, obras_filtradas)
+            ui.run_javascript('window.scrollTo({top: 0, behavior: "smooth"})')
+
+        container.clear()
+        with container:
+            with ui.grid(columns='repeat(auto-fit, minmax(min(100%, 380px), 1fr))').classes('w-full gap-4'):
+                for info in pagina:
+                    self.criar_card_obra(info['obra'], checklist=info['checklist'])
+
+            if total_paginas > 1:
+                with ui.row().classes('w-full items-center justify-center gap-4').style('margin-top: 8px;'):
+                    ui.label(f'Obras {inicio + 1}–{inicio + len(pagina)} de {total}').style(
+                        'font-size: 13px; color: #666;'
+                    )
+                    ui.pagination(
+                        1, total_paginas, direction_links=True, value=self.pagina_atual, on_change=ir_para
+                    ).props('max-pages=7 boundary-numbers')
 
     def _resetar_filtro_status(self):
         """Reseta o filtro de aba para 'Todos' e sincroniza a UI das abas."""
         self.filtro_status = 'todos'
+        self.pagina_atual = 1
         self.status_tabs.value = 'todos'
         self.renderizar_obras()
 
@@ -1181,11 +1217,13 @@ class AgendaObras(ObraCardMixin, ObraDialogsMixin, AdminDialogsMixin, ObraKanban
     def pesquisa(self, texto: str):
         """Função de pesquisa com filtro em tempo real"""
         self.filtro_pesquisa = texto.strip()
+        self.pagina_atual = 1
         self.renderizar_obras()
 
     def atualizar_dados(self):
         """Atualiza a lista de obras"""
         self.filtro_pesquisa = ""
+        self.pagina_atual = 1
         if hasattr(self, 'input_pesquisa'):
             self.input_pesquisa.value = ""
         self.notificar('🔄 Dados atualizados!', tipo='info')

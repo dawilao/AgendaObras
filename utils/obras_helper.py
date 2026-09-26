@@ -147,6 +147,17 @@ class ObrasHelper:
         return 'em_andamento'  # Não Iniciada, Em Andamento, Pronta para concluir
 
     @staticmethod
+    def paginar(itens: List, pagina: int, por_pagina: int) -> tuple:
+        """Fatia a lista para a página pedida, ajustando-a ao intervalo válido.
+
+        Retorna (itens_da_pagina, pagina_ajustada, total_paginas, inicio).
+        """
+        total_paginas = max(1, -(-len(itens) // por_pagina))
+        pagina = min(max(1, pagina), total_paginas)
+        inicio = (pagina - 1) * por_pagina
+        return itens[inicio:inicio + por_pagina], pagina, total_paginas, inicio
+
+    @staticmethod
     def obter_bucket_kanban(status_texto: str) -> str:
         """Mapeia status_texto para uma das 4 colunas fixas do Kanban."""
         if status_texto == 'Não Iniciada':
