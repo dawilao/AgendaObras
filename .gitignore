@@ -18,6 +18,9 @@ uploads/
 # Arquivos do nicegui
 .nicegui/
 
+# Preferências locais do editor
+.vscode/
+
 # Arquivos desnecessários
 commit.txt
 new.txt
