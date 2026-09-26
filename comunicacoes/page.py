@@ -6,10 +6,11 @@ from email.utils import parseaddr, parsedate_to_datetime
 from types import SimpleNamespace
 from zoneinfo import ZoneInfo
 from nicegui import ui, run
-from .imap_reader import IMAPConfig, sync_mail
+from .imap_reader import IMAPConfig, AuthFailed, sync_mail, FOLDER_LABELS, INBOX_KEY, SENT_KEY, sent_folder
+from .parser import MAX_MESSAGE, OVERSIZE_HINT
 from .matching import normalized, ics
 from .session import register, unregister, disconnect_user, temporary_import
-from .publishing import publish_message
+from .publishing import publish_message, publication_fingerprint, team_pending, UNDECIDED
 from .conversations import build_conversations, topic_label
 from .visual_status import conversation_status, sender_color, readings_color, insurance_color, paint
 from .seguro_bridge import FontesSeguro, obra_da_conversa
@@ -17,7 +18,9 @@ from .seguro_bridge import FontesSeguro, obra_da_conversa
 LABELS = {'revisar': 'Para conferir', 'conflito': 'Conflito', 'vinculado': 'Vinculada',
           'tecnico': 'Evento automático', 'ignorado': 'Ignorada'}
 # 'todos' esconde avisos automáticos e ignorados; 'todas_auto' mostra tudo.
-STATUS_OPTIONS = {'todos': 'Todas as situações', 'todas_auto': 'Todas, com avisos automáticos', **LABELS}
+TEAM_LABEL = 'Já no histórico da equipe'
+STATUS_OPTIONS = {'todos': 'Todas as situações', 'todas_auto': 'Todas, com avisos automáticos', **LABELS,
+                  'equipe': TEAM_LABEL}
 RUN_STATUS = {'concluido': 'concluída', 'parcial': 'parcial', 'falha': 'falhou',
               'interrompido': 'interrompida', 'executando': 'em andamento'}
 CONNECTION = {'off': ('Nunca atualizado', 'com-status-off'),
@@ -215,6 +218,9 @@ def render_mail_page(store, authorize, available_works=None, demo=False, user_em
     def allowed_ids():
         authorize()
         return {str(w['id']) for w in available_works()} if available_works else {w['id'] for w in store.works()}
+    def work_name(wid):
+        names = {str(w['id']): w['name'] for w in (available_works() if available_works else store.works())}
+        return names.get(str(wid), f'obra {wid}').split(' / ')[0]
     def disconnected():
         if active_event:
             active_event.set()
@@ -246,6 +252,28 @@ def render_mail_page(store, authorize, available_works=None, demo=False, user_em
             ui.html(HELP_HTML, sanitize=False)
         dialog.open()
 
+    def show_after_sync():
+        """Após a atualização: 'Para conferir' se houver pendências; senão, todas as mensagens."""
+        rows = store.conversation_rows()
+        team = team_pending(rows, shared_store, allowed_ids())
+        target = 'revisar' if any(r['status'] == 'revisar' and r['id'] not in team for r in rows) else 'todos'
+        if view.value == 'private' and status_filter.value == target:
+            content.refresh()
+            return
+        # Cada troca de valor já dispara content.refresh pelo on_change.
+        view.set_value('private')
+        status_filter.set_value(target)
+
+    def folder_options(email):
+        """Caixa de entrada e Enviados pelo significado + pastas reais lembradas desta caixa."""
+        options = dict(FOLDER_LABELS)
+        remembered = store.folders((email or '').strip())
+        sent = sent_folder(remembered)
+        for name, flags in remembered:
+            if name.upper() != 'INBOX' and name != sent and '\\noselect' not in {f.lower() for f in flags}:
+                options[name] = name
+        return options
+
     def connect_dialog():
         authorize()
         with ui.dialog() as dialog, ui.card().classes('responsive-dialog-sm').style('padding: 20px;'):
@@ -253,10 +281,16 @@ def render_mail_page(store, authorize, available_works=None, demo=False, user_em
             ui.label('KingHost • conexão criptografada • somente leitura • a senha não é salva').classes('com-muted')
             email_input = ui.input('Seu e-mail', value=user_email).classes('w-full').props('outlined dense')
             password_input = ui.input('Senha do e-mail', password=True, password_toggle_button=True).classes('w-full').props('outlined dense autocomplete=off')
+            auth_error = ui.label('').classes('com-warn-text')
+            auth_error.set_visibility(False)
             since = ui.input('Mensagens recebidas desde', value='2026-01-01').props('type=date outlined dense').classes('w-full')
-            folders = ui.select({'INBOX': 'Caixa de entrada', 'INBOX.Sent': 'Enviados',
-                                 'INBOX.Sent Messages': 'Sent Messages'},
-                                multiple=True, value=['INBOX','INBOX.Sent'], label='Pastas a consultar').classes('w-full').props('outlined dense')
+            folders = ui.select(folder_options(email_input.value), multiple=True, value=[INBOX_KEY, SENT_KEY], with_input=True,
+                                label='Pastas a consultar').classes('w-full').props('outlined dense use-chips')
+            def update_folders():
+                options = folder_options(email_input.value)
+                folders.set_options(options, value=[v for v in (folders.value or []) if v in options])
+            email_input.on_value_change(update_folders)
+            ui.label('Os nomes reais das pastas são identificados ao conectar.').classes('com-meta')
             ui.label('A busca usa os nomes e ICs de Identificação das obras.').classes('com-meta')
             if demo:
                 ui.label('Demonstração: não digite sua senha aqui. A conexão real está desativada.').classes('com-warn-text')
@@ -266,6 +300,7 @@ def render_mail_page(store, authorize, available_works=None, demo=False, user_em
                 authorize()
                 if demo or active_event is not None:
                     return
+                auth_error.set_visibility(False)
                 actor = authorize()
                 eligible = allowed_ids()
                 # Obras ainda não identificadas entram com o nome como termo de busca,
@@ -321,6 +356,12 @@ def render_mail_page(store, authorize, available_works=None, demo=False, user_em
                     result = await run.io_bound(temporary_import, store, cfg, event)
                     authorize()
                     ui.notify(result, type='positive', timeout=8000)
+                except AuthFailed:
+                    # Reabre a janela com e-mail, pastas e período mantidos; só a senha em branco.
+                    auth_error.set_text('O servidor recusou o acesso. Confira o e-mail e digite a senha novamente.')
+                    auth_error.set_visibility(True)
+                    dialog.open()
+                    password_input.run_method('focus')
                 except RuntimeError as exc:
                     # sync_mail só levanta textos próprios, sem dados do servidor.
                     ui.notify(f'Atualização não concluída: {exc}', type='warning', timeout=10000)
@@ -333,7 +374,7 @@ def render_mail_page(store, authorize, available_works=None, demo=False, user_em
                     sync_button.enable()
                     stop_button.set_visibility(False)
                     show_last_run()
-                    content.refresh()
+                    show_after_sync()
             dialog.on('hide', lambda: password_input.set_value(''))
             with ui.row().classes('w-full justify-end gap-2'):
                 ui.button('Cancelar', on_click=dialog.close).props('flat no-caps')
@@ -367,9 +408,11 @@ def render_mail_page(store, authorize, available_works=None, demo=False, user_em
         authorize()
         with ui.dialog() as dialog, ui.card().classes('responsive-dialog-sm').style('padding: 20px;'):
             ui.label('Importar arquivo .eml').classes('com-dialog-title')
-            ui.label('A mensagem entra na sua conferência privada. Limite de 15 MB por arquivo.').classes('com-muted')
-            ui.upload(on_upload=upload_eml, auto_upload=True, multiple=True, max_file_size=15*1024*1024,
-                      on_rejected=lambda: ui.notify('Arquivo acima de 15 MB ou formato inválido.', type='warning')).props('accept=.eml flat bordered').classes('w-full')
+            limit_mb = MAX_MESSAGE // 1024 // 1024
+            ui.label(f'A mensagem entra na sua conferência privada. Limite de {limit_mb} MB por arquivo.').classes('com-muted')
+            ui.upload(on_upload=upload_eml, auto_upload=True, multiple=True, max_file_size=MAX_MESSAGE,
+                      on_rejected=lambda: ui.notify(f'Arquivo acima de {limit_mb} MB ou formato inválido. {OVERSIZE_HINT}',
+                                                    type='warning', multi_line=True)).props('accept=.eml flat bordered').classes('w-full')
             with ui.row().classes('w-full justify-end'):
                 ui.button('Fechar', on_click=dialog.close).props('flat no-caps')
         dialog.open()
@@ -493,8 +536,7 @@ def render_mail_page(store, authorize, available_works=None, demo=False, user_em
                                 origin, *_ = repository.detail(f['origins'][0]['mid'])
                                 if origin['obra_id'] not in allowed_ids():
                                     raise PermissionError('Obra não autorizada.')
-                            a = repository.attachment(f['id'])
-                            ui.download.content(a['payload'], a['name'], 'application/octet-stream')
+                            send_attachment(repository, f['id'])
                         with ui.row().classes('gap-1'):
                             ui.button('Baixar', icon='download', on_click=download_file).props('outline dense no-caps')
                             for origin in file['origins']:
@@ -507,6 +549,54 @@ def render_mail_page(store, authorize, available_works=None, demo=False, user_em
             with ui.row().classes('w-full justify-end'):
                 ui.button('Fechar', on_click=dialog.close).props('flat no-caps')
         dialog.open()
+
+    def send_attachment(repository, aid):
+        try:
+            a = repository.attachment(aid)
+        except ValueError as exc:
+            ui.notify(str(exc), type='warning')
+            return
+        ui.download.content(a['payload'], a['name'], 'application/octet-stream')
+
+    def render_skipped():
+        """E-mails não importados (acima do limite ou inválidos), em destaque no topo da lista."""
+        skipped = store.skipped()
+        if not skipped:
+            return
+        with ui.expansion(f'E-mails não importados ({len(skipped)})', icon='report_problem',
+                          value=True).classes('w-full com-folder com-notice-warn'):
+            ui.label(f'Não foram importados para o app. {OVERSIZE_HINT}').classes('com-meta').style('padding: 0 16px 6px;')
+            for item in skipped:
+                with ui.column().classes('w-full gap-0 border-t').style('padding: 6px 16px;'):
+                    if item['subject'] or item['sender']:
+                        size = f" • {item['size'] / 1024 / 1024:.1f} MB" if item['size'] else ''
+                        ui.label(item['subject'] or '(Sem assunto)').classes('com-title')
+                        ui.label(f"{sender_name(item['sender'] or '')} • {display_date(item['sent_date'])}{size}").classes('com-meta')
+                    else:
+                        ui.label(f"{item['folder']} • UID {item['uid']}").classes('com-title')
+                    ui.label(item['note']).classes('com-meta')
+
+    def confirm_team_links(mids):
+        """Confirma na caixa pessoal o mesmo vínculo já publicado pela equipe (sem nova cópia)."""
+        actor = authorize()
+        try:
+            for mid in mids:
+                # Recalculado no clique: a tela pode estar aberta há tempo.
+                msg, attachments, _, _ = store.detail(mid)
+                wid = shared_store.published_works().get(publication_fingerprint(msg, attachments))
+                if msg['status'] not in UNDECIDED or not wid or wid not in allowed_ids():
+                    raise ValueError('Esta mensagem não está mais pendente de vínculo com a equipe. Atualize a lista.')
+                store.review(mid, wid, actor, 'Vínculo confirmado pelo histórico da equipe.')
+                # Registra na auditoria o registro compartilhado correspondente; não cria cópia.
+                publish_message(store, shared_store, mid, actor, allowed_ids())
+            store.reprocess(actor)
+        except ValueError as exc:
+            ui.notify(str(exc), type='warning')
+            content.refresh()
+            return False
+        ui.notify('Vínculo confirmado. A mensagem já estava no histórico da equipe.', type='positive')
+        content.refresh()
+        return True
 
     def details(mid, shared=False):
         authorize()
@@ -530,12 +620,19 @@ def render_mail_page(store, authorize, available_works=None, demo=False, user_em
                             authorize()
                             if shared and msg['obra_id'] not in allowed_ids():
                                 raise PermissionError('Obra não autorizada.')
-                            a = repository.attachment(aid)
-                            ui.download.content(a['payload'], a['name'], 'application/octet-stream')
+                            send_attachment(repository, aid)
                         size_label = f"{attachment['size']} bytes" if attachment['size'] < 1024 else f"{attachment['size'] / 1024:.1f} KB"
                         ui.button(f"{attachment['name']} ({size_label})", icon='download', on_click=download).props('outline dense no-caps')
             permitted = allowed_ids()
             options = {w['id']: w['name'] for w in store.works() if w['id'] in permitted}
+            team_work = None
+            if not shared and shared_store is not None and msg['status'] in UNDECIDED:
+                published = shared_store.published_works().get(publication_fingerprint(msg, attachments))
+                team_work = published if published in permitted else None
+            if team_work:
+                ui.label(f'{TEAM_LABEL}, vinculada à obra {work_name(team_work)}. '
+                         'Confirme o mesmo vínculo na sua caixa ou escolha outra decisão abaixo.'
+                         ).classes('com-chip com-chip-green w-full').style('white-space: normal; padding: 8px 12px;')
             candidate = msg['obra_id'] or msg['suggestion']
             target = ui.select(options, value=candidate if candidate in options else None, label='Vincular à obra').classes('w-full').props('outlined dense')
             note = ui.input('Motivo da decisão').classes('w-full').props('outlined dense')
@@ -558,8 +655,14 @@ def render_mail_page(store, authorize, available_works=None, demo=False, user_em
                     content.refresh()
                 except ValueError as exc:
                     ui.notify(str(exc), type='warning')
+            def confirm_team():
+                if confirm_team_links([mid]):
+                    dialog.close()
             with ui.row().classes('w-full justify-end gap-2'):
                 ui.button('Fechar', on_click=dialog.close).props('flat no-caps')
+                if team_work:
+                    ui.button('Confirmar vínculo da equipe', icon='group', on_click=confirm_team
+                              ).props('unelevated color=positive no-caps').classes('com-btn')
                 if not shared:
                     ui.button('Ignorar na minha fila', on_click=lambda: decide(True)).props('outline no-caps').classes('com-btn')
                     ui.button('Confirmar e publicar na obra', on_click=lambda: decide(False)).props('unelevated color=primary no-caps').classes('com-btn')
@@ -584,6 +687,10 @@ def render_mail_page(store, authorize, available_works=None, demo=False, user_em
                 with ui.column().classes('gap-0 flex-1').style('min-width: 0;'):
                     ui.label(topic_label(g['subject'], g.get('body', ''))).classes('com-title ellipsis')
                     ui.label(f"{situation} · {display_date(g['sent_date'])} · {sender_name(g['sender'])}").classes('com-meta ellipsis')
+                team_ids = {m['team_obra'] for m in g['messages'] if m.get('team_obra')}
+                if team_ids:
+                    ui.label('Na equipe').classes('com-chip com-chip-green').tooltip(
+                        f"{TEAM_LABEL} · {', '.join(work_name(w) for w in sorted(team_ids))}")
                 ui.label(f"{g['message_count']} e-mail{'s' if g['message_count'] != 1 else ''}").classes('com-count')
                 if g['files']:
                     with ui.row().classes('items-center no-wrap gap-0 com-meta'):
@@ -592,7 +699,15 @@ def render_mail_page(store, authorize, available_works=None, demo=False, user_em
             paint(conversation_folder, sender_color(g.get('sender', '')))
             with ui.column().classes('w-full gap-2').style('padding: 12px 16px;'):
                 ui.label(f"Assunto original: {g['subject']}").classes('com-meta')
-                if any(r['obra_id'] != wid for r in g['messages']):
+                if team_ids:
+                    with ui.row().classes('w-full items-center gap-2'):
+                        ui.label(f"{TEAM_LABEL} · {', '.join(work_name(w) for w in sorted(team_ids))}"
+                                 ).classes('com-chip com-chip-green')
+                        team_mids = [m['id'] for m in g['messages'] if m.get('team_obra')]
+                        ui.button('Confirmar vínculo da equipe', icon='group',
+                                  on_click=lambda mids=team_mids: confirm_team_links(mids)
+                                  ).props('unelevated dense color=positive no-caps').classes('com-btn')
+                elif any(r['obra_id'] != wid for r in g['messages']):
                     ui.label('Vínculo com a obra a conferir').classes('com-chip com-chip-yellow')
                 ui.label(g['excerpt'] or 'Abra a mensagem abaixo para ler o conteúdo.').classes('mail-body com-excerpt w-full')
                 with ui.expansion(f"Mensagens e respostas ({g['message_count']})", icon='mail').classes('w-full'):
@@ -615,8 +730,7 @@ def render_mail_page(store, authorize, available_works=None, demo=False, user_em
                                         source, *_ = repository.detail(file['origins'][0]['mid'])
                                         if source['obra_id'] not in allowed_ids():
                                             raise PermissionError('Obra não autorizada.')
-                                    attachment = repository.attachment(file['id'])
-                                    ui.download.content(attachment['payload'], attachment['name'], 'application/octet-stream')
+                                    send_attachment(repository, file['id'])
                                 ui.button(icon='download', on_click=download_tree).props('flat round dense color=primary').tooltip('Baixar arquivo')
                                 ui.button(icon='mail_outline', on_click=lambda mid=f['origins'][0]['mid']: details(mid, shared)
                                           ).props('flat round dense').style('color: #7a8699;').tooltip('Abrir e-mail de origem')
@@ -719,12 +833,20 @@ def render_mail_page(store, authorize, available_works=None, demo=False, user_em
             permitted = allowed_ids() if shared else None
             show_automatic = status_filter.value == 'todas_auto'
             all_rows = [r for r in repository.messages() if not shared or r['obra_id'] in permitted]
-            counts = {s: sum(r['status'] == s for r in all_rows) for s in LABELS}
+            rows = repository.conversation_rows(permitted)
+            # Na caixa pessoal: mensagens sem decisão que a equipe já publicou (só obras permitidas).
+            team = {} if shared else team_pending(rows, shared_store, allowed_ids())
+            for row in rows:
+                row['team_obra'] = team.get(row['id'])
+            counts = {s: sum(r['status'] == s and r['id'] not in team for r in all_rows) for s in LABELS}
 
             # ── Contadores (clicar filtra a lista) ──
             with ui.element('div').classes('com-counters'):
-                for key, label, number in [('todos', 'mensagens', len(all_rows)), ('vinculado', 'vinculadas', counts['vinculado']),
-                                           ('revisar', 'para conferir', counts['revisar']), ('conflito', 'conflitos', counts['conflito'])]:
+                counters = [('todos', 'mensagens', len(all_rows)), ('vinculado', 'vinculadas', counts['vinculado']),
+                            ('revisar', 'para conferir', counts['revisar']), ('conflito', 'conflitos', counts['conflito'])]
+                if team:
+                    counters.append(('equipe', 'já na equipe', len(team)))
+                for key, label, number in counters:
                     css = 'com-counter'
                     if status_filter.value == key:
                         css += ' ativo'
@@ -734,10 +856,16 @@ def render_mail_page(store, authorize, available_works=None, demo=False, user_em
                         ui.html(f'<b>{number}</b>', sanitize=False)
                         ui.label(label)
 
-            groups = build_conversations(repository.conversation_rows(permitted))
+            groups = build_conversations(rows)
             term = (search.value or '').casefold()
+            def status_matches(row):
+                if status_filter.value in ('todos', 'todas_auto'):
+                    return True
+                if status_filter.value == 'equipe':
+                    return bool(row.get('team_obra'))
+                return row['status'] == status_filter.value and not row.get('team_obra')
             def matches(row):
-                return ((status_filter.value in ('todos', 'todas_auto') or row['status'] == status_filter.value)
+                return (status_matches(row)
                         and (work_filter.value == 'todos' or work_filter.value in (row['obra_id'], row['suggestion']))
                         and term in (row['subject'] + ' ' + row['sender']).casefold())
             hidden = sum(g['message_count'] for g in groups if g['status'] in ('tecnico', 'ignorado'))
@@ -770,6 +898,8 @@ def render_mail_page(store, authorize, available_works=None, demo=False, user_em
                                 ui.element('span').classes(f'com-dot com-dot-{color}')
                                 ui.label(label).classes('com-meta')
 
+            render_skipped()
+
             if presentation.value == 'attachments':
                 group_map = {g['id']: g for g in groups}
                 file_rows = [{'id': f"{g['id']}-{f['id']}", 'group_id': g['id'],
@@ -787,7 +917,7 @@ def render_mail_page(store, authorize, available_works=None, demo=False, user_em
             elif presentation.value == 'all':
                 rows = [dict(r) for g in groups for r in g['messages'] if matches(r)]
                 for row in rows:
-                    row['status_label'] = LABELS[row['status']]
+                    row['status_label'] = TEAM_LABEL if row.get('team_obra') else LABELS[row['status']]
                     row['work_name'] = row['work_name'] or 'A conferir'
                     row['sent_date'] = display_date(row['sent_date'])
                     row['attachment_count'] = len(row['attachments'])
@@ -834,10 +964,4 @@ def render_mail_page(store, authorize, available_works=None, demo=False, user_em
                             with ui.column().classes('w-full gap-3'):
                                 for wid, name, conversations in empty:
                                     render_section(wid, name, conversations, repository, shared)
-
-            skipped = store.skipped()
-            if skipped:
-                with ui.expansion(f'{len(skipped)} mensagens não importadas — conferir', icon='report_problem').classes('w-full com-folder'):
-                    for item in skipped:
-                        ui.label(f"{item['folder']} • UID {item['uid']}: {item['note']}").classes('com-meta').style('padding: 4px 16px;')
         content()

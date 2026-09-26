@@ -6,7 +6,10 @@ from email import policy
 from email.parser import BytesParser
 from html.parser import HTMLParser
 
-MAX_MESSAGE = 15 * 1024 * 1024
+from core.config import COMUNICACOES_MAX_MB
+
+MAX_MESSAGE = COMUNICACOES_MAX_MB * 1024 * 1024
+OVERSIZE_HINT = 'Baixe os anexos direto no e-mail e salve no Drive.'
 
 
 class PlainHTML(HTMLParser):
@@ -32,7 +35,7 @@ class PlainHTML(HTMLParser):
 
 def parse_message(raw):
     if len(raw) > MAX_MESSAGE:
-        raise ValueError('Mensagem excede o limite de 15 MB.')
+        raise ValueError(f'Mensagem excede o limite de {COMUNICACOES_MAX_MB} MB. {OVERSIZE_HINT}')
     msg = BytesParser(policy=policy.default).parsebytes(raw)
     plain, html, attachments = [], [], []
     def parts(part):

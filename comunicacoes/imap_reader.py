@@ -7,9 +7,11 @@ import ssl
 import threading
 from dataclasses import dataclass, field
 from datetime import date
+from email import policy
+from email.parser import BytesHeaderParser
 from pathlib import Path
 
-from .parser import MAX_MESSAGE
+from .parser import MAX_MESSAGE, OVERSIZE_HINT
 from .secrets import read_secret
 
 _locks = {}
@@ -18,6 +20,10 @@ _locks_guard = threading.Lock()
 
 class ImportCancelled(Exception):
     pass
+
+
+class AuthFailed(RuntimeError):
+    """O servidor recusou o login (e-mail ou senha)."""
 
 
 def tls_context():
@@ -79,6 +85,86 @@ def quote(value):
     return '"' + value.replace('\\', '\\\\').replace('"', '\\"') + '"'
 
 
+# Escolhas pelo significado; o nome real de cada pasta é descoberto no servidor.
+INBOX_KEY, SENT_KEY = 'inbox', 'sent'
+FOLDER_LABELS = {INBOX_KEY: 'Caixa de entrada', SENT_KEY: 'Enviados'}
+SENT_NAMES = ('SENT', 'SENT MESSAGES', 'SENT ITEMS', 'ENVIADOS', 'ITENS ENVIADOS', 'MENSAGENS ENVIADAS')
+_LIST_LINE = re.compile(rb'^\((?P<flags>[^)]*)\)\s+(?P<delim>"(?:[^"\\]|\\.)*"|NIL)\s*(?P<name>.*)$', re.I)
+
+
+def parse_list(response):
+    """Resposta de LIST → [(nome, marcações)]. Nomes em UTF-7 modificado (ASCII)."""
+    folders = []
+    for item in response or []:
+        literal = None
+        if isinstance(item, tuple):
+            item, literal = item[0], item[1]
+        if not isinstance(item, bytes):
+            continue
+        match = _LIST_LINE.match(item.strip())
+        if not match:
+            continue
+        raw = literal if literal is not None else match['name'].strip()
+        if raw[:1] == b'"' and raw[-1:] == b'"':
+            raw = re.sub(rb'\\(.)', rb'\1', raw[1:-1])
+        name = raw.decode('ascii', errors='replace')
+        if name:
+            folders.append((name, set(match['flags'].decode('ascii', errors='replace').split())))
+    return folders
+
+
+def sent_folder(available):
+    """Pasta de enviados: marcada como \\Sent pelo servidor ou, sem marcação, pelo nome."""
+    for name, flags in available:
+        if '\\sent' in {f.lower() for f in flags}:
+            return name
+    by_name = {re.split(r'[./]', name)[-1].strip().upper(): name for name, _ in available}
+    return next((by_name[n] for n in SENT_NAMES if n in by_name), None)
+
+
+def resolve_folders(requested, available):
+    """Escolhas do usuário → ([(rótulo, nome real)], [rótulos não encontrados])."""
+    names = {name for name, _ in available}
+    resolved, missing, used = [], [], set()
+    for choice in requested:
+        if choice == INBOX_KEY or choice.upper() == 'INBOX':
+            # INBOX existe sempre (RFC 3501), qualquer que seja a grafia devolvida pelo servidor.
+            real = next((n for n in names if n.upper() == 'INBOX'), 'INBOX')
+            label = FOLDER_LABELS[INBOX_KEY]
+        elif choice == SENT_KEY:
+            real = sent_folder(available)
+            label = f'{FOLDER_LABELS[SENT_KEY]} ({real})' if real else FOLDER_LABELS[SENT_KEY]
+        else:
+            real = choice if choice in names else None
+            label = choice
+        if not real:
+            missing.append(label)
+        elif real not in used:
+            used.add(real)
+            resolved.append((label, real))
+    return resolved, missing
+
+
+def oversize_info(client, uid, size):
+    """Só o cabeçalho (PEEK: não marca como lido) para o usuário localizar o e-mail na caixa."""
+    info = {'size': size}
+    try:
+        status, data = client.uid('FETCH', uid, '(BODY.PEEK[HEADER.FIELDS (SUBJECT FROM DATE)])')
+        raw = next((item[1] for item in data if isinstance(item, tuple) and isinstance(item[1], bytes)), b'')
+        if status == 'OK' and raw:
+            headers = BytesHeaderParser(policy=policy.default).parsebytes(raw)
+            info.update(subject=str(headers.get('Subject', '')), sender=str(headers.get('From', '')),
+                        date=str(headers.get('Date', '')))
+    except Exception:
+        pass  # Sem cabeçalho, o aviso mostra pasta e UID.
+    return info
+
+
+def oversize_note(size):
+    return (f'E-mail com {size / 1024 / 1024:.1f} MB, acima do limite de {MAX_MESSAGE // 1024 // 1024} MB. '
+            f'Os anexos não foram importados. {OVERSIZE_HINT}')
+
+
 def sync_mail(store, config, factory=imaplib.IMAP4_SSL, cancel=None):
     config.validate()
     with _locks_guard:
@@ -90,23 +176,37 @@ def sync_mail(store, config, factory=imaplib.IMAP4_SSL, cancel=None):
             raise ImportCancelled()
     client = None
     rid = None
+    logged_in = False
     try:
         rid = store.start_run()
         check_cancelled()
         client = factory(config.host, config.port, ssl_context=tls_context(), timeout=30)
         check_cancelled()
         client.login(config.username, config.password)
+        logged_in = True
         check_cancelled()
-        count = new = skipped = 0
+        status, listing = client.list()
+        if status != 'OK':
+            raise RuntimeError('Não foi possível listar as pastas desta caixa.')
+        available = parse_list(listing)
+        store.save_folders(config.username, available)
+        folders, missing = resolve_folders(config.folders, available)
+        if not folders:
+            raise RuntimeError('Nenhuma das pastas escolhidas existe nesta caixa; confira "Pastas a consultar".')
+        consulted = []
+        count = new = skipped = oversized = 0
         remaining = False
         since = date.fromisoformat(config.since)
         month = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][since.month - 1]
         search_date = f'{since.day:02d}-{month}-{since.year}'
-        for folder in config.folders:
+        for label, folder in folders:
             check_cancelled()
             status, _ = client.select(quote(folder), readonly=True)
             if status != 'OK':
-                raise RuntimeError(f'Pasta "{folder}" indisponível nesta caixa; desmarque-a em "Pastas a consultar".')
+                # Pula a pasta e segue com as demais, em vez de interromper a atualização.
+                missing.append(label)
+                continue
+            consulted.append(label)
             _, values = client.response('UIDVALIDITY')
             if not values or not values[0] or not values[0].isdigit():
                 raise RuntimeError('Servidor não informou UIDVALIDITY válido.')
@@ -132,9 +232,10 @@ def sync_mail(store, config, factory=imaplib.IMAP4_SSL, cancel=None):
                 if status != 'OK' or not size_match:
                     raise RuntimeError('Não foi possível verificar o tamanho de uma mensagem.')
                 count += 1
-                if int(size_match[1]) > MAX_MESSAGE:
-                    store.skip(source, 'Excede 15 MB; requer importação por outro meio ou revisão do limite.')
-                    skipped += 1
+                size = int(size_match[1])
+                if size > MAX_MESSAGE:
+                    store.skip(source, oversize_note(size), oversize_info(client, uid, size))
+                    oversized += 1
                     continue
                 status, data = client.uid('FETCH', uid, '(BODY.PEEK[])')
                 check_cancelled()
@@ -149,9 +250,15 @@ def sync_mail(store, config, factory=imaplib.IMAP4_SSL, cancel=None):
                 except (ValueError, UnicodeError):
                     store.skip(source, 'Conteúdo inválido ou acima do limite; conferir manualmente.')
                     skipped += 1
-        result = f'{new} novas; {skipped} fora do limite ou inválidas. Período desde {config.since} (data interna IMAP).'
+        result = f'{new} novas; {skipped} inválidas.'
+        if oversized:
+            result += f' {oversized} acima de {MAX_MESSAGE // 1024 // 1024} MB (veja "E-mails não importados").'
+        result += f' Pastas consultadas: {", ".join(consulted) or "nenhuma"}.'
+        if missing:
+            result += f' Não encontradas: {", ".join(missing)} (consulta seguiu com as demais).'
+        result += f' Período desde {config.since} (data interna IMAP).'
         result += ' Há mais resultados: sincronize novamente.' if remaining else ' Consulta concluída no escopo configurado.'
-        store.end_run(rid, 'parcial' if remaining or skipped else 'concluido', result)
+        store.end_run(rid, 'parcial' if remaining or skipped or oversized or missing else 'concluido', result)
         return result
     except ImportCancelled:
         result = 'Atualização interrompida. As mensagens já importadas permanecem no seu histórico privado.'
@@ -161,8 +268,11 @@ def sync_mail(store, config, factory=imaplib.IMAP4_SSL, cancel=None):
     except Exception as error:
         # Mensagens de servidor podem conter credenciais ou dados privados: não registrar o texto bruto.
         # Só os RuntimeError levantados acima (textos próprios, sem dados do servidor) são repassados.
-        if isinstance(error, imaplib.IMAP4.error):
+        if isinstance(error, imaplib.IMAP4.error) and not logged_in:
             detail = 'Falha de autenticação IMAP: confira o e-mail e a senha.'
+            if rid:
+                store.end_run(rid, 'falha', detail)
+            raise AuthFailed(detail) from None
         elif isinstance(error, RuntimeError):
             detail = str(error)
         elif isinstance(error, ssl.SSLCertVerificationError):

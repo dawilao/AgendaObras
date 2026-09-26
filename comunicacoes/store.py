@@ -1,12 +1,12 @@
 """Persistência isolada, procedência de importação e revisão auditável."""
 import json
-import hashlib
 import sqlite3
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from pathlib import Path
 
+from .blobs import BlobStore, default_root
 from .matching import clean_ic, match_message
 from .parser import parse_message
 
@@ -16,8 +16,9 @@ def now():
 
 
 class MailStore:
-    def __init__(self, path):
+    def __init__(self, path, files_root=None):
         self.path = str(Path(path).resolve())
+        self.blobs = BlobStore(files_root or default_root())
         Path(self.path).parent.mkdir(parents=True, exist_ok=True)
         with self.connect() as db:
             db.executescript('''
@@ -32,14 +33,17 @@ class MailStore:
                 CREATE INDEX IF NOT EXISTS idx_mid ON messages(message_id);
                 CREATE TABLE IF NOT EXISTS attachments (
                     id INTEGER PRIMARY KEY, message_id INTEGER REFERENCES messages(id),
-                    name TEXT, mime TEXT, payload BLOB);
+                    name TEXT, mime TEXT, sha256 TEXT NOT NULL, size INTEGER NOT NULL);
                 CREATE TABLE IF NOT EXISTS sources (
                     mailbox TEXT, folder TEXT, validity TEXT, uid TEXT,
                     message_id INTEGER REFERENCES messages(id), note TEXT,
+                    subject TEXT, sender TEXT, sent_date TEXT, size INTEGER,
                     PRIMARY KEY(mailbox, folder, validity, uid));
                 CREATE TABLE IF NOT EXISTS audit (
                     id INTEGER PRIMARY KEY, message_id INTEGER, at TEXT, actor TEXT,
                     action TEXT, details TEXT);
+                CREATE TABLE IF NOT EXISTS mail_folders (
+                    mailbox TEXT, name TEXT, flags TEXT, PRIMARY KEY(mailbox, name));
                 CREATE TABLE IF NOT EXISTS sync_runs (
                     id INTEGER PRIMARY KEY, started TEXT, finished TEXT, status TEXT, detail TEXT);
             ''')
@@ -107,20 +111,25 @@ class MailStore:
                           json.dumps(parsed['references']), match.status, match.obra_id,
                           match.suggestion, match.reason, now()))
                 mid = cur.lastrowid
-                db.executemany('INSERT INTO attachments(message_id,name,mime,payload) VALUES(?,?,?,?)',
-                               [(mid, a['name'], a['type'], a['data']) for a in parsed['attachments']])
+                # Conteúdo vai para o disco (uma cópia por sha256); o banco guarda só metadados.
+                db.executemany('INSERT INTO attachments(message_id,name,mime,sha256,size) VALUES(?,?,?,?,?)',
+                               [(mid, a['name'], a['type'], *self.blobs.put(a['data'])) for a in parsed['attachments']])
                 db.execute('INSERT INTO audit(message_id,at,actor,action,details) VALUES(?,?,?,?,?)',
                            (mid, now(), actor, 'importacao', match.reason))
-            db.execute('INSERT INTO sources VALUES(?,?,?,?,?,?)', (*source, mid, 'Importada'))
+            db.execute('INSERT INTO sources(mailbox,folder,validity,uid,message_id,note) VALUES(?,?,?,?,?,?)',
+                       (*source, mid, 'Importada'))
             return mid, fresh
 
     def seen(self, source):
         with self.connect() as db:
             return db.execute('SELECT 1 FROM sources WHERE mailbox=? AND folder=? AND validity=? AND uid=?', source).fetchone() is not None
 
-    def skip(self, source, reason):
+    def skip(self, source, reason, info=None):
+        info = info or {}
         with self.connect() as db:
-            db.execute('INSERT OR IGNORE INTO sources VALUES(?,?,?,?,NULL,?)', (*source, reason))
+            db.execute('''INSERT OR IGNORE INTO sources(mailbox,folder,validity,uid,message_id,note,
+                       subject,sender,sent_date,size) VALUES(?,?,?,?,NULL,?,?,?,?,?)''',
+                       (*source, reason, info.get('subject'), info.get('sender'), info.get('date'), info.get('size')))
 
     def skipped(self):
         with self.connect() as db:
@@ -187,11 +196,11 @@ class MailStore:
             by_id = {r['id']: r for r in rows}
             for row in rows:
                 row['attachments'] = []
-            for item in db.execute('SELECT id,message_id,name,mime,payload FROM attachments'):
+            for item in db.execute('SELECT id,message_id,name,mime,sha256,size FROM attachments'):
                 if item['message_id'] in by_id:
                     by_id[item['message_id']]['attachments'].append({
                         'id': item['id'], 'name': item['name'], 'mime': item['mime'],
-                        'size': len(item['payload']), 'sha256': hashlib.sha256(item['payload']).hexdigest()})
+                        'size': item['size'], 'sha256': item['sha256']})
         return rows
 
     def detail(self, mid):
@@ -199,11 +208,32 @@ class MailStore:
             row = db.execute('SELECT * FROM messages WHERE id=?', (mid,)).fetchone()
             if not row:
                 raise ValueError('Mensagem não encontrada.')
-            return dict(row), [dict(r) for r in db.execute('SELECT id,name,mime,LENGTH(payload) AS size FROM attachments WHERE message_id=?', (mid,))], [dict(r) for r in db.execute('SELECT * FROM audit WHERE message_id=? ORDER BY id', (mid,))], [dict(r) for r in db.execute('SELECT * FROM sources WHERE message_id=?', (mid,))]
+            return dict(row), [dict(r) for r in db.execute('SELECT id,name,mime,size,sha256 FROM attachments WHERE message_id=?', (mid,))], [dict(r) for r in db.execute('SELECT * FROM audit WHERE message_id=? ORDER BY id', (mid,))], [dict(r) for r in db.execute('SELECT * FROM sources WHERE message_id=?', (mid,))]
+
+    def published_works(self):
+        """No histórico compartilhado: impressão digital de publicação → obra."""
+        with self.connect() as db:
+            return {r['fingerprint']: r['obra_id'] for r in db.execute(
+                "SELECT fingerprint, obra_id FROM messages WHERE status='vinculado' AND obra_id IS NOT NULL")}
 
     def attachment(self, aid):
         with self.connect() as db:
-            return dict(db.execute('SELECT * FROM attachments WHERE id=?', (aid,)).fetchone())
+            row = db.execute('SELECT * FROM attachments WHERE id=?', (aid,)).fetchone()
+        if not row:
+            raise ValueError('Anexo não encontrado.')
+        return {**dict(row), 'payload': self.blobs.get(row['sha256'])}
+
+    def save_folders(self, mailbox, folders):
+        """Pastas encontradas na última conexão daquela caixa (só nomes; nenhuma credencial)."""
+        with self.connect() as db:
+            db.execute('DELETE FROM mail_folders WHERE mailbox=?', (mailbox,))
+            db.executemany('INSERT OR IGNORE INTO mail_folders VALUES(?,?,?)',
+                           [(mailbox, name, ' '.join(sorted(flags))) for name, flags in folders])
+
+    def folders(self, mailbox):
+        with self.connect() as db:
+            return [(r['name'], set(r['flags'].split())) for r in
+                    db.execute('SELECT name, flags FROM mail_folders WHERE mailbox=? ORDER BY name', (mailbox,))]
 
     def start_run(self):
         with self.connect() as db:

@@ -3,6 +3,33 @@ import hashlib
 import json
 from .store import now
 
+# Situações ainda sem decisão do usuário na própria caixa.
+UNDECIDED = ('revisar', 'conflito')
+
+
+def publication_fingerprint(message, attachments):
+    """Identifica o mesmo e-mail em caixas diferentes (mesmo cálculo da publicação)."""
+    # Destinatários e cabeçalhos de transporte podem variar entre cópias da mesma mensagem.
+    content = {key: message[key] for key in ('message_id', 'subject', 'sender', 'sent_date', 'body')}
+    content['attachments'] = sorted((a['name'], a['sha256']) for a in attachments)
+    return hashlib.sha256(json.dumps(content, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+
+
+def team_pending(rows, shared, allowed_ids):
+    """{id da mensagem: obra} das mensagens sem decisão que a equipe já publicou numa obra permitida."""
+    if shared is None:
+        return {}
+    published = shared.published_works()
+    allowed = set(allowed_ids)
+    found = {}
+    for row in rows:
+        if row['status'] not in UNDECIDED:
+            continue
+        wid = published.get(publication_fingerprint(row, row['attachments']))
+        if wid and wid in allowed:
+            found[row['id']] = wid
+    return found
+
 
 def publish_message(private, shared, mid, actor, allowed_ids):
     message, _, _, sources = private.detail(mid)
@@ -12,10 +39,7 @@ def publish_message(private, shared, mid, actor, allowed_ids):
     work = next(w for w in private.works() if w['id'] == wid)
     with private.connect() as db:
         attachments = [dict(r) for r in db.execute('SELECT * FROM attachments WHERE message_id=?', (mid,))]
-    # Destinatários e cabeçalhos de transporte podem variar entre cópias da mesma mensagem.
-    content = {key: message[key] for key in ('message_id', 'subject', 'sender', 'sent_date', 'body')}
-    content['attachments'] = sorted((a['name'], hashlib.sha256(a['payload']).hexdigest()) for a in attachments)
-    fingerprint = hashlib.sha256(json.dumps(content, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+    fingerprint = publication_fingerprint(message, attachments)
     with shared.connect() as db:
         db.execute('BEGIN IMMEDIATE')
         existing = db.execute('SELECT id,obra_id FROM messages WHERE fingerprint=?', (fingerprint,)).fetchone()
@@ -34,8 +58,9 @@ def publish_message(private, shared, mid, actor, allowed_ids):
                  message['recipients'], message['cc'], message['sent_date'], message['body'], message['refs'],
                  wid, 'Publicado após conferência do usuário.', now()))
             public_id = cur.lastrowid
-            db.executemany('INSERT INTO attachments(message_id,name,mime,payload) VALUES(?,?,?,?)',
-                           [(public_id, a['name'], a['mime'], a['payload']) for a in attachments])
+            # Mesmo arquivo em disco: o histórico compartilhado referencia o sha256, sem nova cópia.
+            db.executemany('INSERT INTO attachments(message_id,name,mime,sha256,size) VALUES(?,?,?,?,?)',
+                           [(public_id, a['name'], a['mime'], a['sha256'], a['size']) for a in attachments])
             db.execute('INSERT INTO audit(message_id,at,actor,action,details) VALUES(?,?,?,?,?)',
                        (public_id, now(), actor, 'publicacao', 'Mensagem e anexos confirmados para a obra.'))
         else:

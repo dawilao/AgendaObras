@@ -73,7 +73,7 @@ class ConversationsTests(unittest.TestCase):
 
     def test_store_filters_before_grouping_and_keeps_attachment_hash(self):
         with tempfile.TemporaryDirectory() as tmp:
-            store = MailStore(Path(tmp) / 'mail.db')
+            store = MailStore(Path(tmp) / 'mail.db', Path(tmp) / 'arquivos')
             store.save_work('medina', 'Medina', '03738/2026', ['MEDINA'], True, 'test')
             msg = EmailMessage()
             msg['Subject'] = 'MEDINA IC 03738/2026'

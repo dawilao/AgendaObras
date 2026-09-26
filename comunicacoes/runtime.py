@@ -20,8 +20,10 @@ def mail_root():
 
 def get_store(user_id, root=None):
     uid = owner_id(user_id)
-    directory = Path(root) if root else mail_root()
-    return MailStore(directory / uid / 'comunicacoes.db')
+    if root:
+        return MailStore(Path(root) / uid / 'comunicacoes.db', Path(root) / 'arquivos')
+    # Sem root, os anexos vão para a pasta comum (blobs.default_root): uma cópia para todos.
+    return MailStore(mail_root() / uid / 'comunicacoes.db')
 
 
 def get_shared_store():

@@ -17,7 +17,7 @@ class SeguroEmailTests(unittest.TestCase):
     setUpBase=SeguroTests.setUp
     def setUp(self):
         self.setUpBase()
-        self.mail=MailStore(Path(self.tmp.name)/'mail.db')
+        self.mail=MailStore(Path(self.tmp.name)/'mail.db',Path(self.tmp.name)/'arquivos')
         self.mail.save_work('1','Medina','03738/2026',['MEDINA'],True,'test')
         self.mail.save_work('2','Almenara','00744/2026',['ALMENARA'],True,'test')
         self.mid=self.message('MEDINA IC 03738/2026','one')
@@ -76,8 +76,15 @@ class SeguroEmailTests(unittest.TestCase):
     def test_tampered_attachment_rejected(self):
         files=self.sources.catalogo()[str(self.mid)]['attachments']
         ref=self.sources.preparar('recebimento',dict(email_id=self.mid,apolice_id=files[0]['id'],boleto_id=files[1]['id']))['vinculos']['apolice']
-        with self.mail.connect() as db:db.execute('UPDATE attachments SET payload=? WHERE id=?',(b'changed',files[0]['id']))
+        # Registro no banco apontando para outro arquivo.
+        with self.mail.connect() as db:db.execute('UPDATE attachments SET sha256=? WHERE id=?',(files[1]['sha256'],files[0]['id']))
         with self.assertRaises(PermissionError):self.sources.anexo(ref)
+
+    def test_tampered_file_on_disk_rejected(self):
+        files=self.sources.catalogo()[str(self.mid)]['attachments']
+        ref=self.sources.preparar('recebimento',dict(email_id=self.mid,apolice_id=files[0]['id'],boleto_id=files[1]['id']))['vinculos']['apolice']
+        self.mail.blobs.path(files[0]['sha256']).write_bytes(b'changed')
+        with self.assertRaises(ValueError):self.sources.anexo(ref)
 
     def test_client_text_does_not_override_selected_source(self):
         self.stage('solicitacao',evidencia='fake client text',vinculos={'evidencia':'forged'})

@@ -14,7 +14,7 @@ from comunicacoes.runtime import get_store, owner_id, authorize_user
 from comunicacoes.store import MailStore
 from comunicacoes.imap_reader import IMAPConfig, sync_mail
 from comunicacoes.session import register, unregister, disconnect_user, temporary_import
-from comunicacoes.publishing import publish_message
+from comunicacoes.publishing import publish_message, publication_fingerprint, team_pending
 from test_comunicacoes import mail
 
 
@@ -24,7 +24,7 @@ class PersonalMailTests(unittest.TestCase):
         self.addCleanup(self.tmp.cleanup)
         self.a = get_store(1, self.tmp.name)
         self.b = get_store(2, self.tmp.name)
-        self.shared = MailStore(Path(self.tmp.name) / 'shared.db')
+        self.shared = MailStore(Path(self.tmp.name) / 'shared.db', Path(self.tmp.name) / 'arquivos')
         for store in [self.a, self.b]:
             store.save_work('10', 'Medina', '03738/2026', ['MEDINA'], True, 'test')
 
@@ -90,6 +90,45 @@ class PersonalMailTests(unittest.TestCase):
         _, fresh = publish_message(self.b, self.shared, b, 'user:2', {'10'})
         self.assertFalse(fresh)
         self.assertEqual(len(self.shared.messages()), 1)
+
+    def test_attachment_stored_once_for_users_and_shared_history(self):
+        a = self.import_one(self.a, mail(attachment=True))
+        self.import_one(self.b, mail(attachment=True))
+        pid, _ = publish_message(self.a, self.shared, a, 'user:1', {'10'})
+        files = [p for p in (Path(self.tmp.name) / 'arquivos').rglob('*') if p.is_file()]
+        self.assertEqual(len(files), 1)
+        shared_attachment = self.shared.detail(pid)[1][0]
+        self.assertEqual(self.shared.attachment(shared_attachment['id'])['payload'], b'example')
+        with self.a.connect() as db:
+            self.assertNotIn('payload', [r[1] for r in db.execute('PRAGMA table_info(attachments)')])
+
+    def test_message_published_by_colleague_is_flagged_for_team_confirmation(self):
+        # Sem IC no assunto: fica para conferir, como os e-mails reais de compra.
+        a = self.import_one(self.a, mail(subject='Compra MEDINA materiais', attachment=True))
+        b = self.import_one(self.b, mail(subject='Compra MEDINA materiais', attachment=True))
+        other = self.import_one(self.b, mail(subject='Compra MEDINA cabos', mid='<two@example.invalid>'), uid='2')
+        self.assertEqual(self.b.detail(b)[0]['status'], 'revisar')
+        self.a.review(a, '10', 'user:1', 'ok')
+        publish_message(self.a, self.shared, a, 'user:1', {'10'})
+
+        self.assertEqual(team_pending(self.b.conversation_rows(), self.shared, {'10'}), {b: '10'})
+        # Sem acesso à obra, nada é revelado; mensagem diferente não é marcada.
+        self.assertEqual(team_pending(self.b.conversation_rows(), self.shared, set()), {})
+        self.assertNotIn(other, team_pending(self.b.conversation_rows(), self.shared, {'10'}))
+
+        # Confirmar o vínculo da equipe não cria cópia no histórico e tira a mensagem da lista.
+        self.b.review(b, '10', 'user:2', 'Vínculo confirmado pelo histórico da equipe.')
+        _, fresh = publish_message(self.b, self.shared, b, 'user:2', {'10'})
+        self.assertFalse(fresh)
+        self.assertEqual(len(self.shared.messages()), 1)
+        self.assertEqual(team_pending(self.b.conversation_rows(), self.shared, {'10'}), {})
+
+    def test_detail_fingerprint_matches_published_record(self):
+        a = self.import_one(self.a, mail(attachment=True))
+        self.a.review(a, '10', 'user:1', 'ok')
+        pid, _ = publish_message(self.a, self.shared, a, 'user:1', {'10'})
+        message, attachments, _, _ = self.a.detail(a)
+        self.assertEqual(self.shared.published_works().get(publication_fingerprint(message, attachments)), '10')
 
     def test_new_reply_is_added_without_republishing_original(self):
         a = self.import_one(self.a)
