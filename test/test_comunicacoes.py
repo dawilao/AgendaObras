@@ -350,5 +350,16 @@ class FolderTests(unittest.TestCase):
         self.assertIn('Nenhuma das pastas', str(ctx.exception))
 
 
+class TabFilterTests(unittest.TestCase):
+    def test_team_history_opens_on_linked_and_private_keeps_its_filter(self):
+        from comunicacoes.page import filter_on_tab_change
+        # Minha conferência em "Para conferir" → Histórico da equipe abre em "Vinculada".
+        target, remembered = filter_on_tab_change('shared', 'revisar', 'todos')
+        self.assertEqual((target, remembered), ('vinculado', 'revisar'))
+        # Filtro mudado no histórico não vaza para a Minha conferência.
+        self.assertEqual(filter_on_tab_change('private', 'conflito', remembered), ('revisar', 'revisar'))
+        self.assertEqual(filter_on_tab_change('private', 'vinculado', 'todos'), ('todos', 'todos'))
+
+
 if __name__ == '__main__':
     unittest.main()

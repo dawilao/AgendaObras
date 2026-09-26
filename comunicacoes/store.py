@@ -11,6 +11,11 @@ from .matching import clean_ic, match_message
 from .parser import parse_message
 
 
+# trashed_at: na lixeira; purged_at: excluído de vez (o conteúdo pode ter saído do disco).
+TRASH_COLUMNS = ('trash_id INTEGER', 'trashed_at TEXT', 'purged_at TEXT')
+ACTIVE = 'trashed_at IS NULL'
+
+
 def now():
     return datetime.now(timezone.utc).isoformat(timespec='seconds')
 
@@ -46,7 +51,17 @@ class MailStore:
                     mailbox TEXT, name TEXT, flags TEXT, PRIMARY KEY(mailbox, name));
                 CREATE TABLE IF NOT EXISTS sync_runs (
                     id INTEGER PRIMARY KEY, started TEXT, finished TEXT, status TEXT, detail TEXT);
+                CREATE TABLE IF NOT EXISTS trash (
+                    id INTEGER PRIMARY KEY, sha256 TEXT NOT NULL, names TEXT NOT NULL, size INTEGER,
+                    obra_id TEXT, subject TEXT, deleted_by TEXT, deleted_by_name TEXT, deleted_at TEXT,
+                    expires_at TEXT, status TEXT NOT NULL, closed_by TEXT, closed_at TEXT);
             ''')
+            # Lixeira: o anexo é marcado, nunca apagado do banco. Ids ficam estáveis para o
+            # Seguro e a identificação da publicação continua batendo entre as caixas.
+            columns = {r[1] for r in db.execute('PRAGMA table_info(attachments)')}
+            for column in TRASH_COLUMNS:
+                if column.split()[0] not in columns:
+                    db.execute(f'ALTER TABLE attachments ADD COLUMN {column}')
 
     @contextmanager
     def connect(self):
@@ -168,7 +183,7 @@ class MailStore:
         with self.connect() as db:
             rows = [dict(r) for r in db.execute('''SELECT m.id,m.subject,m.sender,m.sent_date,m.status,
                 m.obra_id,m.suggestion,m.reason,w.name AS work_name,
-                (SELECT COUNT(*) FROM attachments a WHERE a.message_id=m.id) AS attachment_count
+                (SELECT COUNT(*) FROM attachments a WHERE a.message_id=m.id AND a.trashed_at IS NULL) AS attachment_count
                 FROM messages m LEFT JOIN works w ON w.id=m.obra_id
                 WHERE (? IS NULL OR m.status=?) AND (? IS NULL OR m.obra_id=?)
                 ORDER BY m.id DESC''', (status, status, work, work))]
@@ -201,19 +216,23 @@ class MailStore:
                          {'status': match.status, 'obra_id': match.obra_id}, 'reason': match.reason})))
 
     def conversation_rows(self, allowed_ids=None):
-        """Filtra autorização antes de agrupar, inclusive corpos e anexos."""
+        """Filtra autorização antes de agrupar, inclusive corpos e anexos.
+        'attachments' traz só os ativos; 'fingerprint_attachments', todos (identificação da publicação)."""
         with self.connect() as db:
             rows = [dict(r) for r in db.execute('''SELECT m.*, w.name AS work_name
                 FROM messages m LEFT JOIN works w ON w.id=m.obra_id''')
                 if allowed_ids is None or r['obra_id'] in allowed_ids]
             by_id = {r['id']: r for r in rows}
             for row in rows:
-                row['attachments'] = []
-            for item in db.execute('SELECT id,message_id,name,mime,sha256,size FROM attachments'):
+                row['attachments'], row['fingerprint_attachments'] = [], []
+            for item in db.execute('SELECT id,message_id,name,mime,sha256,size,trashed_at FROM attachments'):
                 if item['message_id'] in by_id:
-                    by_id[item['message_id']]['attachments'].append({
-                        'id': item['id'], 'name': item['name'], 'mime': item['mime'],
-                        'size': item['size'], 'sha256': item['sha256']})
+                    row = by_id[item['message_id']]
+                    attachment = {'id': item['id'], 'name': item['name'], 'mime': item['mime'],
+                                  'size': item['size'], 'sha256': item['sha256']}
+                    row['fingerprint_attachments'].append(attachment)
+                    if item['trashed_at'] is None:
+                        row['attachments'].append(attachment)
         return rows
 
     def detail(self, mid):
@@ -221,7 +240,12 @@ class MailStore:
             row = db.execute('SELECT * FROM messages WHERE id=?', (mid,)).fetchone()
             if not row:
                 raise ValueError('Mensagem não encontrada.')
-            return dict(row), [dict(r) for r in db.execute('SELECT id,name,mime,size,sha256 FROM attachments WHERE message_id=?', (mid,))], [dict(r) for r in db.execute('SELECT * FROM audit WHERE message_id=? ORDER BY id', (mid,))], [dict(r) for r in db.execute('SELECT * FROM sources WHERE message_id=?', (mid,))]
+            return dict(row), [dict(r) for r in db.execute(f'SELECT id,name,mime,size,sha256 FROM attachments WHERE message_id=? AND {ACTIVE}', (mid,))], [dict(r) for r in db.execute('SELECT * FROM audit WHERE message_id=? ORDER BY id', (mid,))], [dict(r) for r in db.execute('SELECT * FROM sources WHERE message_id=?', (mid,))]
+
+    def fingerprint_attachments(self, mid):
+        """Todos os anexos da mensagem, inclusive na lixeira: a identificação da publicação não muda."""
+        with self.connect() as db:
+            return [dict(r) for r in db.execute('SELECT id,name,mime,size,sha256 FROM attachments WHERE message_id=?', (mid,))]
 
     def published_works(self):
         """No histórico compartilhado: impressão digital de publicação → obra."""
@@ -234,6 +258,8 @@ class MailStore:
             row = db.execute('SELECT * FROM attachments WHERE id=?', (aid,)).fetchone()
         if not row:
             raise ValueError('Anexo não encontrado.')
+        if row['trashed_at']:
+            raise ValueError('Este anexo está na lixeira.')
         return {**dict(row), 'payload': self.blobs.get(row['sha256'])}
 
     def save_folders(self, mailbox, folders):

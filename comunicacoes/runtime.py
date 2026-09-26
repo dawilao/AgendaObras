@@ -1,6 +1,8 @@
 """Armazenamento privado por usuário autenticado; nenhuma credencial global."""
+import json
 import os
 import sqlite3
+from contextlib import closing
 from pathlib import Path
 from .store import MailStore
 
@@ -28,6 +30,53 @@ def get_store(user_id, root=None):
 
 def get_shared_store():
     return MailStore(mail_root() / 'compartilhado' / 'comunicacoes.db')
+
+
+def personal_stores():
+    """Caixas pessoais de todos os usuários (a lixeira da equipe alcança as cópias de cada um)."""
+    return [MailStore(path) for path in sorted(mail_root().glob('*/comunicacoes.db'))
+            if path.parent.name != 'compartilhado']
+
+
+def get_trash():
+    from .lixeira import Lixeira
+    return Lixeira(get_shared_store(), personal_stores)
+
+
+def is_admin(user_id):
+    """Consultado a cada operação: perder o perfil de admin vale na hora, sem recarregar a página."""
+    authorize_user(user_id)
+    from db.auth_repo import AuthDatabase
+    return bool((AuthDatabase().obter_usuario_por_id(owner_id(user_id)) or {}).get('is_admin'))
+
+
+def insurance_files():
+    """sha256 dos anexos registrados como apólice ou boleto no controle de seguro."""
+    from db.connection import CAMINHO_DB
+    path = Path(CAMINHO_DB).resolve()
+    if not path.exists():
+        return set()
+    found = set()
+    def collect(value):
+        if isinstance(value, dict):
+            if isinstance(value.get('sha256'), str):
+                found.add(value['sha256'])
+            for item in value.values():
+                collect(item)
+        elif isinstance(value, list):
+            for item in value:
+                collect(item)
+    with closing(sqlite3.connect(path.as_uri() + '?mode=ro', uri=True)) as db:
+        try:
+            rows = db.execute('SELECT vinculos FROM seguro_rodadas').fetchall()
+        except sqlite3.OperationalError:
+            return set()
+    for (links,) in rows:
+        try:
+            collect(json.loads(links or '{}'))
+        except ValueError:
+            continue
+    return found
 
 
 def available_works(user_id):

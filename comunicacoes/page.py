@@ -14,6 +14,7 @@ from .publishing import publish_message, publication_fingerprint, team_pending, 
 from .conversations import build_conversations, topic_label
 from .visual_status import conversation_status, sender_color, readings_color, insurance_color, paint
 from .seguro_bridge import FontesSeguro, obra_da_conversa
+from .lixeira import TRASH_DAYS
 
 LABELS = {'revisar': 'Para conferir', 'conflito': 'Conflito', 'vinculado': 'Vinculada',
           'tecnico': 'Evento automático', 'ignorado': 'Ignorada'}
@@ -30,6 +31,14 @@ CONNECTION = {'off': ('Nunca atualizado', 'com-status-off'),
               'failed': ('Falha em {when}', 'com-status-stop')}
 SENDER_LEGEND = [('blue', 'CAIXA'), ('green', 'MACH'), ('yellow', 'Outros'), ('gray', 'Não identificado')]
 INSURANCE_CHIP = {'green': 'com-chip-green', 'yellow': 'com-chip-yellow', 'red': 'com-chip-red'}
+
+
+def filter_on_tab_change(tab, current, remembered):
+    """Ao trocar de aba: (filtro de Situação, filtro lembrado da Minha conferência).
+    O Histórico da equipe abre em 'Vinculada'; a Minha conferência volta ao filtro que tinha."""
+    if tab == 'shared':
+        return 'vinculado', current
+    return remembered, remembered
 
 
 def display_date(value):
@@ -196,6 +205,12 @@ HELP_HTML = """
 <li>Datas são as do e-mail. "Última comunicação" considera os e-mails que aparecem no filtro atual.</li>
 <li>A cor indica o último remetente: azul = CAIXA, verde = MACH, amarelo = outros, cinza = não identificado. <b>A cor não indica aprovação.</b></li>
 </ul>
+<h4>Lixeira da equipe</h4>
+<ul>
+<li>Administradores podem excluir um arquivo de uma conversa do Histórico da equipe. Ele sai do histórico e das caixas pessoais que têm os mesmos e-mails.</li>
+<li>O arquivo fica na Lixeira por 15 dias, podendo ser restaurado; depois é excluído definitivamente e sai do servidor se nenhum outro e-mail usar o mesmo conteúdo.</li>
+<li>Arquivos registrados como apólice ou boleto no controle de seguro não podem ser excluídos.</li>
+</ul>
 <h4>Seguros</h4>
 <ul>
 <li>A leitura percorre assinatura de contrato, projetos e todos os demais assuntos da obra, usando todas as mensagens publicadas e autorizadas, independentemente do filtro da lista.</li>
@@ -208,9 +223,11 @@ HELP_HTML = """
 
 
 def render_mail_page(store, authorize, available_works=None, demo=False, user_email='', owner=None,
-                     shared_store=None, local_pilot=False, seguro_factory=None, topbar=None, tabs_slot=None):
+                     shared_store=None, local_pilot=False, seguro_factory=None, topbar=None, tabs_slot=None,
+                     trash=None, is_admin=None, protected_files=None, user_name=''):
     """topbar/tabs_slot: containers da moldura da página onde entram o status da conexão,
-    as ações e as abas. Sem eles, tudo é criado no próprio conteúdo."""
+    as ações e as abas. Sem eles, tudo é criado no próprio conteúdo.
+    trash/is_admin/protected_files: lixeira da equipe (só admins), consultados a cada operação."""
     # authorize é chamado novamente em cada operação: uma aba antiga não mantém privilégios.
     authorize()
     active_event = None
@@ -471,8 +488,18 @@ def render_mail_page(store, authorize, available_works=None, demo=False, user_em
                 ui.menu_item('Atualizar lista', on_click=lambda: content.refresh())
 
     # ── Abas: fila privada × histórico publicado ─────────────────────────────
+    private_filter = SimpleNamespace(value='todos')
+    def switch_tab():
+        target, private_filter.value = filter_on_tab_change(view.value, status_filter.value, private_filter.value)
+        if 'trash' in view_buttons:
+            view_buttons['trash'].set_visibility(view.value == 'shared' and can_trash())
+        if status_filter.value == target:
+            content.refresh()
+        else:
+            status_filter.set_value(target)  # O on_change do filtro já refresca a lista.
+
     with (tabs_slot or ui.element('div')):
-        view = ui.tabs(value='private', on_change=lambda: content.refresh()).props(
+        view = ui.tabs(value='private', on_change=switch_tab).props(
             'dense no-caps align=left active-color=primary indicator-color=primary')
         with view:
             ui.tab(name='private', label='Minha conferência')
@@ -488,13 +515,15 @@ def render_mail_page(store, authorize, available_works=None, demo=False, user_em
         # ── Filtros em uma linha + seletor de visualização ───────────────────
         presentation = SimpleNamespace(value='conversations')
         view_buttons = {}
-        def set_presentation(mode):
+        def mark_presentation(mode):
             presentation.value = mode
             for key, button in view_buttons.items():
                 if key == mode:
                     button.classes(add='ao-view-toggle-btn-active')
                 else:
                     button.classes(remove='ao-view-toggle-btn-active')
+        def set_presentation(mode):
+            mark_presentation(mode)
             content.refresh()
 
         with ui.row().classes('w-full items-center gap-3'):
@@ -508,26 +537,140 @@ def render_mail_page(store, authorize, available_works=None, demo=False, user_em
                               ).classes('flex-1').props('outlined dense clearable bg-color=white').style('min-width: 200px;')
             with search.add_slot('prepend'):
                 ui.icon('search').style('color: #9e9e9e;')
+            modes = [('conversations', 'forum', 'Conversas por obra'), ('attachments', 'attach_file', 'Anexos'),
+                     ('all', 'list', 'Todos os e-mails')]
+            if trash is not None:
+                modes.append(('trash', 'delete_outline', 'Lixeira da equipe'))
             with ui.element('div').classes('ao-view-toggle'):
-                for mode, icon, tip in [('conversations', 'forum', 'Conversas por obra'),
-                                        ('attachments', 'attach_file', 'Anexos'),
-                                        ('all', 'list', 'Todos os e-mails')]:
+                for mode, icon, tip in modes:
                     view_buttons[mode] = ui.button(icon=icon, on_click=lambda m=mode: set_presentation(m)
                                                    ).props('flat dense').classes('ao-view-toggle-btn').tooltip(tip)
             view_buttons['conversations'].classes(add='ao-view-toggle-btn-active')
+            if 'trash' in view_buttons:
+                view_buttons['trash'].set_visibility(False)  # Aparece no Histórico da equipe, para admins.
+
+    # ── Lixeira da equipe (somente admins, no Histórico da equipe) ───────────
+    rights = SimpleNamespace(trash=False)
+    def can_trash():
+        return trash is not None and shared_store is not None and is_admin is not None and is_admin()
+
+    def trash_guard():
+        actor = authorize()
+        if not can_trash():
+            raise PermissionError('Só administradores gerenciam a lixeira da equipe.')
+        return actor
+
+    def confirm_trash(file, on_sent=None):
+        """on_sent: tira o arquivo só da parte da tela onde ele aparece. Sem ele, a lista é refeita
+        (e as pastas abertas se fecham)."""
+        with ui.dialog() as dialog, ui.card().classes('responsive-dialog-sm').style('padding: 20px;'):
+            ui.label('Enviar arquivo para a lixeira?').classes('com-dialog-title')
+            ui.label(' / '.join(file['names'])).classes('com-title')
+            ui.label(f'O arquivo sai desta conversa no Histórico da equipe e das caixas pessoais que têm os mesmos '
+                     f'e-mails. Ele pode ser restaurado na Lixeira por {TRASH_DAYS} dias; depois é excluído '
+                     'definitivamente.').classes('com-meta').style('white-space: normal;')
+            async def send():
+                try:
+                    actor = trash_guard()
+                    source, *_ = shared_store.detail(file['origins'][0]['mid'])
+                    if source['obra_id'] not in allowed_ids():
+                        raise PermissionError('Obra não autorizada.')
+                    protected = protected_files() if protected_files else frozenset()
+                    # Percorre as caixas pessoais: fora da thread da interface, para não travar a tela.
+                    await run.io_bound(trash.send, [o['mid'] for o in file['origins']], file['sha256'],
+                                       actor, user_name, protected)
+                except (ValueError, PermissionError) as exc:
+                    ui.notify(str(exc), type='warning')
+                    return
+                dialog.close()
+                ui.notify(f'Arquivo enviado para a lixeira. Pode ser restaurado por {TRASH_DAYS} dias.', type='positive')
+                if on_sent:
+                    on_sent()
+                else:
+                    content.refresh()
+            with ui.row().classes('w-full justify-end gap-2'):
+                ui.button('Cancelar', on_click=dialog.close).props('flat no-caps')
+                ui.button('Enviar para a lixeira', icon='delete', on_click=send).props('unelevated no-caps color=negative')
+        dialog.open()
+
+    def trash_item_guard(item):
+        actor = trash_guard()
+        if trash.item(item['id'])['obra_id'] not in allowed_ids():
+            raise PermissionError('Obra não autorizada.')
+        return actor
+
+    async def restore_item(item):
+        try:
+            actor = trash_item_guard(item)
+            await run.io_bound(trash.restore, item['id'], actor)
+        except (ValueError, PermissionError) as exc:
+            ui.notify(str(exc), type='warning')
+        else:
+            ui.notify('Arquivo restaurado no histórico e nas caixas pessoais.', type='positive')
+        content.refresh()
+
+    def confirm_purge(item):
+        with ui.dialog() as dialog, ui.card().classes('responsive-dialog-sm').style('padding: 20px;'):
+            ui.label('Excluir definitivamente?').classes('com-dialog-title')
+            ui.label(' / '.join(item['names'])).classes('com-title')
+            ui.label('Não será possível restaurar. O arquivo sai do servidor assim que nenhum outro e-mail '
+                     'usar o mesmo conteúdo.').classes('com-meta').style('white-space: normal;')
+            async def purge():
+                try:
+                    actor = trash_item_guard(item)
+                    await run.io_bound(trash.purge, item['id'], actor)
+                except (ValueError, PermissionError) as exc:
+                    ui.notify(str(exc), type='warning')
+                else:
+                    ui.notify('Arquivo excluído definitivamente.', type='positive')
+                dialog.close()
+                content.refresh()
+            with ui.row().classes('w-full justify-end gap-2'):
+                ui.button('Cancelar', on_click=dialog.close).props('flat no-caps')
+                ui.button('Excluir definitivamente', icon='delete_forever', on_click=purge
+                          ).props('unelevated no-caps color=negative')
+        dialog.open()
+
+    def render_trash():
+        permitted = allowed_ids()
+        items = [i for i in trash.items() if i['obra_id'] in permitted]
+        ui.label(f'Lixeira da equipe • os arquivos são excluídos definitivamente {TRASH_DAYS} dias depois '
+                 'de enviados.').classes('com-meta')
+        if not items:
+            ui.label('A lixeira está vazia.').classes('com-muted')
+            return
+        for item in items:
+            with ui.row().classes('w-full items-center gap-2 border-t').style('padding: 8px 4px;'):
+                with ui.column().classes('gap-0 flex-1').style('min-width: 0;'):
+                    ui.label(' / '.join(item['names'])).classes('com-title ellipsis')
+                    ui.label(f"{work_name(item['obra_id'])} • {item['subject'] or '(Sem assunto)'}").classes('com-meta ellipsis')
+                    left = ('exclusão definitiva hoje' if not item['days_left'] else
+                            f"{item['days_left']} dia(s) para a exclusão definitiva")
+                    ui.label(f"{(item['size'] or 0) / 1024:.1f} KB • enviado por "
+                             f"{item['deleted_by_name'] or item['deleted_by']} em {display_iso(item['deleted_at'])} • {left}"
+                             ).classes('com-meta')
+                ui.button('Restaurar', icon='restore', on_click=lambda i=item: restore_item(i)).props('outline dense no-caps')
+                ui.button('Excluir definitivamente', icon='delete_forever', on_click=lambda i=item: confirm_purge(i)
+                          ).props('flat dense no-caps color=negative')
 
     def conversation_details(group, repository, shared):
         authorize()
         with ui.dialog() as dialog, ui.card().classes('responsive-dialog-lg').style('padding: 20px; max-height: 90vh; overflow-y: auto;'):
             ui.label(group['subject']).classes('com-dialog-title')
-            ui.label(f"{group['message_count']} e-mails • {len(group['files'])} arquivos distintos • {group['group_reason']}").classes('com-meta')
+            summary = ui.label().classes('com-meta')
+            def show_summary():
+                summary.set_text(f"{group['message_count']} e-mails • {len(group['files'])} arquivos distintos • {group['group_reason']}")
+            show_summary()
+            changed = SimpleNamespace(value=False)
+            # A tabela de anexos por trás do diálogo só é refeita ao fechá-lo.
+            dialog.on('hide', lambda: content.refresh() if changed.value else None)
             ui.label('Última mensagem').classes('com-section-title')
             ui.label(group['excerpt'] or 'Abra o e-mail para consultar o conteúdo.').classes('mail-body com-excerpt w-full')
             ui.button('Abrir última mensagem / conferir obra', on_click=lambda: details(group['id'], shared)).props('unelevated color=primary no-caps').classes('com-btn')
             if group['files']:
                 ui.label('Anexos de toda a conversa').classes('com-section-title mt-2')
                 for file in group['files']:
-                    with ui.column().classes('w-full gap-1').style('border: 1px solid #e8eaf0; border-radius: 8px; padding: 10px 12px;'):
+                    with ui.column().classes('w-full gap-1').style('border: 1px solid #e8eaf0; border-radius: 8px; padding: 10px 12px;') as card:
                         ui.label(' / '.join(file['names'])).classes('com-title')
                         ui.label(f"{file['size'] / 1024:.1f} KB • {len(file['origins'])} ocorrência(s)").classes('com-meta')
                         def download_file(f=file):
@@ -539,6 +682,15 @@ def render_mail_page(store, authorize, available_works=None, demo=False, user_em
                             send_attachment(repository, f['id'])
                         with ui.row().classes('gap-1'):
                             ui.button('Baixar', icon='download', on_click=download_file).props('outline dense no-caps')
+                            if shared and rights.trash:
+                                def trashed(f=file, c=card):
+                                    c.delete()
+                                    group['files'].remove(f)
+                                    changed.value = True
+                                    show_summary()
+                                ui.button('Enviar para a lixeira', icon='delete',
+                                          on_click=lambda f=file, done=trashed: confirm_trash(f, done)
+                                          ).props('flat dense no-caps color=negative')
                             for origin in file['origins']:
                                 ui.button(f"Origem: {display_date(origin['date'])}",
                                           on_click=lambda mid=origin['mid']: details(mid, shared)).props('flat dense no-caps')
@@ -582,8 +734,8 @@ def render_mail_page(store, authorize, available_works=None, demo=False, user_em
         try:
             for mid in mids:
                 # Recalculado no clique: a tela pode estar aberta há tempo.
-                msg, attachments, _, _ = store.detail(mid)
-                wid = shared_store.published_works().get(publication_fingerprint(msg, attachments))
+                msg, _, _, _ = store.detail(mid)
+                wid = shared_store.published_works().get(publication_fingerprint(msg, store.fingerprint_attachments(mid)))
                 if msg['status'] not in UNDECIDED or not wid or wid not in allowed_ids():
                     raise ValueError('Esta mensagem não está mais pendente de vínculo com a equipe. Atualize a lista.')
                 store.review(mid, wid, actor, 'Vínculo confirmado pelo histórico da equipe.')
@@ -627,7 +779,7 @@ def render_mail_page(store, authorize, available_works=None, demo=False, user_em
             options = {w['id']: w['name'] for w in store.works() if w['id'] in permitted}
             team_work = None
             if not shared and shared_store is not None and msg['status'] in UNDECIDED:
-                published = shared_store.published_works().get(publication_fingerprint(msg, attachments))
+                published = shared_store.published_works().get(publication_fingerprint(msg, store.fingerprint_attachments(mid)))
                 team_work = published if published in permitted else None
             if team_work:
                 ui.label(f'{TEAM_LABEL}, vinculada à obra {work_name(team_work)}. '
@@ -692,10 +844,11 @@ def render_mail_page(store, authorize, available_works=None, demo=False, user_em
                     ui.label('Na equipe').classes('com-chip com-chip-green').tooltip(
                         f"{TEAM_LABEL} · {', '.join(work_name(w) for w in sorted(team_ids))}")
                 ui.label(f"{g['message_count']} e-mail{'s' if g['message_count'] != 1 else ''}").classes('com-count')
+                files_badge = files_count = None
                 if g['files']:
-                    with ui.row().classes('items-center no-wrap gap-0 com-meta'):
+                    with ui.row().classes('items-center no-wrap gap-0 com-meta') as files_badge:
                         ui.icon('attach_file').style('font-size: 15px;')
-                        ui.label(str(len(g['files'])))
+                        files_count = ui.label(str(len(g['files'])))
             paint(conversation_folder, sender_color(g.get('sender', '')))
             with ui.column().classes('w-full gap-2').style('padding: 12px 16px;'):
                 ui.label(f"Assunto original: {g['subject']}").classes('com-meta')
@@ -718,9 +871,19 @@ def render_mail_page(store, authorize, available_works=None, demo=False, user_em
                             ui.label(m['body'] or '(Sem corpo de texto)').classes('mail-body p-2 text-sm')
                             ui.button('Conferir vínculo / ver detalhes', on_click=lambda mid=m['id']: details(mid, shared)).props('flat no-caps')
                 if g['files']:
-                    with ui.expansion(f"Anexos da conversa ({len(g['files'])})", icon='attach_file').classes('w-full'):
+                    with ui.expansion(f"Anexos da conversa ({len(g['files'])})", icon='attach_file').classes('w-full') as files_panel:
+                        def trashed(file, row):
+                            """Tira só esta linha: pastas e conversas abertas continuam como estão."""
+                            row.delete()
+                            g['files'].remove(file)
+                            if g['files']:
+                                files_count.set_text(str(len(g['files'])))
+                                files_panel.set_text(f"Anexos da conversa ({len(g['files'])})")
+                            else:
+                                files_badge.delete()
+                                files_panel.delete()
                         for f in g['files']:
-                            with ui.row().classes('w-full items-center gap-2 border-t').style('padding: 8px 4px;'):
+                            with ui.row().classes('w-full items-center gap-2 border-t').style('padding: 8px 4px;') as file_row:
                                 with ui.column().classes('gap-0 flex-1').style('min-width: 0;'):
                                     ui.label(' / '.join(f['names'])).classes('com-title ellipsis')
                                     ui.label(f"{f['size'] / 1024:.1f} KB • {len(f['origins'])} ocorrência(s)").classes('com-meta')
@@ -734,6 +897,10 @@ def render_mail_page(store, authorize, available_works=None, demo=False, user_em
                                 ui.button(icon='download', on_click=download_tree).props('flat round dense color=primary').tooltip('Baixar arquivo')
                                 ui.button(icon='mail_outline', on_click=lambda mid=f['origins'][0]['mid']: details(mid, shared)
                                           ).props('flat round dense').style('color: #7a8699;').tooltip('Abrir e-mail de origem')
+                                if shared and rights.trash:
+                                    ui.button(icon='delete_outline',
+                                              on_click=lambda file=f, row=file_row: confirm_trash(file, lambda: trashed(file, row))
+                                              ).props('flat round dense').style('color: #c62828;').tooltip('Enviar para a lixeira')
 
     def render_insurance(wid, conversations, repository, shared):
         from ui.components.seguro_panel import render_seguro, titulo_seguro
@@ -829,6 +996,12 @@ def render_mail_page(store, authorize, available_works=None, demo=False, user_em
         def content():
             authorize()
             shared = view.value == 'shared' and shared_store is not None
+            rights.trash = shared and can_trash()
+            if presentation.value == 'trash':
+                if rights.trash:
+                    render_trash()
+                    return
+                mark_presentation('conversations')  # Saiu do histórico ou perdeu o perfil de admin.
             repository = shared_store if shared else store
             permitted = allowed_ids() if shared else None
             show_automatic = status_filter.value == 'todas_auto'

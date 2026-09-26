@@ -3,12 +3,13 @@ AgendaObras — Entry Point
 Substitui AgendaObras.py com imports da nova estrutura modular.
 """
 
+import asyncio
 import sys
 import os
 import json
 import warnings
 from dotenv import load_dotenv
-from nicegui import ui, app
+from nicegui import app, run, ui
 from starlette.requests import Request
 from starlette.responses import FileResponse, RedirectResponse, Response as StarletteResponse
 
@@ -73,6 +74,26 @@ configurar_middleware()
 
 # Cria banco, e-mail e notificador de prazos ao subir o servidor
 app.on_startup(obter_servicos)
+
+
+async def _esvaziar_lixeira_comunicacoes():
+    """Na inicialização e depois a cada 24 h: exclui de vez o que passou de 15 dias na lixeira
+    das Comunicações e libera o disco do que ninguém mais usa."""
+    from comunicacoes.runtime import get_trash
+    from core.error_logger import log_error
+    while True:
+        try:
+            trash = get_trash()
+            await run.io_bound(trash.purge_expired)
+            if trash.problem:
+                log_error(RuntimeError(trash.problem), 'comunicacoes', 'Esvaziar a lixeira vencida')
+        except Exception as e:
+            log_error(e, 'comunicacoes', 'Esvaziar a lixeira vencida')
+        await asyncio.sleep(24 * 3600)
+
+
+# Função assíncrona: o NiceGUI a inicia em segundo plano, sem segurar a inicialização.
+app.on_startup(_esvaziar_lixeira_comunicacoes)
 
 
 def _validar_storage_secret(secret: str) -> None:

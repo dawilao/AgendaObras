@@ -10,7 +10,8 @@ import datetime
 from nicegui import app, ui
 
 from comunicacoes.page import render_mail_page
-from comunicacoes.runtime import authorize_user, available_works, get_shared_store, get_store
+from comunicacoes.runtime import (authorize_user, available_works, get_shared_store, get_store, get_trash,
+                                  insurance_files, is_admin)
 from comunicacoes.seguro_bridge import SeguroComEmails
 from core.config import VERSION
 from db.connection import CAMINHO_DB
@@ -302,4 +303,8 @@ class ComunicacoesPage:
                     seguro_factory=seguro_factory,
                     topbar=topbar,
                     tabs_slot=tabs_slot,
+                    trash=get_trash(),
+                    is_admin=lambda: is_admin(owner),
+                    protected_files=insurance_files,
+                    user_name=f"{self.usuario.get('nome', '')} {self.usuario.get('sobrenome', '')}".strip(),
                 )

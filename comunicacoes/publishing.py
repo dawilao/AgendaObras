@@ -25,7 +25,7 @@ def team_pending(rows, shared, allowed_ids):
     for row in rows:
         if row['status'] not in UNDECIDED:
             continue
-        wid = published.get(publication_fingerprint(row, row['attachments']))
+        wid = published.get(publication_fingerprint(row, row.get('fingerprint_attachments', row['attachments'])))
         if wid and wid in allowed:
             found[row['id']] = wid
     return found
@@ -59,8 +59,11 @@ def publish_message(private, shared, mid, actor, allowed_ids):
                  wid, 'Publicado após conferência do usuário.', now()))
             public_id = cur.lastrowid
             # Mesmo arquivo em disco: o histórico compartilhado referencia o sha256, sem nova cópia.
-            db.executemany('INSERT INTO attachments(message_id,name,mime,sha256,size) VALUES(?,?,?,?,?)',
-                           [(public_id, a['name'], a['mime'], a['sha256'], a['size']) for a in attachments])
+            # Anexo na lixeira segue na lixeira; publicar não o traz de volta.
+            db.executemany('''INSERT INTO attachments(message_id,name,mime,sha256,size,trash_id,trashed_at,purged_at)
+                           VALUES(?,?,?,?,?,?,?,?)''',
+                           [(public_id, a['name'], a['mime'], a['sha256'], a['size'],
+                             a['trash_id'], a['trashed_at'], a['purged_at']) for a in attachments])
             db.execute('INSERT INTO audit(message_id,at,actor,action,details) VALUES(?,?,?,?,?)',
                        (public_id, now(), actor, 'publicacao', 'Mensagem e anexos confirmados para a obra.'))
         else:
