@@ -61,6 +61,56 @@ O sistema cria três arquivos SQLite na raiz do projeto:
 | `users.db` | Usuários e autenticação |
 | `contratos.db` | Vínculos de contratos |
 
+## Variáveis de ambiente
+
+Ajustes opcionais, lidos do ambiente do processo. Todos têm valor padrão, então nenhum é obrigatório.
+
+> **Importante:** estas variáveis são lidas quando o sistema inicia, **antes** do `email_config.env` ser carregado. Por isso, **não** coloque estas variáveis nesse arquivo. Defina-as no ambiente do serviço (ex.: `Environment=` ou `EnvironmentFile=` no systemd) ou exporte antes de iniciar (`export AGENDA_MAIL_MAX_MB=20`). As variáveis de SMTP continuam na seção [Configuração de e-mail](#configuração-de-e-mail).
+
+### Caminhos
+
+| Variável | Padrão | Para que serve |
+|---|---|---|
+| `AGENDA_OBRAS_DB_PATH` | `db/agendaobras.db` (ou na raiz do projeto, se a pasta `db/` não existir) | Banco principal |
+| `AGENDA_OBRAS_USERS_DB_PATH` | idem, `users.db` | Usuários e autenticação |
+| `AGENDA_OBRAS_CONTRATOS_DB_PATH` | idem, `contratos.db` | Vínculos de contratos |
+| `AGENDA_OBRAS_BIBLIOTECA_DB_PATH` | idem, `biblioteca.db` | Biblioteca |
+| `AGENDA_OBRAS_BIBLIOTECA_UPLOADS_PATH` | `uploads/biblioteca` | PDFs da Biblioteca |
+| `AGENDA_MAIL_ROOT` | `comunicacoes/usuarios`, ao lado do banco principal | Bancos das Comunicações (um por usuário e o compartilhado) |
+| `AGENDA_MAIL_FILES_ROOT` | `uploads/comunicacoes` | Anexos dos e-mails (uma cópia por conteúdo) |
+| `AGENDAOBRAS_ERRO_DIR` | `erros/` | Logs de erro |
+
+### Limites e comportamento
+
+| Variável | Padrão | Para que serve |
+|---|---|---|
+| `BIBLIOTECA_PDF_MAX_MB` | `5` | Tamanho máximo de um PDF enviado à Biblioteca |
+| `AGENDA_MAIL_MAX_MB` | `15` | Tamanho máximo de um e-mail importado (com anexos). Os maiores aparecem em "E-mails não importados" |
+| `AGENDA_MAIL_COMPACTAR` | `1` | Compactação sem perda dos anexos novos. Use `0` para gravar os anexos como chegaram. Com `0`, os anexos já compactados continuam legíveis |
+| `AGENDA_OBRAS_TIMEZONE` | `America/Sao_Paulo` | Fuso do processo (servidores Linux costumam rodar em UTC) |
+| `NICEGUI_STORAGE_SECRET` | — | Chave das sessões. Também pode ficar no `email_config.env` |
+
+## Manutenção dos anexos das Comunicações
+
+Os anexos ficam em `AGENDA_MAIL_FILES_ROOT`, sempre com compactação **sem perda**: o arquivo baixado é idêntico ao recebido, e o sha256 é conferido na leitura. O formato gravado depende do conteúdo:
+
+- **ZIPs** (inclusive `.docx` e `.xlsx`): os trechos comprimidos grandes ficam guardados uma única vez. Assim, as pranchas que se repetem entre revisões de um projeto não ocupam espaço de novo.
+- **PDF, XML, TXT e similares:** comprimidos com lzma, quando isso compensa.
+- **Imagens, DWG, RAR e 7z:** gravados como chegaram, porque já vêm comprimidos.
+
+Comandos (rodar na raiz do projeto, com as mesmas variáveis de ambiente do serviço):
+
+```bash
+python -m comunicacoes.espaco                        # relatório: espaço por tipo, economia possível, órfãos
+python -m comunicacoes.compactar                     # simulação: não altera nada
+python -m comunicacoes.compactar --aplicar           # compacta os anexos gravados antes desta versão
+python -m comunicacoes.compactar --aplicar --orfaos  # também remove arquivos sem uso há mais de 24 h
+```
+
+**Lixeira da equipe:** no Histórico da equipe, administradores podem enviar um arquivo de uma conversa para a lixeira. Ele sai do histórico e das caixas pessoais que têm os mesmos e-mails. Por 15 dias é possível restaurar; depois disso, ou quando alguém usa "Excluir definitivamente", o arquivo sai do disco, desde que nenhum outro e-mail use o mesmo conteúdo. A rotina que esvazia a lixeira vencida roda na inicialização do app e a cada 24 h. Arquivos registrados como apólice ou boleto no controle de seguro não podem ser excluídos.
+
+Faça backup de `AGENDA_MAIL_FILES_ROOT` antes de usar `--aplicar`. Os dois comandos mostram na primeira linha as pastas de bancos e de anexos que estão usando; confira se são as do serviço. A limpeza de órfãos se recusa a rodar se algum banco ou manifesto de ZIP não puder ser lido, e também se os órfãos passarem de 10 arquivos e de 20% do total, o que costuma indicar pastas erradas. Nesse último caso, use `--forcar` só depois de conferir.
+
 ## Tecnologias
 
 - [NiceGUI](https://nicegui.io/) — interface web
