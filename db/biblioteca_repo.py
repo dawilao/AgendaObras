@@ -4,6 +4,7 @@ Segue o mesmo padrão de auth_repo.py e contratos_repo.py.
 """
 
 import os
+import re
 import datetime
 import sqlite3
 from typing import Dict, List, Optional
@@ -25,18 +26,30 @@ def _resolver_caminho_biblioteca_db() -> str:
 
 
 def _resolver_pasta_uploads() -> str:
+    """Pasta fixa <raiz do projeto>/uploads/biblioteca, independente do diretório atual."""
     env_path = (os.getenv('AGENDA_OBRAS_BIBLIOTECA_UPLOADS_PATH') or '').strip()
-    if env_path:
-        os.makedirs(env_path, exist_ok=True)
-        return env_path
-    pasta_db = os.path.dirname(os.path.abspath(_resolver_caminho_biblioteca_db()))
-    pasta = os.path.join(pasta_db, 'uploads', 'biblioteca')
+    pasta = os.path.abspath(env_path) if env_path else os.path.join(_CAMINHO_LOCAL, 'uploads', 'biblioteca')
     os.makedirs(pasta, exist_ok=True)
     return pasta
 
 
 CAMINHO_BIBLIOTECA_DB = _resolver_caminho_biblioteca_db()
 PASTA_UPLOADS = _resolver_pasta_uploads()
+
+
+def nome_arquivo(caminho: Optional[str]) -> str:
+    """Nome do arquivo a partir de caminhos do Windows ou do Linux (registros legados)."""
+    return re.split(r'[/\\]', caminho or '')[-1]
+
+
+def caminho_upload(nome: str) -> str:
+    """Caminho absoluto de um arquivo da Biblioteca na pasta de uploads."""
+    return os.path.join(PASTA_UPLOADS, nome_arquivo(nome))
+
+
+def _normalizar(caminho: Optional[str]) -> Optional[str]:
+    """None mantém o valor atual; '' remove; demais valores viram só o nome do arquivo."""
+    return caminho if not caminho else nome_arquivo(caminho)
 
 
 class BibliotecaRepository(BaseRepository):
@@ -176,27 +189,7 @@ class BibliotecaRepository(BaseRepository):
         conn = self.get_connection()
         try:
             row = conn.execute('SELECT * FROM cards WHERE id = ?', (card_id,)).fetchone()
-            if not row:
-                return None
-            card = dict(row)
-
-            # Migração lazy: BLOB legado → arquivo em disco
-            if not card.get('imagem_path') and card.get('imagem'):
-                try:
-                    from utils.image_utils import processar_e_salvar_imagem
-                    caminho = processar_e_salvar_imagem(card['imagem'], PASTA_UPLOADS)
-                    path_relativo = os.path.relpath(caminho, start=os.path.dirname(os.path.abspath(CAMINHO_BIBLIOTECA_DB)))
-                    conn.execute(
-                        'UPDATE cards SET imagem_path = ?, imagem = NULL, imagem_tipo = NULL WHERE id = ?',
-                        (path_relativo, card_id)
-                    )
-                    conn.commit()
-                    card['imagem_path'] = path_relativo
-                    card['imagem'] = None
-                except Exception as e:
-                    log_error(e, 'db.biblioteca_repo', f'migração lazy BLOB card id={card_id}')
-
-            return card
+            return dict(row) if row else None
         finally:
             conn.close()
 
@@ -231,8 +224,8 @@ class BibliotecaRepository(BaseRepository):
                        (titulo, conteudo, imagem_path, criado_por, criado_em,
                         pdf_path, pdf_nome_original)
                    VALUES (?, ?, ?, ?, ?, ?, ?)''',
-                (titulo.strip(), conteudo, imagem_path, criado_por, agora,
-                 pdf_path, pdf_nome_original),
+                (titulo.strip(), conteudo, _normalizar(imagem_path) or None, criado_por, agora,
+                 _normalizar(pdf_path) or None, pdf_nome_original),
             )
             conn.commit()
             return cur.lastrowid
@@ -251,6 +244,8 @@ class BibliotecaRepository(BaseRepository):
         pdf_path: Optional[str] = None,
         pdf_nome_original: Optional[str] = None,
     ) -> bool:
+        imagem_path = _normalizar(imagem_path)
+        pdf_path = _normalizar(pdf_path)
         agora = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         conn = self.get_connection()
         try:
@@ -265,15 +260,16 @@ class BibliotecaRepository(BaseRepository):
             novo_conteudo = conteudo if conteudo is not None else row['conteudo']
 
             if imagem_path is not None:
-                if row['imagem_path']:
-                    _remover_arquivo(row['imagem_path'], CAMINHO_BIBLIOTECA_DB)
+                if row['imagem_path'] and row['imagem_path'] != imagem_path:
+                    _remover_arquivo(row['imagem_path'])
+                imagem_path = imagem_path or None
             else:
                 imagem_path = row['imagem_path']
 
             if pdf_path is not None:
                 # pdf_path='' significa remoção explícita
-                if row['pdf_path']:
-                    _remover_arquivo(row['pdf_path'], CAMINHO_BIBLIOTECA_DB)
+                if row['pdf_path'] and row['pdf_path'] != pdf_path:
+                    _remover_arquivo(row['pdf_path'])
                 novo_pdf_path = pdf_path or None
                 novo_pdf_nome = pdf_nome_original or None
             else:
@@ -305,9 +301,9 @@ class BibliotecaRepository(BaseRepository):
             ).fetchone()
             if row:
                 if row['imagem_path']:
-                    _remover_arquivo(row['imagem_path'], CAMINHO_BIBLIOTECA_DB)
+                    _remover_arquivo(row['imagem_path'])
                 if row['pdf_path']:
-                    _remover_arquivo(row['pdf_path'], CAMINHO_BIBLIOTECA_DB)
+                    _remover_arquivo(row['pdf_path'])
 
             conn.execute('DELETE FROM cards WHERE id = ?', (card_id,))
             conn.commit()
@@ -336,15 +332,11 @@ class BibliotecaRepository(BaseRepository):
             conn.close()
 
 
-def _remover_arquivo(imagem_path: str, caminho_db: str) -> None:
-    """Remove arquivo de imagem do disco, silenciosamente se não encontrado."""
+def _remover_arquivo(nome: str) -> None:
+    """Remove arquivo da pasta de uploads, silenciosamente se não encontrado."""
     try:
-        if os.path.isabs(imagem_path):
-            caminho_abs = imagem_path
-        else:
-            pasta_db = os.path.dirname(os.path.abspath(caminho_db))
-            caminho_abs = os.path.join(pasta_db, imagem_path)
+        caminho_abs = caminho_upload(nome)
         if os.path.isfile(caminho_abs):
             os.remove(caminho_abs)
     except Exception as e:
-        log_error(e, 'db.biblioteca_repo', f'remover_arquivo: {imagem_path}')
+        log_error(e, 'db.biblioteca_repo', f'remover_arquivo: {nome}')

@@ -12,6 +12,9 @@ email_config.env
 dados_comunicacoes/
 db/comunicacoes/
 
+# Arquivos enviados pela Biblioteca (imagens e PDFs)
+uploads/
+
 # Arquivos do nicegui
 .nicegui/
 

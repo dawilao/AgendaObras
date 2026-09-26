@@ -11,7 +11,7 @@ from typing import List, Optional
 
 from nicegui import ui
 
-from db.biblioteca_repo import BibliotecaRepository, PASTA_UPLOADS
+from db.biblioteca_repo import BibliotecaRepository, PASTA_UPLOADS, nome_arquivo
 from services.auth_service import obter_usuario_logado
 from core.config import BIBLIOTECA_PDF_MAX_MB
 from core.error_logger import log_error
@@ -20,11 +20,6 @@ from utils.pdf_utils import processar_e_salvar_pdf
 
 
 # ── Helpers de módulo ─────────────────────────────────────────────────────────
-
-def _nome_arquivo(imagem_path: str) -> str:
-    """Extrai apenas o nome do arquivo do caminho absoluto ou relativo."""
-    return os.path.basename(imagem_path)
-
 
 def _formatar_datetime(valor: Optional[str]) -> str:
     if not valor:
@@ -618,14 +613,14 @@ class BibliotecaPage:
 
             if card.get('imagem_path'):
                 ui.html(
-                    f'<img src="/uploads/{_nome_arquivo(card["imagem_path"])}"'
+                    f'<img src="/uploads/{nome_arquivo(card["imagem_path"])}"'
                     ' style="max-width:100%; border-radius:6px; margin-top:12px;" />',
                     sanitize=False,
                 )
 
             if card.get('pdf_path'):
-                nome_pdf = card.get('pdf_nome_original') or os.path.basename(card['pdf_path'])
-                nome_arquivo_pdf = os.path.basename(card['pdf_path'])
+                nome_pdf = card.get('pdf_nome_original') or nome_arquivo(card['pdf_path'])
+                nome_arquivo_pdf = nome_arquivo(card['pdf_path'])
                 url_pdf = f'/uploads/{nome_arquivo_pdf}'
                 with ui.row().classes('items-center gap-2').style(
                     'margin-top: 14px; padding: 10px 12px; background: #fef2f2; '
@@ -761,7 +756,7 @@ class BibliotecaPage:
                 )
                 pdf_existente_row.set_visibility(bool(is_edit and card and card.get('pdf_path')))
                 if is_edit and card and card.get('pdf_path'):
-                    nome_pdf_atual = card.get('pdf_nome_original') or os.path.basename(card['pdf_path'])
+                    nome_pdf_atual = card.get('pdf_nome_original') or nome_arquivo(card['pdf_path'])
                     with pdf_existente_row:
                         ui.icon('picture_as_pdf').style('color: #dc2626; font-size: 20px; flex-shrink: 0;')
                         ui.label(nome_pdf_atual).style(
@@ -786,7 +781,7 @@ class BibliotecaPage:
                         return
                     try:
                         caminho = processar_e_salvar_pdf(dados, PASTA_UPLOADS)
-                        self._pdf_path = caminho
+                        self._pdf_path = nome_arquivo(caminho)
                         self._pdf_nome_original = e.file.name
                         tamanho_mb = len(dados) / 1024 / 1024
                         pdf_existente_row.set_visibility(False)
@@ -817,7 +812,7 @@ class BibliotecaPage:
                 )
                 img_existente_row.set_visibility(bool(is_edit and card and card.get('imagem_path')))
                 if is_edit and card and card.get('imagem_path'):
-                    nome_img_atual = os.path.basename(card['imagem_path'])
+                    nome_img_atual = nome_arquivo(card['imagem_path'])
                     url_img_atual = f'/uploads/{nome_img_atual}'
                     with img_existente_row:
                         ui.icon('image').style('color: #dc2626; font-size: 20px; flex-shrink: 0;')
@@ -841,7 +836,7 @@ class BibliotecaPage:
                     dados_originais = await e.file.read()
                     try:
                         caminho = processar_e_salvar_imagem(dados_originais, PASTA_UPLOADS)
-                        self._imagem_path = caminho
+                        self._imagem_path = nome_arquivo(caminho)
                         tamanho_kb = os.path.getsize(caminho) // 1024
                         original_kb = len(dados_originais) // 1024
                         img_existente_row.set_visibility(False)

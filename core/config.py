@@ -3,6 +3,7 @@ Configurações do Sistema AgendaObras
 """
 import json
 import os
+import time
 from typing import Optional, Dict, List
 from dataclasses import dataclass, field
 from core.error_logger import log_error
@@ -85,6 +86,21 @@ GITHUB_REPO_URL = "https://github.com/dawilao/AgendaObras"
 VERSION_JSON_URL = "https://raw.githubusercontent.com/dawilao/AgendaObras/main/version.json"
 
 BIBLIOTECA_PDF_MAX_MB = int(_obter_variavel_ambiente('BIBLIOTECA_PDF_MAX_MB', '5'))
+
+APP_TIMEZONE_PADRAO = 'America/Sao_Paulo'
+
+
+def aplicar_fuso_horario(tz: Optional[str] = None) -> str:
+    """Fixa o fuso do processo para que datetime.now()/date.today() usem a hora de Brasília.
+
+    Servidores Linux costumam rodar em UTC. No Windows time.tzset não existe e o
+    fuso da máquina é mantido. Pode ser trocado com AGENDA_OBRAS_TIMEZONE.
+    """
+    tz = tz or _obter_variavel_ambiente('AGENDA_OBRAS_TIMEZONE', APP_TIMEZONE_PADRAO)
+    if hasattr(time, 'tzset'):
+        os.environ['TZ'] = tz
+        time.tzset()
+    return tz
 
 
 @dataclass

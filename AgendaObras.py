@@ -18,6 +18,10 @@ if getattr(sys, 'frozen', False):
 else:
     application_path = os.path.dirname(os.path.abspath(__file__))
 
+# Fixa o fuso de Brasília antes de subir serviços (servidores Linux rodam em UTC)
+from core.config import aplicar_fuso_horario
+aplicar_fuso_horario()
+
 # Services
 from services.auth_service import configurar_middleware, verificar_autenticacao, fazer_logout
 
