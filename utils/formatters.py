@@ -93,6 +93,20 @@ def formatar_data_exibicao(data_str) -> str:
     return data_str
 
 
+def tempo_desde_data(data_str, hoje: datetime.date = None) -> str:
+    """Distância entre a data e hoje em dias ('há 27 dias', 'hoje', 'em 3 dias'). Retorna '' se inválida."""
+    try:
+        data = datetime.date.fromisoformat(converter_data_para_iso(data_str))
+    except ValueError:
+        return ''
+    dias = ((hoje or datetime.date.today()) - data).days
+    if dias == 0:
+        return 'hoje'
+    n = abs(dias)
+    texto = f'{n} dia{"s" if n != 1 else ""}'
+    return f'há {texto}' if dias > 0 else f'em {texto}'
+
+
 # ========== Formatadores de Valor ========== #
 
 def formatar_valor(valor: float) -> str:

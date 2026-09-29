@@ -5,7 +5,7 @@ Mixin com o componente de card de obra (aba Informações, Checklist, Financeiro
 from nicegui import ui
 import datetime
 from core.error_logger import log_error
-from utils.formatters import formatar_data_exibicao, calcular_valor_parceiro
+from utils.formatters import formatar_data_exibicao, calcular_valor_parceiro, tempo_desde_data
 from db.auth_repo import AuthDatabase
 
 TAREFA_SOLICITACAO_ACESSO = 'SOLICITAÇÃO DE ACESSO'
@@ -82,7 +82,8 @@ class ObraCardMixin:
                             if obra.get('data_inicio') and obra.get('data_inicio').strip():
                                 data_formatada = formatar_data_exibicao(obra['data_inicio'])
                                 if data_formatada:
-                                    ui.label(f'Início: {data_formatada}').style('color: #666; font-size: 13px;')
+                                    contador = tempo_desde_data(obra['data_inicio'])
+                                    ui.label(f'Início: {data_formatada}' + (f' · {contador}' if contador else '')).style('color: #666; font-size: 13px;')
                                 else:
                                     ui.label(f'Data de início não definida').style('color: #999; font-style: italic; font-size: 13px;')
                             else:
