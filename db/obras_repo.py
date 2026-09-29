@@ -10,6 +10,7 @@ from typing import List, Dict, Optional
 from core.migrations import run_migrations
 from core.error_logger import log_error
 from db.connection import BaseRepository, CAMINHO_DB
+from utils.formatters import calcular_split_medicao
 
 
 class ObrasRepository(BaseRepository):
@@ -303,7 +304,7 @@ class ObrasRepository(BaseRepository):
             nome_contrato = (nome_contrato or '').strip()
             cliente = (cliente or '').strip()
 
-            cursor.execute('SELECT data_inicio, data_assinatura, data_aio, data_acionamento FROM obras WHERE id = ?', (obra_id,))
+            cursor.execute('SELECT data_inicio, data_assinatura, data_aio, data_acionamento, valor_percentual FROM obras WHERE id = ?', (obra_id,))
             obra_antiga = cursor.fetchone()
 
             contrato_ic = kwargs.get('contrato_ic', None) or None
@@ -340,6 +341,9 @@ class ObrasRepository(BaseRepository):
             ''', (nome_contrato, cliente, valor_contrato, data_inicio, status,
                   contrato_ic, pedido_sap, prefixo_agencia, servico, valor_parceiro, valor_percentual, valor_aditivo, total_obra,
                   mes_execucao, ano_execucao, data_conclusao, data_assinatura, data_aio, data_acionamento, obra_id))
+
+            if obra_antiga and round(float(obra_antiga['valor_percentual'] or 0), 2) != (valor_percentual or 0):
+                self._recalcular_split_medicoes(cursor, obra_id, valor_percentual or 0)
 
             requer_confirmacao = False
             if obra_antiga:
@@ -381,10 +385,22 @@ class ObrasRepository(BaseRepository):
                     pass
             raise
 
+    @staticmethod
+    def _recalcular_split_medicoes(cursor, obra_id: int, percentual: float):
+        """Reaplica o % Parceiro atual às medições já registradas da obra."""
+        cursor.execute('SELECT id, valor_medido FROM medicoes_valores WHERE obra_id = ?', (obra_id,))
+        for med in cursor.fetchall():
+            parceiro, empresa = calcular_split_medicao(med['valor_medido'], percentual)
+            cursor.execute(
+                'UPDATE medicoes_valores SET valor_parceiro_medicao = ?, valor_empresa_medicao = ? WHERE id = ?',
+                (parceiro, empresa, med['id']))
+
     def deletar_obra(self, obra_id: int):
         try:
             conn = self.get_connection()
             cursor = conn.cursor()
+            cursor.execute('DELETE FROM medicoes_valores WHERE obra_id = ?', (obra_id,))
+            cursor.execute('DELETE FROM medicoes_obra WHERE obra_id = ?', (obra_id,))
             cursor.execute('DELETE FROM obra_checklist WHERE obra_id = ?', (obra_id,))
             cursor.execute('DELETE FROM obras WHERE id = ?', (obra_id,))
             conn.commit()

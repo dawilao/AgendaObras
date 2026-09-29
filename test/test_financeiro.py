@@ -45,24 +45,29 @@ class TestCalculosFinanceiros(unittest.TestCase):
         conn.close()
         return ids
 
+    def _confirmar(self, tarefa_id, valor):
+        """Simula o pop-up: registra o valor e conclui a confirmação."""
+        self.db.registrar_valor_medido(tarefa_id, valor)
+        self.db.marcar_item_checklist(tarefa_id, True)
+
     # ------------------------------------------------------------------ soma
     def test_soma_zero_sem_medicoes(self):
         soma = self.db.obter_soma_valores_medidos(self.obra_id)
         self.assertEqual(soma, 0.0)
 
     def test_soma_uma_medicao(self):
-        self.db.registrar_valor_medido(self._ids_confirmacao[0], 50_000.0)
+        self._confirmar(self._ids_confirmacao[0], 50_000.0)
         self.assertAlmostEqual(self.db.obter_soma_valores_medidos(self.obra_id), 50_000.0)
 
     def test_soma_duas_medicoes(self):
-        self.db.registrar_valor_medido(self._ids_confirmacao[0], 50_000.0)
-        self.db.registrar_valor_medido(self._ids_confirmacao[1], 30_000.0)
+        self._confirmar(self._ids_confirmacao[0], 50_000.0)
+        self._confirmar(self._ids_confirmacao[1], 30_000.0)
         self.assertAlmostEqual(self.db.obter_soma_valores_medidos(self.obra_id), 80_000.0)
 
     def test_soma_substitui_valor_anterior_mesma_tarefa(self):
         """Registrar duas vezes a mesma tarefa substitui, não acumula."""
-        self.db.registrar_valor_medido(self._ids_confirmacao[0], 50_000.0)
-        self.db.registrar_valor_medido(self._ids_confirmacao[0], 70_000.0)
+        self._confirmar(self._ids_confirmacao[0], 50_000.0)
+        self._confirmar(self._ids_confirmacao[0], 70_000.0)
         self.assertAlmostEqual(self.db.obter_soma_valores_medidos(self.obra_id), 70_000.0)
 
     # ------------------------------------------------- percentual faturado
@@ -71,16 +76,16 @@ class TestCalculosFinanceiros(unittest.TestCase):
 
     def test_percentual_50_porcento(self):
         # total_obra = 200_000, medição = 100_000 → 50 %
-        self.db.registrar_valor_medido(self._ids_confirmacao[0], 100_000.0)
+        self._confirmar(self._ids_confirmacao[0], 100_000.0)
         self.assertAlmostEqual(self.db.calcular_percentual_faturado(self.obra_id), 50.0)
 
     def test_percentual_100_porcento(self):
-        self.db.registrar_valor_medido(self._ids_confirmacao[0], 200_000.0)
+        self._confirmar(self._ids_confirmacao[0], 200_000.0)
         self.assertAlmostEqual(self.db.calcular_percentual_faturado(self.obra_id), 100.0)
 
     def test_percentual_acima_de_100(self):
         """Medições acima do total_obra devem resultar em percentual > 100."""
-        self.db.registrar_valor_medido(self._ids_confirmacao[0], 250_000.0)
+        self._confirmar(self._ids_confirmacao[0], 250_000.0)
         pct = self.db.calcular_percentual_faturado(self.obra_id)
         self.assertGreater(pct, 100.0)
         self.assertAlmostEqual(pct, 125.0)
@@ -102,23 +107,23 @@ class TestCalculosFinanceiros(unittest.TestCase):
         self.assertAlmostEqual(saldo, 200_000.0)
 
     def test_saldo_positivo(self):
-        self.db.registrar_valor_medido(self._ids_confirmacao[0], 80_000.0)
+        self._confirmar(self._ids_confirmacao[0], 80_000.0)
         saldo = self.db.calcular_total_a_medir(self.obra_id)
         self.assertAlmostEqual(saldo, 120_000.0)
 
     def test_saldo_zero_exatamente_faturado(self):
-        self.db.registrar_valor_medido(self._ids_confirmacao[0], 200_000.0)
+        self._confirmar(self._ids_confirmacao[0], 200_000.0)
         self.assertAlmostEqual(self.db.calcular_total_a_medir(self.obra_id), 0.0)
 
     def test_saldo_negativo_acima_do_orcamento(self):
         """Quando medições ultrapassam total_obra o saldo deve ser negativo."""
-        self.db.registrar_valor_medido(self._ids_confirmacao[0], 250_000.0)
+        self._confirmar(self._ids_confirmacao[0], 250_000.0)
         saldo = self.db.calcular_total_a_medir(self.obra_id)
         self.assertLess(saldo, 0.0)
         self.assertAlmostEqual(saldo, -50_000.0)
 
     def test_arredondamento_duas_casas(self):
-        self.db.registrar_valor_medido(self._ids_confirmacao[0], 33_333.333)
+        self._confirmar(self._ids_confirmacao[0], 33_333.333)
         saldo = self.db.calcular_total_a_medir(self.obra_id)
         # Verifica que o resultado tem no máximo 2 casas decimais
         self.assertEqual(saldo, round(saldo, 2))

@@ -8,6 +8,7 @@ from typing import List, Dict, Optional
 
 from core.error_logger import log_error
 from db.connection import BaseRepository, CAMINHO_DB
+from utils.formatters import competencias_medicoes
 
 
 class ChecklistRepository(BaseRepository):
@@ -170,14 +171,21 @@ class ChecklistRepository(BaseRepository):
     def marcar_item_checklist(self, item_id: int, concluido: bool) -> Optional[str]:
         """Marca/desmarca um item do checklist. Retorna trigger_ui se houver."""
         conn = self.get_connection()
-        cursor = conn.cursor()
+        try:
+            trigger_ui = self._aplicar_marcacao_item(conn.cursor(), item_id, concluido)
+            conn.commit()
+            return trigger_ui
+        finally:
+            conn.close()
 
+    def _aplicar_marcacao_item(self, cursor, item_id: int, concluido: bool) -> Optional[str]:
+        """Aplica a marcação no cursor informado, sem commit (permite compor transações)."""
         trigger_ui = None
 
         cursor.execute('''
-            SELECT ct.trigger_ui, oc.obra_id, oc.descricao
+            SELECT ct.trigger_ui, oc.obra_id, oc.descricao, oc.concluido
             FROM obra_checklist oc
-            JOIN checklist_templates ct ON oc.template_id = ct.id
+            LEFT JOIN checklist_templates ct ON oc.template_id = ct.id
             WHERE oc.id = ?
         ''', (item_id,))
         row_info = cursor.fetchone()
@@ -185,6 +193,10 @@ class ChecklistRepository(BaseRepository):
         item_descricao = (row_info['descricao'] or '') if row_info else ''
         if row_info and row_info['trigger_ui']:
             trigger_ui = row_info['trigger_ui']
+
+        # Desmarcar o que já está desmarcado (ex.: cancelar um pop-up) não tem efeito colateral
+        if not concluido and row_info and not row_info['concluido']:
+            return None
 
         if concluido:
             data_conclusao = datetime.datetime.now().strftime('%Y-%m-%d')
@@ -224,6 +236,11 @@ class ChecklistRepository(BaseRepository):
                         data_conclusao = NULL
                     WHERE id = ?
                 ''', (obra_id,))
+
+            # Desmarcar a confirmação exclui o valor medido do Financeiro
+            if item_descricao.startswith('CONFIRMAÇÃO DE MEDIÇÃO'):
+                cursor.execute('DELETE FROM medicoes_valores WHERE tarefa_id = ?', (item_id,))
+                cursor.execute('UPDATE obra_checklist SET valor_medido = NULL WHERE id = ?', (item_id,))
 
             cursor.execute('''
                 UPDATE obra_checklist
@@ -273,8 +290,6 @@ class ChecklistRepository(BaseRepository):
                                 WHERE obra_id = ? AND base_calculo = ? AND concluido = 0
                             ''', (obra_id, base_cascata))
 
-        conn.commit()
-        conn.close()
         return trigger_ui
 
     def obter_tarefas_atrasadas(self) -> List[Dict]:
@@ -321,12 +336,15 @@ class ChecklistRepository(BaseRepository):
             proximo_mes = ((proximo_mes - 1) % 12) + 1
             return proximo_ano, proximo_mes
 
-        cursor.execute('''
-            DELETE FROM obra_checklist
-            WHERE obra_id = ?
+        filtro_legado = '''
+            obra_id = ?
               AND descricao IN ('MEDIÇÃO', 'CONFIRMAÇÃO DE MEDIÇÃO')
               AND (mes_referencia IS NULL OR mes_referencia = '')
-        ''', (obra_id,))
+        '''
+        cursor.execute(
+            f'DELETE FROM medicoes_valores WHERE tarefa_id IN (SELECT id FROM obra_checklist WHERE {filtro_legado})',
+            (obra_id,))
+        cursor.execute(f'DELETE FROM obra_checklist WHERE {filtro_legado}', (obra_id,))
 
         cursor.execute('SELECT data_inicio FROM obras WHERE id = ?', (obra_id,))
         row = cursor.fetchone()
@@ -360,10 +378,7 @@ class ChecklistRepository(BaseRepository):
 
         desejados = set()
 
-        for i in range(quantidade):
-            m = data_inicio.month + i
-            y = data_inicio.year + (m - 1) // 12
-            m = ((m - 1) % 12) + 1
+        for y, m in competencias_medicoes(data_inicio, quantidade):
             mes_referencia = _mes_ref(y, m)
             desejados.add(mes_referencia)
 
@@ -425,6 +440,7 @@ class ChecklistRepository(BaseRepository):
             if any(t['concluido'] for t in tarefas_mes):
                 continue
             for tarefa in tarefas_mes:
+                cursor.execute('DELETE FROM medicoes_valores WHERE tarefa_id = ?', (tarefa['id'],))
                 cursor.execute('DELETE FROM obra_checklist WHERE id = ?', (tarefa['id'],))
 
         now = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
@@ -493,7 +509,9 @@ class ChecklistRepository(BaseRepository):
     # ========== FASE 3 - VALORES MEDIDOS ========== #
 
     def registrar_valor_medido(self, tarefa_id: int, valor_medido: float, mes_referencia: str = None,
-                               valor_parceiro_medicao: float = 0.0, valor_empresa_medicao: float = 0.0) -> bool:
+                               valor_parceiro_medicao: float = 0.0, valor_empresa_medicao: float = 0.0,
+                               concluir: bool = False) -> bool:
+        """Grava o valor da medição; com concluir=True também conclui a tarefa na mesma transação."""
         try:
             conn = self.get_connection()
             cursor = conn.cursor()
@@ -514,6 +532,8 @@ class ChecklistRepository(BaseRepository):
                 VALUES (?, ?, ?, ?, ?, ?, ?)
             ''', (obra_id, tarefa_id, valor_medido, data_medicao, mes_ref,
                   valor_parceiro_medicao, valor_empresa_medicao))
+            if concluir:
+                self._aplicar_marcacao_item(cursor, tarefa_id, True)
             conn.commit()
             conn.close()
             return True
@@ -530,7 +550,13 @@ class ChecklistRepository(BaseRepository):
         try:
             conn = self.get_connection()
             cursor = conn.cursor()
-            cursor.execute('SELECT COALESCE(SUM(valor_medido), 0) as total FROM medicoes_valores WHERE obra_id = ?', (obra_id,))
+            # Só confirmações concluídas contam no Financeiro (ignora valores legados de tarefas desmarcadas/removidas)
+            cursor.execute('''
+                SELECT COALESCE(SUM(mv.valor_medido), 0) as total
+                FROM medicoes_valores mv
+                JOIN obra_checklist oc ON mv.tarefa_id = oc.id
+                WHERE mv.obra_id = ? AND oc.concluido = 1
+            ''', (obra_id,))
             result = cursor.fetchone()
             conn.close()
             return float(result['total']) if result else 0.0
@@ -687,8 +713,8 @@ class ChecklistRepository(BaseRepository):
                     mv.valor_parceiro_medicao, mv.valor_empresa_medicao,
                     oc.descricao as tarefa_descricao, oc.data_conclusao
                 FROM medicoes_valores mv
-                LEFT JOIN obra_checklist oc ON mv.tarefa_id = oc.id
-                WHERE mv.obra_id = ?
+                JOIN obra_checklist oc ON mv.tarefa_id = oc.id
+                WHERE mv.obra_id = ? AND oc.concluido = 1
                 ORDER BY mv.mes_referencia DESC, mv.data_medicao DESC
             ''', (obra_id,))
             medicoes = [dict(row) for row in cursor.fetchall()]

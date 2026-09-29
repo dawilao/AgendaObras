@@ -62,6 +62,7 @@ class TestMedicaoValorZero(unittest.TestCase):
 
     def test_zero_aparece_no_historico(self):
         self.db.registrar_valor_medido(self._ids[0], 0.0)
+        self.db.marcar_item_checklist(self._ids[0], True)
         historico = self.db.obter_valores_medicoes(self.obra_id)
         valores = [m['valor_medido'] for m in historico]
         self.assertIn(0.0, valores)
@@ -72,8 +73,9 @@ class TestMedicaoValorZero(unittest.TestCase):
         self.assertEqual(self.db.obter_soma_valores_medidos(self.obra_id), 0.0)
 
     def test_soma_mista_zero_e_positivo(self):
-        self.db.registrar_valor_medido(self._ids[0], 0.0)
-        self.db.registrar_valor_medido(self._ids[1], 50_000.0)
+        for tarefa_id, valor in ((self._ids[0], 0.0), (self._ids[1], 50_000.0)):
+            self.db.registrar_valor_medido(tarefa_id, valor)
+            self.db.marcar_item_checklist(tarefa_id, True)
         self.assertAlmostEqual(self.db.obter_soma_valores_medidos(self.obra_id), 50_000.0)
 
     # -------------------------------------------- percentual / progressbar
