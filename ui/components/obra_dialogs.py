@@ -11,12 +11,17 @@ from utils.formatters import (
     STATUS_OPTIONS,
     STATUS_VISUAL_EDICAO_OPTIONS,
     rotulo_alterar_medicoes,
+    calcular_split_medicao,
+    calcular_valor_parceiro,
+    previa_medicoes,
+    resumo_valor_medicao,
     status_edicao_para_banco,
     datas_iguais_normalizadas,
     converter_data_para_iso,
     formatar_data_exibicao,
 )
 from services.obra_service import status_visual_para_edicao, obra_tem_medicoes_concluidas
+from services.medicao_service import eh_tarefa_medicao, PREFIXO_CONFIRMACAO
 
 TAREFA_SOLICITACAO_ACESSO = 'SOLICITAÇÃO DE ACESSO'
 TAREFA_RENOVACAO_ACESSO = 'RENOVAÇÃO DE SOLICITAÇÃO DE ACESSO'
@@ -74,8 +79,8 @@ class ObraDialogsMixin:
 
             def _atualizar_parceiro_nova():
                 vc = float(valor_input.value or 0)
-                pct = float(valor_percentual_input.value or 0)
-                valor_parceiro_input.set_value(round(vc * pct / 100, 2))
+                total = vc + float(valor_aditivo_input.value or 0)
+                valor_parceiro_input.set_value(calcular_valor_parceiro(vc, total, valor_percentual_input.value))
 
             with ui.row().classes('w-full gap-2 flex-wrap'):
                 valor_aditivo_input = ui.number(
@@ -96,7 +101,7 @@ class ObraDialogsMixin:
 
             valor_input.on_value_change(lambda e: [_atualizar_parceiro_nova(), _atualizar_total_obra_nova()])
             valor_percentual_input.on_value_change(lambda e: _atualizar_parceiro_nova())
-            valor_aditivo_input.on_value_change(lambda e: _atualizar_total_obra_nova())
+            valor_aditivo_input.on_value_change(lambda e: [_atualizar_parceiro_nova(), _atualizar_total_obra_nova()])
 
             ui.separator().classes('my-4')
 
@@ -335,10 +340,8 @@ class ObraDialogsMixin:
 
             def _atualizar_parceiro_edicao():
                 vc = float(valor_input.value or 0)
-                pct = float(valor_percentual_input.value or 0)
-                valor_parceiro_input.set_value(round(vc * pct / 100, 2))
-
-            _atualizar_parceiro_edicao()
+                total = vc + float(valor_aditivo_input.value or 0)
+                valor_parceiro_input.set_value(calcular_valor_parceiro(vc, total, valor_percentual_input.value))
 
             # Backward-compat: se valor_aditivo não está salvo mas total_obra difere do contrato,
             # infere o aditivo do gap para preservar o valor financeiro existente
@@ -366,7 +369,8 @@ class ObraDialogsMixin:
 
             valor_input.on_value_change(lambda e: [_atualizar_parceiro_edicao(), _atualizar_total_obra_edicao()])
             valor_percentual_input.on_value_change(lambda e: _atualizar_parceiro_edicao())
-            valor_aditivo_input.on_value_change(lambda e: _atualizar_total_obra_edicao())
+            valor_aditivo_input.on_value_change(lambda e: [_atualizar_parceiro_edicao(), _atualizar_total_obra_edicao()])
+            _atualizar_parceiro_edicao()
             _atualizar_total_obra_edicao()
 
             ui.separator().classes('my-4')
@@ -447,22 +451,6 @@ class ObraDialogsMixin:
 
             checklist_container = ui.column().classes('w-full gap-2')
 
-            medicoes_registro = self.db.obter_medicoes_obra(obra_id)
-            quantidade_medicoes = int((medicoes_registro or {}).get('quantidade') or 0)
-            data_inicio_preenchida = bool((obra.get('data_inicio') or '').strip())
-            botao_medicoes = None
-
-            with ui.row().classes('w-full items-center justify-between gap-2'):
-                ui.label('Configuração de medições').style('font-size: 12px; color: #666; font-weight: bold;')
-                if data_inicio_preenchida:
-                    botao_medicoes = ui.button(
-                        rotulo_alterar_medicoes(quantidade_medicoes, True),
-                        on_click=lambda: self.abrir_dialog_selecionar_medicoes(obra_id, atualizar_checklist, botao_medicoes)
-                    )
-                    botao_medicoes.props('flat color=primary size=sm')
-                else:
-                    ui.button('Alterar medições', on_click=None).props('flat color=primary size=sm disable').tooltip('Preencha a Data de início da obra para configurar as medições.')
-
             autosave_em_execucao = {'ativo': False}
             estado_dialog = {'modificado': False}
 
@@ -522,8 +510,7 @@ class ObraDialogsMixin:
                 checklist_container.clear()
                 checklist_atualizado = self.db.obter_checklist(obra_id)
                 with checklist_container:
-                    for it in checklist_atualizado:
-                        self.criar_item_checklist_editavel(it, checklist_estados, obra_id, atualizar_checklist, checklist_completo=checklist_atualizado)
+                    self.renderizar_checklist_editavel(checklist_atualizado, checklist_estados, obra_id, atualizar_checklist)
 
                 obra_atualizada = self.db.obter_obra(obra_id) or obra
                 novo_status = status_visual_para_edicao(obra_atualizada, checklist_atualizado)
@@ -534,8 +521,7 @@ class ObraDialogsMixin:
                     pass
 
             with checklist_container:
-                for item in checklist:
-                    self.criar_item_checklist_editavel(item, checklist_estados, obra_id, atualizar_checklist, checklist_completo=checklist)
+                self.renderizar_checklist_editavel(checklist, checklist_estados, obra_id, atualizar_checklist)
 
             ui.separator()
 
@@ -571,8 +557,8 @@ class ObraDialogsMixin:
                 """Valida mudança de % Parceiro antes de salvar.
 
                 Se o % mudou e já existem medições concluídas com valor inserido,
-                exibe um diálogo de confirmação informando que os valores já
-                registrados não serão recalculados automaticamente.
+                exibe um diálogo de confirmação informando que os valores de
+                parceiro/empresa dessas medições serão recalculados ao salvar.
                 """
                 novo_pct = float(valor_percentual_input.value or 0)
                 pct_mudou = abs(novo_pct - pct_parceiro_original) > 0.001
@@ -599,10 +585,9 @@ class ObraDialogsMixin:
                                     'font-weight: bold; color: #e65100; margin-bottom: 6px;'
                                 )
                                 ui.label(
-                                    'Os valores de parceiro/empresa já registrados nas medições '
-                                    'concluídas continuarão com a % anterior. '
-                                    'Para que o programa considere a % atual, desmarque a tarefa '
-                                    'de medição e conclua-a novamente.'
+                                    'Ao salvar, os valores de parceiro/empresa dessas medições '
+                                    'serão recalculados automaticamente com a nova %. '
+                                    'O valor medido de cada medição não muda.'
                                 ).style('font-size: 13px; color: #5d4037; line-height: 1.5;')
 
                             ui.label('Deseja mesmo alterar o % Parceiro?').style(
@@ -613,10 +598,8 @@ class ObraDialogsMixin:
                             with ui.row().classes('w-full justify-end gap-2'):
                                 def _cancelar_mudanca_pct():
                                     dialog_confirma_pct.close()
-                                    # Reverte o campo % Parceiro ao valor original salvo
+                                    # Reverte o % Parceiro (o on_value_change recalcula o Valor Parceiro)
                                     valor_percentual_input.set_value(pct_parceiro_original)
-                                    vc = float(valor_input.value or 0)
-                                    valor_parceiro_input.set_value(round(vc * pct_parceiro_original / 100, 2))
 
                                 ui.button('Cancelar', on_click=_cancelar_mudanca_pct).props('flat')
 
@@ -659,6 +642,49 @@ class ObraDialogsMixin:
 
         if datas_pendentes:
             self.abrir_dialog_datas_criticas_consolidado(obra_id, datas_pendentes, atualizar_checklist)
+
+    def renderizar_checklist_editavel(self, checklist, checklist_estados, obra_id: int, atualizar_checklist_fn=None):
+        """Tarefas do checklist seguidas do campo Medições (MEDIÇÃO + CONFIRMAÇÃO de cada mês)."""
+        tarefas_medicao = []
+        for item in checklist:
+            if eh_tarefa_medicao(item.get('descricao')):
+                tarefas_medicao.append(item)
+            else:
+                self.criar_item_checklist_editavel(item, checklist_estados, obra_id, atualizar_checklist_fn, checklist_completo=checklist)
+
+        # Por competência, com a MEDIÇÃO antes da CONFIRMAÇÃO do mesmo mês
+        tarefas_medicao.sort(key=lambda t: (
+            t.get('mes_referencia') or '',
+            (t.get('descricao') or '').startswith(PREFIXO_CONFIRMACAO),
+        ))
+        confirmacoes = [t for t in tarefas_medicao if (t.get('descricao') or '').startswith(PREFIXO_CONFIRMACAO)]
+        titulo = 'Medições'
+        if confirmacoes:
+            titulo += f' ({sum(1 for t in confirmacoes if t["concluido"])}/{len(confirmacoes)} confirmadas)'
+
+        obra = self.db.obter_obra(obra_id) or {}
+        quantidade = int((self.db.obter_medicoes_obra(obra_id) or {}).get('quantidade') or 0)
+
+        with ui.expansion(titulo, icon='straighten', value=True).classes('w-full').style(
+            'border: 1px solid #e8eaf0; border-radius: 12px; margin-top: 8px;'
+        ):
+            with ui.row().classes('w-full items-center justify-between gap-2'):
+                ui.label('Configuração de medições').style('font-size: 12px; color: #666; font-weight: bold;')
+                if (obra.get('data_inicio') or '').strip():
+                    botao_medicoes = ui.button(
+                        rotulo_alterar_medicoes(quantidade, True),
+                        on_click=lambda: self.abrir_dialog_selecionar_medicoes(obra_id, atualizar_checklist_fn, botao_medicoes)
+                    )
+                    botao_medicoes.props('flat color=primary size=sm')
+                else:
+                    ui.button('Alterar medições', on_click=None).props('flat color=primary size=sm disable').tooltip('Preencha a Data de início da obra para configurar as medições.')
+
+            if not tarefas_medicao:
+                ui.label('Nenhuma medição configurada.').style('font-size: 12px; color: #999;')
+
+            with ui.column().classes('w-full gap-2'):
+                for item in tarefas_medicao:
+                    self.criar_item_checklist_editavel(item, checklist_estados, obra_id, atualizar_checklist_fn, checklist_completo=checklist)
 
     def criar_item_checklist_editavel(self, item, checklist_estados, obra_id: int,
                                       atualizar_checklist_fn=None, checklist_completo=None):
@@ -721,7 +747,15 @@ class ObraDialogsMixin:
 
                     if not bloqueado:
                         def on_change(e, item_id=item['id'], item_descricao=item.get('descricao', '')):
+                            if getattr(e.sender, '_ignorar_mudanca', False):
+                                return
                             novo_valor = bool(e.value)
+
+                            if not novo_valor and item_descricao.startswith('CONFIRMAÇÃO DE MEDIÇÃO'):
+                                tarefa_db = self.db.obter_item_checklist(item_id) or {}
+                                if tarefa_db.get('concluido'):
+                                    self.confirmar_desmarcar_medicao(obra_id, tarefa_db, e.sender, atualizar_checklist_fn)
+                                    return
 
                             if novo_valor and item_descricao == TAREFA_SOLICITACAO_ACESSO:
                                 try:
@@ -803,6 +837,19 @@ class ObraDialogsMixin:
                             data_concl_fmt = formatar_data_exibicao(item['data_conclusao'])
                             if data_concl_fmt:
                                 ui.label(f'✓ Concluída em {data_concl_fmt}').style('font-size: 10px; color: #999; font-style: italic;')
+
+                        if item['concluido'] and (item.get('descricao') or '').startswith(PREFIXO_CONFIRMACAO):
+                            with ui.row().classes('items-center gap-2').style('margin-top: 6px; flex-wrap: wrap;'):
+                                ui.label(f'Valor: {self.helper.formatar_valor(item.get("valor_medido") or 0)}').style(
+                                    'font-size: 12px; font-weight: 600; color: #1565c0;'
+                                    'background: #e3f2fd; padding: 3px 10px;'
+                                    'border-radius: 12px; border: 1px solid #90caf9;'
+                                )
+                                ui.button('Editar valor', icon='edit',
+                                          on_click=lambda _item=item: self.abrir_dialog_valor_medicao(
+                                              obra_id, _item['id'], None, atualizar_checklist_fn, editar=True
+                                          )).props('outline dense color=primary size=sm')
+
 
                         if item['concluido'] and item.get('descricao') == TAREFA_SOLICITACAO_ACESSO:
                             renovacao_concluida = any(
@@ -1016,7 +1063,7 @@ class ObraDialogsMixin:
             self.notificar(f'❌ Erro ao salvar: {str(e)}', tipo='negative')
 
     def abrir_dialog_selecionar_medicoes(self, obra_id: int, atualizar_checklist_fn=None, botao_medicoes=None):
-        """Abre diálogo para o usuário selecionar quantas medições deseja (0-6)."""
+        """Abre diálogo para o usuário selecionar quantas medições deseja (1-12)."""
         obra = self.db.obter_obra(obra_id)
         if not obra:
             self.notificar('Obra não encontrada.', tipo='warning')
@@ -1034,8 +1081,16 @@ class ObraDialogsMixin:
             ui.label('🔧 Configurar Medições').style('font-size: 18px; font-weight: bold; margin-bottom: 8px;')
             ui.label('Selecione a quantidade de medições para este card (máx 12).').style('color: #666; margin-bottom: 10px;')
 
-            options = [str(i) for i in range(0, 13)]
-            select_input = ui.select(options, label='Medições', value=str(valor_atual or 0)).classes('w-full').props('outlined')
+            options = [str(i) for i in range(1, 13)]
+            select_input = ui.select(options, label='Medições', value=str(valor_atual) if valor_atual else None).classes('w-full').props('outlined')
+            label_previa = ui.label('').style('font-size: 12px; color: #555; margin-top: 6px;')
+
+            def _atualizar_previa():
+                qtd_escolhida = int(select_input.value or 0)
+                label_previa.set_text(previa_medicoes(data_inicio_obra, qtd_escolhida, int(valor_atual or 0)))
+
+            select_input.on_value_change(lambda e: _atualizar_previa())
+            _atualizar_previa()
 
             ui.separator()
 
@@ -1188,77 +1243,186 @@ class ObraDialogsMixin:
 
         dialog_finalizacao.open()
 
-    def abrir_dialog_valor_medicao(self, obra_id: int, item_id: int, checkbox_obj, atualizar_checklist_fn):
-        """Abre o diálogo para inserir o valor faturado no mês e só então conclui a tarefa."""
-        obra_data = self.db.obter_obra(obra_id)
-        pct_parceiro = float((obra_data or {}).get('valor_percentual') or 0)
+    def confirmar_desmarcar_medicao(self, obra_id: int, tarefa: dict, checkbox_obj, atualizar_checklist_fn):
+        """Pede confirmação antes de desmarcar uma confirmação de medição (o valor sai do Financeiro)."""
+        competencia = (tarefa.get('descricao') or '').rsplit(' ', 1)[-1]
+        valor = self.helper.formatar_valor(tarefa.get('valor_medido') or 0)
+
+        with ui.dialog() as dialog, ui.card().classes('responsive-dialog-sm').style('padding: 20px;'):
+            ui.label('⚠️ Desmarcar confirmação de medição').style('font-size: 18px; font-weight: bold; margin-bottom: 8px;')
+            ui.label(
+                f'Isso removerá {valor} da medição {competencia} do Financeiro. '
+                'Para apenas corrigir o valor, use "Editar valor".'
+            ).style('color: #555;')
+
+            def manter():
+                # Volta o checkbox (quando houver) sem disparar o fluxo de conclusão novamente
+                if checkbox_obj is not None:
+                    checkbox_obj._ignorar_mudanca = True
+                    try:
+                        checkbox_obj.set_value(True)
+                    finally:
+                        checkbox_obj._ignorar_mudanca = False
+                dialog.close()
+
+            def remover():
+                try:
+                    self.db.marcar_item_checklist(tarefa['id'], False)
+                    dialog.close()
+                    self.notificar(f'Medição {competencia} removida do Financeiro.', tipo='warning')
+                    if atualizar_checklist_fn:
+                        ui.timer(0.05, atualizar_checklist_fn, once=True)
+                    else:
+                        self.renderizar_obras()
+                except Exception as e:
+                    log_error(e, 'agenda_obras', f'Desmarcar confirmação de medição - item {tarefa.get("id")}')
+                    self.notificar(f'❌ Erro ao desmarcar medição: {e}', tipo='negative')
+
+            with ui.row().classes('w-full justify-end gap-2').style('margin-top: 12px;'):
+                ui.button('Manter', on_click=manter).props('flat')
+                ui.button('Remover do Financeiro', on_click=remover).props('color=negative')
+
+        dialog.props('persistent')
+        dialog.open()
+
+    def abrir_dialog_valor_medicao(self, obra_id: int, item_id: int, checkbox_obj, atualizar_checklist_fn,
+                                   editar: bool = False):
+        """Abre o diálogo do valor da medição.
+
+        Ao concluir a confirmação, grava o valor e conclui a tarefa. Com editar=True,
+        apenas corrige o valor de uma confirmação já concluída.
+        """
+        obra_data = self.db.obter_obra(obra_id) or {}
+        pct_parceiro = float(obra_data.get('valor_percentual') or 0)
+        total_obra = float(obra_data.get('total_obra') or 0)
+        tarefa = self.db.obter_item_checklist(item_id) or {}
+        valor_atual = tarefa.get('valor_medido') if editar else None
+        competencia = (tarefa.get('descricao') or '').rsplit(' ', 1)[-1]
+        # Na edição, o valor atual desta medição não conta como "já medido"
+        ja_medido = self.db.obter_soma_valores_medidos(obra_id) - float(valor_atual or 0)
+        saldo_inicial = resumo_valor_medicao(total_obra, ja_medido, 0)['saldo']
+        fmt = self.helper.formatar_valor
 
         with ui.dialog() as dialog, ui.card().classes('responsive-dialog-sm').style('padding: 20px; min-width: 300px;'):
-            ui.label('💰 Valor da Medição').style('font-size: 18px; font-weight: bold; margin-bottom: 8px;')
+            titulo = 'Editar Valor da Medição' if editar else 'Confirmação de Medição'
+            ui.label(f'💰 {titulo} — {competencia}').style('font-size: 18px; font-weight: bold; margin-bottom: 8px;')
             ui.label('Informe o valor faturado referente a esta medição.').style('color: #666; margin-bottom: 10px;')
 
-            valor_input = ui.number('Valor Medido (R$)', format='%.2f', min=0).classes('w-full').props('outlined autofocus')
+            if total_obra > 0:
+                with ui.card().classes('w-full').style('background: #f5f5f5; padding: 10px; margin-bottom: 10px; box-shadow: none;'):
+                    ui.label(f'Total da Obra: {fmt(total_obra)}').style('font-size: 12px; color: #555;')
+                    ui.label(f'Já medido: {fmt(ja_medido)}').style('font-size: 12px; color: #1976d2;')
+                    ui.label(f'Saldo: {fmt(saldo_inicial)}').style(
+                        f'font-size: 12px; font-weight: bold; color: {"#d32f2f" if saldo_inicial < 0 else "#2e7d32"};'
+                    )
 
+            valor_input = ui.number('Valor Medido (R$)', value=valor_atual, format='%.2f', min=0).classes('w-full').props('outlined autofocus')
+
+            if total_obra > 0 and saldo_inicial > 0:
+                ui.button('Usar saldo restante', icon='account_balance_wallet',
+                          on_click=lambda: valor_input.set_value(saldo_inicial)).props('outline color=primary size=sm').style('margin-top: 6px;').tooltip(f'Preenche o valor com {fmt(saldo_inicial)}')
+
+            label_resumo = ui.label('').style('font-size: 12px; color: #555; margin-top: 4px;')
+            label_excede = ui.label('').style('font-size: 12px; color: #d32f2f; font-weight: bold;')
+
+            label_split = None
             if pct_parceiro > 0:
                 ui.label(f'% Parceiro cadastrado: {pct_parceiro:.2f}%').style(
                     'font-size: 12px; color: #666; margin-top: 4px;'
                 )
                 label_split = ui.label('').style('font-size: 12px; color: #7b1fa2; font-weight: bold;')
 
-                def _atualizar_split():
-                    val = float(valor_input.value or 0)
-                    vp = round(val * pct_parceiro / 100, 2)
-                    ve = round(val - vp, 2)
-                    label_split.set_text(
-                        f'Parceiro: {self.helper.formatar_valor(vp)} | Empresa: {self.helper.formatar_valor(ve)}'
+            def _atualizar_resumo():
+                resumo = resumo_valor_medicao(total_obra, ja_medido, valor_input.value)
+                if total_obra > 0:
+                    label_resumo.set_text(
+                        f'Após esta medição: {resumo["pct_apos"]:.2f}% medido · saldo {fmt(resumo["saldo_apos"])}'
                     )
+                    label_excede.set_text(
+                        f'⚠️ Ultrapassa o saldo da obra em {fmt(-resumo["saldo_apos"])}' if resumo['excede'] else ''
+                    )
+                if label_split is not None:
+                    vp, ve = calcular_split_medicao(valor_input.value, pct_parceiro)
+                    label_split.set_text(f'Parceiro: {fmt(vp)} | Empresa: {fmt(ve)}')
 
-                valor_input.on_value_change(lambda e: _atualizar_split())
+            valor_input.on_value_change(lambda e: _atualizar_resumo())
+            _atualizar_resumo()
 
             ui.separator().classes('my-4')
 
-            def confirmar():
+            def _salvar(valor: float):
                 try:
-                    valor = float(valor_input.value) if valor_input.value is not None else 0.0
-                    if valor < 0:
-                        self.notificar('O valor medido não pode ser negativo!', tipo='warning')
-                        return
-
-                    vp = round(valor * pct_parceiro / 100, 2)
-                    ve = round(valor - vp, 2)
+                    vp, ve = calcular_split_medicao(valor, pct_parceiro)
+                    # Valor e conclusão da tarefa na mesma transação (na edição a tarefa já está concluída)
                     sucesso = self.db.registrar_valor_medido(
                         item_id, valor,
                         valor_parceiro_medicao=vp,
-                        valor_empresa_medicao=ve
+                        valor_empresa_medicao=ve,
+                        concluir=not editar,
                     )
                     if not sucesso:
                         self.notificar('❌ Erro ao salvar o valor da medição no banco.', tipo='negative')
                         return
 
-                    self.db.marcar_item_checklist(item_id, True)
-
                     dialog.close()
 
                     self.notificar('✅ Valor medido salvo com sucesso!', tipo='positive')
 
-                    if self.db.verificar_todas_medicoes_concluidas(obra_id):
-                        ui.timer(0.1, lambda: self.abrir_dialog_conclusao_obra(obra_id, atualizar_checklist_fn, getattr(self, '_observacoes_input_atual', None)), once=True)
+                    # O checklist do dialog marca a obra como modificada e re-renderiza os cards ao fechar
+                    if atualizar_checklist_fn:
+                        ui.timer(0.05, atualizar_checklist_fn, once=True)
                     else:
-                        if atualizar_checklist_fn:
-                            ui.timer(0.05, atualizar_checklist_fn, once=True)
                         self.renderizar_obras()
+
+                    if not editar and self.db.verificar_todas_medicoes_concluidas(obra_id):
+                        ui.timer(0.1, lambda: self.abrir_dialog_conclusao_obra(obra_id, atualizar_checklist_fn, getattr(self, '_observacoes_input_atual', None)), once=True)
 
                 except Exception as e:
                     log_error(e, 'agenda_obras', f'Confirmar valor de medição - item {item_id}')
                     self.notificar(f'❌ Erro ao processar medição: {e}', tipo='negative')
 
+            def confirmar():
+                valor = float(valor_input.value) if valor_input.value is not None else 0.0
+                if valor < 0:
+                    self.notificar('O valor medido não pode ser negativo!', tipo='warning')
+                    return
+
+                resumo = resumo_valor_medicao(total_obra, ja_medido, valor)
+                if not resumo['excede']:
+                    _salvar(valor)
+                    return
+
+                with ui.dialog() as dialog_excede, ui.card().classes('responsive-dialog-sm').style('padding: 20px;'):
+                    ui.label('⚠️ Valor acima do saldo').style('font-size: 18px; font-weight: bold; margin-bottom: 8px;')
+                    ui.label(
+                        f'Com este valor, a obra fica {fmt(-resumo["saldo_apos"])} acima do total '
+                        f'({resumo["pct_apos"]:.2f}% medido). Deseja confirmar mesmo assim?'
+                    ).style('color: #555;')
+                    with ui.row().classes('w-full justify-end gap-2').style('margin-top: 12px;'):
+                        ui.button('Voltar', on_click=dialog_excede.close).props('flat')
+
+                        def _confirmar_excedente():
+                            dialog_excede.close()
+                            _salvar(valor)
+
+                        ui.button('Confirmar mesmo assim', on_click=_confirmar_excedente).props('color=warning')
+                dialog_excede.props('persistent')
+                dialog_excede.open()
+
+            valor_input.on('keydown.enter', confirmar)
+
             def cancelar():
-                checkbox_obj.set_value(False)
+                # A tarefa ainda não foi concluída no banco, então desmarcar aqui não tem efeito colateral
+                if checkbox_obj is not None and not editar:
+                    checkbox_obj.set_value(False)
                 dialog.close()
 
             with ui.row().classes('w-full justify-end gap-2'):
                 ui.button('Cancelar', on_click=cancelar).props('flat color=red')
-                ui.button('Confirmar', on_click=confirmar).props('color=positive')
+                ui.button('Salvar' if editar else 'Confirmar', on_click=confirmar).props('color=positive')
+
+        # Persistente: clicar fora/ESC não fecha, evitando checkbox marcado sem valor salvo
+        dialog.props('persistent')
 
         dialog.open()
 
@@ -1463,8 +1627,7 @@ class ObraDialogsMixin:
                     checklist_container.clear()
                     checklist = self.db.obter_checklist(obra_id)
                     with checklist_container:
-                        for item in checklist:
-                            self.criar_item_checklist_editavel(item, checklist_estados, obra_id, atualizar_checklist_local, checklist_completo=checklist)
+                        self.renderizar_checklist_editavel(checklist, checklist_estados, obra_id, atualizar_checklist_local)
 
                     try:
                         obra_atual = self.db.obter_obra(obra_id) or obra_antiga or {}

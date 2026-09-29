@@ -5,7 +5,7 @@ Mixin com o componente de card de obra (aba Informações, Checklist, Financeiro
 from nicegui import ui
 import datetime
 from core.error_logger import log_error
-from utils.formatters import formatar_data_exibicao
+from utils.formatters import formatar_data_exibicao, calcular_valor_parceiro
 from db.auth_repo import AuthDatabase
 
 TAREFA_SOLICITACAO_ACESSO = 'SOLICITAÇÃO DE ACESSO'
@@ -242,8 +242,8 @@ class ObraCardMixin:
                             financeiro_carregado['ok'] = True
                             spinner_lazy.set_visibility(False)
 
-                            soma_medidos = self.db.obter_soma_valores_medidos(obra_id)
                             historico = self.db.obter_valores_medicoes(obra_id)
+                            soma_medidos = round(sum((m.get('valor_medido') or 0) for m in historico), 2)
                             soma_parceiro_medido = round(
                                 sum((m.get('valor_parceiro_medicao') or 0) for m in historico), 2
                             )
@@ -276,7 +276,7 @@ class ObraCardMixin:
                                 )
 
                                 if valor_percentual > 0:
-                                    total_parceiro = round(valor_contrato * valor_percentual / 100, 2)
+                                    total_parceiro = calcular_valor_parceiro(valor_contrato, total_obra, valor_percentual)
                                     total_empresa = round(total_obra - total_parceiro, 2)
                                     ui.separator().classes('my-1')
                                     ui.label(
