@@ -664,20 +664,38 @@ class ObraDialogsMixin:
 
         obra = self.db.obter_obra(obra_id) or {}
         quantidade = int((self.db.obter_medicoes_obra(obra_id) or {}).get('quantidade') or 0)
+        is_admin = self._obter_permissoes_usuario()['is_admin']
 
         with ui.expansion(titulo, icon='straighten', value=True).classes('w-full').style(
             'border: 1px solid #e8eaf0; border-radius: 12px; margin-top: 8px;'
         ):
             with ui.row().classes('w-full items-center justify-between gap-2'):
                 ui.label('Configuração de medições').style('font-size: 12px; color: #666; font-weight: bold;')
-                if (obra.get('data_inicio') or '').strip():
-                    botao_medicoes = ui.button(
-                        rotulo_alterar_medicoes(quantidade, True),
-                        on_click=lambda: self.abrir_dialog_selecionar_medicoes(obra_id, atualizar_checklist_fn, botao_medicoes)
-                    )
-                    botao_medicoes.props('flat color=primary size=sm')
-                else:
-                    ui.button('Alterar medições', on_click=None).props('flat color=primary size=sm disable').tooltip('Preencha a Data de início da obra para configurar as medições.')
+                with ui.row().classes('items-center gap-1'):
+                    if is_admin and (tarefas_medicao or quantidade):
+                        obra_encerrada = (
+                            obra.get('status') == 'Concluída'
+                            or bool((obra.get('status_conclusao_obra') or '').strip())
+                        )
+                        botao_resetar = ui.button(
+                            'Resetar medições',
+                            on_click=None if obra_encerrada else (
+                                lambda: self.confirmar_reset_medicoes(obra_id, len(confirmacoes), atualizar_checklist_fn)
+                            ),
+                        ).props('flat color=negative size=sm' + (' disable' if obra_encerrada else ''))
+                        if obra_encerrada:
+                            botao_resetar.tooltip('Obra concluída ou em conclusão: reset indisponível.')
+                        else:
+                            botao_resetar.tooltip('Apaga todas as medições e valores deste card (somente administradores).')
+
+                    if (obra.get('data_inicio') or '').strip():
+                        botao_medicoes = ui.button(
+                            rotulo_alterar_medicoes(quantidade, True),
+                            on_click=lambda: self.abrir_dialog_selecionar_medicoes(obra_id, atualizar_checklist_fn, botao_medicoes)
+                        )
+                        botao_medicoes.props('flat color=primary size=sm')
+                    else:
+                        ui.button('Alterar medições', on_click=None).props('flat color=primary size=sm disable').tooltip('Preencha a Data de início da obra para configurar as medições.')
 
             if not tarefas_medicao:
                 ui.label('Nenhuma medição configurada.').style('font-size: 12px; color: #999;')
@@ -1133,6 +1151,51 @@ class ObraDialogsMixin:
                 ui.button('Confirmar', on_click=confirmar).props('color=primary')
 
         dialog_med.open()
+
+    def confirmar_reset_medicoes(self, obra_id: int, total_confirmacoes: int, atualizar_checklist_fn=None):
+        """Confirmação (somente ADM) antes de apagar todas as medições e valores do card."""
+        if not self._obter_permissoes_usuario()['is_admin']:
+            self.notificar('⛔ Apenas administradores podem resetar medições.', tipo='negative')
+            return
+
+        with ui.dialog() as dialog_reset, ui.card().classes('responsive-dialog-sm').style('padding: 20px;'):
+            ui.label('⚠️ Resetar medições').style('font-size: 18px; font-weight: bold; margin-bottom: 8px;')
+            ui.label(
+                f'Serão apagadas todas as tarefas de MEDIÇÃO e CONFIRMAÇÃO ({total_confirmacoes} competência(s)), '
+                'todos os valores medidos registrados no Financeiro, e a quantidade de medições volta a zero.'
+            ).style('color: #555; line-height: 1.5;')
+            ui.label('Essa ação não pode ser desfeita.').style('font-weight: bold; color: #c62828; margin-top: 6px;')
+            ui.separator()
+
+            with ui.row().classes('w-full justify-end gap-2'):
+                ui.button('Cancelar', on_click=dialog_reset.close).props('flat')
+
+                def executar_reset():
+                    try:
+                        resultado = self.db.resetar_medicoes_obra(obra_id)
+                    except ValueError as e:
+                        dialog_reset.close()
+                        self.notificar(f'⚠️ {e}.', tipo='warning')
+                        return
+                    except Exception as e:
+                        log_error(e, 'agenda_obras', f'Resetar medições - ID: {obra_id}')
+                        self.notificar(f'❌ Erro ao resetar medições: {e}', tipo='negative')
+                        return
+
+                    dialog_reset.close()
+                    if atualizar_checklist_fn:
+                        ui.timer(0.05, atualizar_checklist_fn, once=True)
+                    else:
+                        ui.timer(0.05, self.renderizar_obras, once=True)
+                    self.notificar(
+                        f'✅ Medições resetadas: {resultado["tarefas"]} tarefa(s) e '
+                        f'{resultado["valores"]} valor(es) removidos.',
+                        tipo='positive',
+                    )
+
+                ui.button('Resetar', on_click=executar_reset).props('color=negative')
+
+        dialog_reset.open()
 
     def abrir_dialog_conclusao_obra(self, obra_id: int, atualizar_checklist_fn=None, observacoes_input_ref=None):
         """Abre diálogo para confirmar a conclusão da obra após finalizar as medições."""

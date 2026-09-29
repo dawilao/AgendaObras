@@ -471,6 +471,45 @@ class ChecklistRepository(BaseRepository):
         conn.close()
         return True
 
+    def resetar_medicoes_obra(self, obra_id: int) -> Dict:
+        """Remove tarefas MEDIÇÃO/CONFIRMAÇÃO, todos os valores medidos e zera a quantidade.
+
+        Mesma regra do resetar_medicoes.py: só vale para obra não concluída e não em conclusão.
+        """
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        try:
+            cursor.execute('SELECT status, status_conclusao_obra FROM obras WHERE id = ?', (obra_id,))
+            obra = cursor.fetchone()
+            if not obra:
+                raise ValueError('Obra não encontrada')
+            if obra['status'] == 'Concluída' or (obra['status_conclusao_obra'] or '').strip():
+                raise ValueError('Obra concluída ou em conclusão não pode ter as medições resetadas')
+
+            filtro_tarefas = "obra_id = ? AND (descricao LIKE 'MEDIÇÃO %' OR descricao LIKE 'CONFIRMAÇÃO DE MEDIÇÃO %')"
+            cursor.execute(f'DELETE FROM obra_checklist WHERE {filtro_tarefas}', (obra_id,))
+            tarefas = cursor.rowcount
+            cursor.execute('DELETE FROM medicoes_valores WHERE obra_id = ?', (obra_id,))
+            valores = cursor.rowcount
+
+            agora = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            cursor.execute('''
+                INSERT INTO medicoes_obra (obra_id, quantidade, data_ultima_alteracao, atualizado_em)
+                VALUES (?, 0, ?, ?)
+                ON CONFLICT(obra_id) DO UPDATE SET
+                    quantidade = 0,
+                    data_ultima_alteracao = excluded.data_ultima_alteracao,
+                    atualizado_em = excluded.atualizado_em
+            ''', (obra_id, agora, agora))
+
+            conn.commit()
+            return {'tarefas': tarefas, 'valores': valores}
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+
     def verificar_todas_medicoes_concluidas(self, obra_id: int) -> bool:
         conn = self.get_connection()
         cursor = conn.cursor()
