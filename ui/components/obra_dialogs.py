@@ -693,9 +693,9 @@ class ObraDialogsMixin:
                             rotulo_alterar_medicoes(quantidade, True),
                             on_click=lambda: self.abrir_dialog_selecionar_medicoes(obra_id, atualizar_checklist_fn, botao_medicoes)
                         )
-                        botao_medicoes.props('flat color=primary size=sm')
+                        botao_medicoes.props('outline color=primary size=sm icon=edit_calendar')
                     else:
-                        ui.button('Alterar medições', on_click=None).props('flat color=primary size=sm disable').tooltip('Preencha a Data de início da obra para configurar as medições.')
+                        ui.button('Alterar medições', on_click=None).props('outline color=primary size=sm icon=edit_calendar disable').tooltip('Preencha a Data de início da obra para configurar as medições.')
 
             if not tarefas_medicao:
                 ui.label('Nenhuma medição configurada.').style('font-size: 12px; color: #999;')
