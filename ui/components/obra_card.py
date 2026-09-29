@@ -42,9 +42,13 @@ class ObraCardMixin:
             with ui.row().classes('w-full items-center justify-between cursor-pointer').on(
                 'click', lambda o=obra: self.abrir_detalhes_obra(o['id'])
             ).style('padding: 4px 4px 0;'):
-                ui.label(obra['nome_contrato']).style(
-                    'font-size: 15px; font-weight: 700; color: #1a2332; line-height: 1.3;'
-                )
+                with ui.column().classes('gap-0').style('flex: 1; min-width: 0;'):
+                    ui.label(obra['nome_contrato']).style(
+                        'font-size: 15px; font-weight: 700; color: #1a2332; line-height: 1.3;'
+                    )
+                    contrato_ic = (obra.get('contrato_ic') or '').strip()
+                    if contrato_ic:
+                        ui.label(f'IC {contrato_ic}').style('font-size: 12px; color: #666; margin-top: 2px;')
                 with ui.element('div').style(
                     f'background: {cor}22; border-radius: 20px; '
                     'padding: 3px 8px; display: flex; align-items: center; gap: 4px; flex-shrink: 0;'

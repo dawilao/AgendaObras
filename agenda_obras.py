@@ -784,7 +784,7 @@ class AgendaObras(ObraCardMixin, ObraDialogsMixin, AdminDialogsMixin, ObraKanban
                 'width: 100%; box-sizing: border-box;'
             ):
                 self.input_pesquisa = (
-                    ui.input(placeholder='Pesquisar obras...')
+                    ui.input(placeholder='Pesquisar obras ou IC...')
                     .props('outlined dense dark clearable')
                     .classes('w-full')
                 )

@@ -260,9 +260,9 @@ class ObrasRepository(BaseRepository):
         if filtro:
             cursor.execute('''
                 SELECT * FROM obras
-                WHERE nome_contrato LIKE ? OR cliente LIKE ? OR status LIKE ?
+                WHERE nome_contrato LIKE ? OR cliente LIKE ? OR status LIKE ? OR contrato_ic LIKE ?
                 ORDER BY data_inicio DESC
-            ''', (f'%{filtro}%', f'%{filtro}%', f'%{filtro}%'))
+            ''', (f'%{filtro}%', f'%{filtro}%', f'%{filtro}%', f'%{filtro}%'))
         else:
             cursor.execute('SELECT * FROM obras ORDER BY data_inicio DESC')
         obras = [dict(row) for row in cursor.fetchall()]
@@ -279,8 +279,8 @@ class ObrasRepository(BaseRepository):
         params = list(contratos_limpos)
         query = f'SELECT * FROM obras WHERE TRIM(cliente) IN ({placeholders})'
         if filtro:
-            query += ' AND (nome_contrato LIKE ? OR cliente LIKE ? OR status LIKE ?)'
-            params.extend([f'%{filtro}%', f'%{filtro}%', f'%{filtro}%'])
+            query += ' AND (nome_contrato LIKE ? OR cliente LIKE ? OR status LIKE ? OR contrato_ic LIKE ?)'
+            params.extend([f'%{filtro}%', f'%{filtro}%', f'%{filtro}%', f'%{filtro}%'])
         query += ' ORDER BY data_inicio DESC'
         cursor.execute(query, params)
         obras = [dict(row) for row in cursor.fetchall()]

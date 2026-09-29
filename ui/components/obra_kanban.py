@@ -42,6 +42,9 @@ class ObraKanbanMixin:
             f'border-left: 3px solid {cor};'
         ).on('click', lambda o=obra: self.abrir_detalhes_obra(o['id'])):
             ui.label(obra['nome_contrato']).classes('ao-kanban-card-title')
+            contrato_ic = (obra.get('contrato_ic') or '').strip()
+            if contrato_ic:
+                ui.label(f'IC {contrato_ic}').classes('ao-kanban-card-cliente')
             ui.label(obra['cliente']).classes('ao-kanban-card-cliente')
             with ui.row().classes('w-full items-center gap-2').style('margin-top: 6px;'):
                 ui.linear_progress(progresso / 100, show_value=False).style('height: 6px; flex: 1;')
