@@ -100,6 +100,66 @@ def available_works(user_id):
         return [{'id': str(row[0]), 'name': row[1]} for row in rows]
 
 
+def works_overview(user_id):
+    """Obras autorizadas com o que as pastas de Comunicações mostram: IC, contrato, UF e a
+    situação calculada como na aba Obras. Lido uma vez por montagem da lista, não a cada operação."""
+    from db.connection import CAMINHO_DB
+    from utils.obras_helper import ObrasHelper
+    from .encaixe import uf_contrato
+    allowed = {w['id'] for w in available_works(user_id)}
+    path = Path(CAMINHO_DB).resolve()
+    if not allowed or not path.exists():
+        return {}
+    # Uma leitura para todas as obras (a situação só usa concluído/prazo de cada tarefa):
+    # no servidor, uma consulta por obra segurava a tela de todos os usuários.
+    with closing(sqlite3.connect(path.as_uri() + '?mode=ro', uri=True)) as db:
+        db.row_factory = sqlite3.Row
+        obras = [dict(r) for r in db.execute('SELECT * FROM obras') if str(r['id']) in allowed]
+        checklists = {}
+        for item in db.execute('SELECT * FROM obra_checklist ORDER BY id'):
+            if str(item['obra_id']) in allowed:
+                checklists.setdefault(item['obra_id'], []).append(dict(item))
+    overview = {}
+    for obra in obras:
+        try:
+            _, _, status = ObrasHelper.obter_status_visual(obra, checklists.get(obra['id'], []))
+        except Exception:
+            status = None
+        if status == 'Erro':  # Falha ao calcular: situação a conferir, nunca "Em Andamento" por padrão.
+            status = None
+        uf, contrato = uf_contrato(obra.get('cliente'))
+        overview[str(obra['id'])] = {'ic': (obra.get('contrato_ic') or '').strip(), 'cliente': obra.get('cliente') or '',
+                                     'uf': uf, 'contrato': contrato, 'status_texto': status,
+                                     'bucket': ObrasHelper.obter_bucket_grade(status) if status else None}
+    return overview
+
+
+def confirmable_works(user_id):
+    """Obras em que o usuário dá o OK do coordenador (confirma o vínculo), numa leitura só:
+    admin: todas as autorizadas; demais: o responsável definido na obra ou, sem responsável
+    definido, quem está vinculado ao contrato (mesma regra de ObrasHelper.resolver_coordenador)."""
+    uid = owner_id(user_id)
+    allowed = {w['id'] for w in available_works(uid)}
+    if not allowed:
+        return set()
+    from db.auth_repo import AuthDatabase
+    if (AuthDatabase().obter_usuario_por_id(uid) or {}).get('is_admin'):
+        return allowed
+    from db.connection import CAMINHO_DB
+    from db.contratos_repo import ContratosDatabase
+    path = Path(CAMINHO_DB).resolve()
+    with closing(sqlite3.connect(path.as_uri() + '?mode=ro', uri=True)) as db:
+        db.row_factory = sqlite3.Row
+        rows = [r for r in db.execute('SELECT * FROM obras') if str(r['id']) in allowed]
+    contracts = {(c or '').strip() for c in ContratosDatabase().listar_contratos_usuario(uid)}
+    found = set()
+    for row in rows:
+        coordenador = row['coordenador_id'] if 'coordenador_id' in row.keys() else None
+        if (str(coordenador) == uid) if coordenador else (row['cliente'] or '').strip() in contracts:
+            found.add(str(row['id']))
+    return found
+
+
 def authorize_user(expected_id):
     from nicegui import app
     from services.auth_service import verificar_autenticacao

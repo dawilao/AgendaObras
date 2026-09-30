@@ -31,7 +31,32 @@ def team_pending(rows, shared, allowed_ids):
     return found
 
 
-def publish_message(private, shared, mid, actor, allowed_ids):
+def adopt_team_links(private, shared, actor, allowed_ids):
+    """OK de um coordenador vale para a equipe: mensagens sem decisão na caixa pessoal cuja cópia
+    já foi publicada por decisão humana (não automática) numa obra permitida passam a Vinculadas.
+    Não cria cópia no histórico; só registra a auditoria. Retorna quantas foram adotadas."""
+    if shared is None:
+        return 0
+    published = shared.human_published_works()
+    if not published:
+        return 0
+    # Obra precisa estar na identificação desta caixa (review exige o cadastro).
+    allowed = set(allowed_ids) & {w['id'] for w in private.works()}
+    adopted = 0
+    for row in private.conversation_rows():
+        # Sem decisão humana: pendentes e também as vinculadas só pela identificação automática.
+        if row['reviewed'] or row['status'] not in UNDECIDED + ('vinculado',):
+            continue
+        wid = published.get(publication_fingerprint(row, row['fingerprint_attachments']))
+        if not wid or wid not in allowed:
+            continue
+        private.review(row['id'], wid, actor, 'Vínculo confirmado pela equipe (OK de coordenador).')
+        publish_message(private, shared, row['id'], actor, allowed)
+        adopted += 1
+    return adopted
+
+
+def publish_message(private, shared, mid, actor, allowed_ids, *, automatic=False):
     message, _, _, sources = private.detail(mid)
     wid = message['obra_id']
     if message['status'] != 'vinculado' or not wid or wid not in set(allowed_ids):
@@ -56,7 +81,7 @@ def publish_message(private, shared, mid, actor, allowed_ids):
                 VALUES(?,?,?,?,?,?,?,?,?,'vinculado',?,NULL,?,?,1)''',
                 (fingerprint, message['message_id'], message['subject'], message['sender'],
                  message['recipients'], message['cc'], message['sent_date'], message['body'], message['refs'],
-                 wid, 'Publicado após conferência do usuário.', now()))
+                 wid, 'Publicado por identificação automática segura.' if automatic else 'Publicado após conferência do usuário.', now()))
             public_id = cur.lastrowid
             # Mesmo arquivo em disco: o histórico compartilhado referencia o sha256, sem nova cópia.
             # Anexo na lixeira segue na lixeira; publicar não o traz de volta.
@@ -65,7 +90,7 @@ def publish_message(private, shared, mid, actor, allowed_ids):
                            [(public_id, a['name'], a['mime'], a['sha256'], a['size'],
                              a['trash_id'], a['trashed_at'], a['purged_at']) for a in attachments])
             db.execute('INSERT INTO audit(message_id,at,actor,action,details) VALUES(?,?,?,?,?)',
-                       (public_id, now(), actor, 'publicacao', 'Mensagem e anexos confirmados para a obra.'))
+                       (public_id, now(), actor, 'publicacao_automatica' if automatic else 'publicacao', message['reason'] if automatic else 'Mensagem e anexos confirmados para a obra.'))
         else:
             public_id = existing['id']
     with private.connect() as db:
@@ -73,3 +98,43 @@ def publish_message(private, shared, mid, actor, allowed_ids):
                    (mid, now(), actor, 'publicacao' if fresh else 'ja_publicada',
                     f'Registro compartilhado {public_id}; obra {wid}.'))
     return public_id, fresh
+
+
+def publish_identified(private, shared, actor, allowed_ids):
+    """Executado após importação/revisão; não remove a cópia pessoal nem aprova seguros."""
+    from .matching import ics
+    result = dict(new=0, existing=0, pending=0)
+    if shared is None:
+        return result
+    allowed = set(allowed_ids)
+    private.reprocess(actor)
+    published = shared.published_works()
+    works = {w['id']: w for w in private.works()}
+    for row in private.conversation_rows():
+        wid = row['obra_id']
+        if row['status'] != 'vinculado' or wid not in allowed:
+            continue
+        # Mesmo com IC no assunto, divergência no corpo exige conferência.
+        body_codes = ics(row['body'])
+        if not row['reviewed'] and body_codes and body_codes != {works[wid]['ic']}:
+            reason = 'IC divergente no corpo; conferir antes de compartilhar.'
+        else:
+            fingerprint = publication_fingerprint(row, row['fingerprint_attachments'])
+            if published.get(fingerprint) == wid:
+                result['existing'] += 1
+                continue
+            try:
+                _, fresh = publish_message(private, shared, row['id'], actor, allowed, automatic=True)
+                published[fingerprint] = wid
+                result['new' if fresh else 'existing'] += 1
+                continue
+            except ValueError as exc:
+                reason = str(exc)
+        # Mantém a mensagem na fila; a próxima sincronização não libera o conflito.
+        with private.connect() as db:
+            db.execute("UPDATE messages SET status='conflito',obra_id=NULL,suggestion=?,reason=?,reviewed=1 WHERE id=?",
+                       (wid, reason, row['id']))
+            db.execute('INSERT INTO audit(message_id,at,actor,action,details) VALUES(?,?,?,?,?)',
+                       (row['id'], now(), actor, 'publicacao_pendente', reason))
+        result['pending'] += 1
+    return result

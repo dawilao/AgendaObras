@@ -9,6 +9,8 @@ _guard = threading.Lock()
 def register(owner):
     event = threading.Event()
     with _guard:
+        if _active.get(str(owner)):
+            raise RuntimeError('Já existe uma atualização do seu e-mail em andamento. Aguarde ou interrompa a anterior.')
         _active.setdefault(str(owner), set()).add(event)
     return event
 

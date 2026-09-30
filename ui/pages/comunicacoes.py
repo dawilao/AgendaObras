@@ -10,8 +10,8 @@ import datetime
 from nicegui import app, ui
 
 from comunicacoes.page import render_mail_page
-from comunicacoes.runtime import (authorize_user, available_works, get_shared_store, get_store, get_trash,
-                                  insurance_files, is_admin)
+from comunicacoes.runtime import (authorize_user, available_works, confirmable_works, get_shared_store, get_store,
+                                  get_trash, insurance_files, is_admin, works_overview)
 from comunicacoes.seguro_bridge import SeguroComEmails
 from core.config import VERSION
 from db.connection import CAMINHO_DB
@@ -274,7 +274,7 @@ class ComunicacoesPage:
                 # Status da conexão e ações são inseridos aqui por render_mail_page.
                 topbar = ui.element('div').classes('ao-comunicacoes-actions')
 
-            # Abas Minha conferência / Histórico da equipe, como as abas de status de Obras.
+            # Abas Meu e-mail / Histórico da equipe, como as abas de status de Obras.
             tabs_slot = ui.element('div').classes('ao-status-tabs-wrap')
 
             with ui.element('div').classes('ao-comunicacoes-body'):
@@ -307,4 +307,6 @@ class ComunicacoesPage:
                     is_admin=lambda: is_admin(owner),
                     protected_files=insurance_files,
                     user_name=f"{self.usuario.get('nome', '')} {self.usuario.get('sobrenome', '')}".strip(),
+                    works_meta=lambda: works_overview(owner),
+                    confirmable=lambda: confirmable_works(owner),
                 )

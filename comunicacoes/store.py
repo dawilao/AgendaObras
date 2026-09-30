@@ -14,6 +14,9 @@ from .parser import parse_message
 # trashed_at: na lixeira; purged_at: excluído de vez (o conteúdo pode ter saído do disco).
 TRASH_COLUMNS = ('trash_id INTEGER', 'trashed_at TEXT', 'purged_at TEXT')
 ACTIVE = 'trashed_at IS NULL'
+DUPLICATE_ID = 'Message-ID repetido com conteúdo diferente.'
+# Remetentes que nunca entram na regra "sempre spam".
+PROTECTED_DOMAINS = ('caixa.gov.br', 'machengenharia.com.br')
 
 
 def now():
@@ -55,6 +58,9 @@ class MailStore:
                     id INTEGER PRIMARY KEY, sha256 TEXT NOT NULL, names TEXT NOT NULL, size INTEGER,
                     obra_id TEXT, subject TEXT, deleted_by TEXT, deleted_by_name TEXT, deleted_at TEXT,
                     expires_at TEXT, status TEXT NOT NULL, closed_by TEXT, closed_at TEXT);
+                CREATE TABLE IF NOT EXISTS spam_senders (
+                    address TEXT PRIMARY KEY, created TEXT, actor TEXT);
+                CREATE INDEX IF NOT EXISTS idx_audit_message ON audit(message_id);
             ''')
             # Lixeira: o anexo é marcado, nunca apagado do banco. Ids ficam estáveis para o
             # Seguro e a identificação da publicação continua batendo entre as caixas.
@@ -62,6 +68,9 @@ class MailStore:
             for column in TRASH_COLUMNS:
                 if column.split()[0] not in columns:
                     db.execute(f'ALTER TABLE attachments ADD COLUMN {column}')
+            # not_spam: o usuário disse "não é spam"; a mensagem segue sendo reclassificada por obra.
+            if 'not_spam' not in {r[1] for r in db.execute('PRAGMA table_info(messages)')}:
+                db.execute('ALTER TABLE messages ADD COLUMN not_spam INTEGER NOT NULL DEFAULT 0')
 
     @contextmanager
     def connect(self):
@@ -128,7 +137,7 @@ class MailStore:
                         (reference,)))
                 match = match_message(parsed['subject'], parsed['body'], works, refs)
                 if parsed['message_id'] and db.execute('SELECT 1 FROM messages WHERE message_id=?', (parsed['message_id'],)).fetchone():
-                    match.status, match.obra_id, match.reason = 'conflito', None, 'Message-ID repetido com conteúdo diferente.'
+                    match.status, match.obra_id, match.reason = 'conflito', None, DUPLICATE_ID
                 cur = db.execute('''INSERT INTO messages(fingerprint,message_id,subject,sender,recipients,cc,
                          sent_date,body,refs,status,obra_id,suggestion,reason,created)
                          VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',
@@ -179,6 +188,88 @@ class MailStore:
                        (mid, now(), actor, 'revisao', json.dumps({'before': dict(old), 'after':
                          {'status': status, 'obra_id': wid}, 'note': note}, ensure_ascii=False)))
 
+    def _set_placement(self, mid, status, suggestion, reason, actor, action, reviewed=1, not_spam=0):
+        if not actor:
+            raise ValueError('Responsável obrigatório.')
+        with self.connect() as db:
+            old = db.execute('SELECT status,obra_id,suggestion FROM messages WHERE id=?', (mid,)).fetchone()
+            if not old:
+                raise ValueError('Mensagem não encontrada.')
+            if suggestion and not db.execute('SELECT 1 FROM works WHERE id=?', (suggestion,)).fetchone():
+                raise ValueError('Obra não cadastrada.')
+            db.execute('UPDATE messages SET status=?,obra_id=NULL,suggestion=?,reason=?,reviewed=?,not_spam=? WHERE id=?',
+                       (status, suggestion, reason, reviewed, not_spam, mid))
+            db.execute('INSERT INTO audit(message_id,at,actor,action,details) VALUES(?,?,?,?,?)',
+                       (mid, now(), actor, action, json.dumps({'before': dict(old), 'after':
+                         {'status': status, 'suggestion': suggestion}, 'note': reason}, ensure_ascii=False)))
+
+    def mark_spam(self, mid, actor):
+        """Provável spam por decisão do usuário. Só separa na caixa pessoal; nada sai do servidor de e-mail."""
+        self._set_placement(mid, 'spam', None, 'Marcado como fora do escopo pelo usuário.', actor, 'spam')
+
+    def relocate(self, mid, wid, actor, reason=None):
+        """Encaixe manual (ou desvínculo, sem obra): continua aguardando o OK do coordenador."""
+        self._set_placement(mid, 'revisar', wid or None,
+                            reason or ('Realocado manualmente; aguarda OK do coordenador.' if wid
+                                       else 'Desvinculado manualmente; obra a conferir.'),
+                            actor, 'realocacao', not_spam=1)
+
+    def restore(self, mids, actor):
+        """Tira do Provável spam/lixeira e devolve à classificação automática: a mensagem volta a ser
+        pré-vinculada (e se reencaixa quando o IC da obra for cadastrado), sem voltar ao spam."""
+        mids = list(mids)
+        if not mids:
+            return
+        with self.connect() as db:
+            reasons = {r['id']: r['reason'] for r in db.execute(
+                f"SELECT id, reason FROM messages WHERE id IN ({','.join('?' * len(mids))})", mids)}
+        for mid in mids:
+            duplicate = reasons.get(mid) == DUPLICATE_ID
+            self._set_placement(mid, 'conflito' if duplicate else 'revisar', None,
+                                DUPLICATE_ID if duplicate else 'Restaurado pelo usuário.', actor, 'restauracao',
+                                reviewed=0, not_spam=1)
+        self.reprocess(actor, ids=mids)  # Uma reclassificação para o lote todo.
+
+    def reprocess_replies(self, actor, mids):
+        """Depois de confirmar mids: reclassifica só as respostas a elas (que herdam a obra pelos
+        cabeçalhos), em vez da caixa inteira. Segue a cadeia de respostas."""
+        frontier, seen = list(mids), set(mids)
+        while frontier:
+            with self.connect() as db:
+                marks = ','.join('?' * len(frontier))
+                parents = {r[0] for r in db.execute(
+                    f"SELECT message_id FROM messages WHERE id IN ({marks}) AND status='vinculado' "
+                    "AND message_id IS NOT NULL AND message_id<>''", frontier)}
+                replies = [r['id'] for r in db.execute('SELECT id, refs FROM messages WHERE reviewed=0')
+                           if r['id'] not in seen and parents & set(json.loads(r['refs'] or '[]'))] if parents else []
+            if not replies:
+                return
+            self.reprocess(actor, ids=replies)
+            seen.update(replies)
+            frontier = replies
+
+    def spam_senders(self):
+        with self.connect() as db:
+            return [r['address'] for r in db.execute('SELECT address FROM spam_senders ORDER BY address')]
+
+    def add_spam_sender(self, address, actor):
+        """Remetente sempre tratado como provável spam (por endereço; CAIXA e MACH nunca)."""
+        address = (address or '').strip().lower()
+        if '@' not in address:
+            raise ValueError('Remetente sem endereço de e-mail.')
+        if address.rsplit('@', 1)[1] in PROTECTED_DOMAINS:
+            raise ValueError('Remetentes da CAIXA e da MACH não podem ser tratados como spam.')
+        with self.connect() as db:
+            db.execute('INSERT OR IGNORE INTO spam_senders VALUES(?,?,?)', (address, now(), actor))
+            db.execute('INSERT INTO audit(at,actor,action,details) VALUES(?,?,?,?)',
+                       (now(), actor, 'regra_spam', json.dumps({'adicionar': address})))
+
+    def remove_spam_sender(self, address, actor):
+        with self.connect() as db:
+            db.execute('DELETE FROM spam_senders WHERE address=?', (address,))
+            db.execute('INSERT INTO audit(at,actor,action,details) VALUES(?,?,?,?)',
+                       (now(), actor, 'regra_spam', json.dumps({'remover': address})))
+
     def messages(self, status=None, work=None):
         with self.connect() as db:
             rows = [dict(r) for r in db.execute('''SELECT m.id,m.subject,m.sender,m.sent_date,m.status,
@@ -195,12 +286,18 @@ class MailStore:
                 return 0, row['id']
         return sorted(rows, key=chronological, reverse=True)
 
-    def reprocess(self, actor):
+    def reprocess(self, actor, ids=None):
+        """Reclassifica as mensagens sem decisão humana (ou só as de ids)."""
         works = self.works()
         with self.connect() as db:
-            rows = db.execute('SELECT * FROM messages WHERE reviewed=0 ORDER BY id').fetchall()
+            if ids is None:
+                rows = db.execute('SELECT * FROM messages WHERE reviewed=0 ORDER BY id').fetchall()
+            else:
+                ids = list(ids)
+                rows = db.execute(f"SELECT * FROM messages WHERE reviewed=0 AND id IN ({','.join('?' * len(ids))}) "
+                                  'ORDER BY id', ids).fetchall() if ids else []
             for row in rows:
-                if row['reason'] == 'Message-ID repetido com conteúdo diferente.':
+                if row['reason'] == DUPLICATE_ID:
                     continue
                 refs = set()
                 for ref in json.loads(row['refs']):
@@ -252,6 +349,13 @@ class MailStore:
         with self.connect() as db:
             return {r['fingerprint']: r['obra_id'] for r in db.execute(
                 "SELECT fingerprint, obra_id FROM messages WHERE status='vinculado' AND obra_id IS NOT NULL")}
+
+    def human_published_works(self):
+        """Como published_works, só com publicação por decisão humana (fica de fora a automática)."""
+        with self.connect() as db:
+            return {r['fingerprint']: r['obra_id'] for r in db.execute(
+                "SELECT m.fingerprint, m.obra_id FROM messages m WHERE m.status='vinculado' AND m.obra_id IS NOT NULL "
+                "AND EXISTS (SELECT 1 FROM audit a WHERE a.message_id=m.id AND a.action='publicacao')")}
 
     def attachment(self, aid):
         with self.connect() as db:
