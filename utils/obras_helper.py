@@ -115,7 +115,7 @@ class ObrasHelper:
             # Verifica se foi finalizada com pendências
             status_conclusao = (obra.get('status_conclusao_obra') or '').strip().lower()
             if status_conclusao == 'com_pendencias':
-                return ('orange', 'warning', '⚠️ Concluída com Pendências')
+                return ('orange', 'warning', 'Concluída com Pendências')
             elif status_conclusao == 'sem_pendencias':
                 return ('green', 'check_circle', 'Concluído')
 
