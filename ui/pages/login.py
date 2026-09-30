@@ -3,6 +3,8 @@ Módulo da tela de login do sistema AgendaObras.
 Exibe formulário de login ou cadastro do primeiro usuário (admin).
 """
 
+import json
+
 from nicegui import ui, app
 from db.auth_repo import AuthDatabase
 from core.config import VERSION
@@ -76,16 +78,24 @@ class LoginPage:
 
                     # Lembrar-me: persiste via localStorage do navegador
                     if lembrar.value:
-                        ui.run_javascript(f'localStorage.setItem("lembrar_email", "{email}")')
+                        ui.run_javascript(f'localStorage.setItem("lembrar_email", {json.dumps(email)})')
                     else:
                         ui.run_javascript('localStorage.removeItem("lembrar_email")')
 
                     ui.navigate.to('/')
 
                 # Restaura e-mail salvo do localStorage ao carregar a página
+                cliente = ui.context.client
+
                 async def restaurar_email():
-                    email_salvo = await ui.run_javascript('localStorage.getItem("lembrar_email")')
-                    if email_salvo:
+                    # Espera o navegador conectar e dá folga à resposta: em rede lenta (VPS) o
+                    # limite padrão de 1 s estourava. Página já fechada/recarregada: só não preenche.
+                    try:
+                        await cliente.connected(timeout=10)
+                        email_salvo = await cliente.run_javascript('localStorage.getItem("lembrar_email")', timeout=5)
+                    except (TimeoutError, RuntimeError):
+                        return
+                    if email_salvo and not email_input.is_deleted:
                         email_input.set_value(email_salvo)
                         lembrar.set_value(True)
 
