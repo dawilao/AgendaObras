@@ -90,6 +90,10 @@ BIBLIOTECA_PDF_MAX_MB = int(_obter_variavel_ambiente('BIBLIOTECA_PDF_MAX_MB', '5
 COMUNICACOES_MAX_MB = int(_obter_variavel_ambiente('AGENDA_MAIL_MAX_MB', '15'))
 # Compactação sem perda dos anexos em disco (lzma e deduplicação dentro de ZIPs). 0 desliga.
 COMUNICACOES_COMPACTAR = _obter_variavel_ambiente('AGENDA_MAIL_COMPACTAR', '1') != '0'
+# Financeiro Omie: consultas guardadas por obra e intervalo mínimo entre chamadas do mesmo método
+# (o Omie aceita até 240 por minuto por IP + chave + método).
+OMIE_LOTES_MANTIDOS = int(_obter_variavel_ambiente('OMIE_LOTES_MANTIDOS', '10'))
+OMIE_INTERVALO_MIN_S = float(_obter_variavel_ambiente('OMIE_INTERVALO_MIN_S', '0.3'))
 
 APP_TIMEZONE_PADRAO = 'America/Sao_Paulo'
 

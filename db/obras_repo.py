@@ -401,6 +401,9 @@ class ObrasRepository(BaseRepository):
             cursor = conn.cursor()
             cursor.execute('DELETE FROM medicoes_valores WHERE obra_id = ?', (obra_id,))
             cursor.execute('DELETE FROM medicoes_obra WHERE obra_id = ?', (obra_id,))
+            # Financeiro Omie: ligação e consultas saem com a obra; a auditoria fica.
+            cursor.execute('DELETE FROM omie_lotes WHERE obra_id = ?', (obra_id,))
+            cursor.execute('DELETE FROM omie_vinculos WHERE obra_id = ?', (obra_id,))
             cursor.execute('DELETE FROM obra_checklist WHERE obra_id = ?', (obra_id,))
             cursor.execute('DELETE FROM obras WHERE id = ?', (obra_id,))
             conn.commit()
