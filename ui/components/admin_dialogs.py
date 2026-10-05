@@ -124,6 +124,17 @@ class AdminDialogsMixin:
                                             'color: #999; font-size: 12px;'
                                         )
 
+                                    eh_financeiro = bool(u.get('financeiro'))
+                                    with ui.row().classes('items-center gap-2'):
+                                        ui.label('Financeiro:').style('color: #999; font-size: 12px;')
+                                        ui.switch(
+                                            value=eh_financeiro,
+                                            on_change=lambda e, uid=u['id']: alternar_financeiro(uid, e.value),
+                                        ).props('dense').style('transform: scale(0.9);')
+                                        ui.label('Responsável' if eh_financeiro else 'Sem acesso').style(
+                                            'color: #999; font-size: 12px;'
+                                        )
+
                                 pode_excluir = (
                                     u['id'] != usuario_logado.get('id')
                                     and not (u['is_admin'] and total_admins <= 1)
@@ -161,6 +172,15 @@ class AdminDialogsMixin:
                 try:
                     definir_permissao_seguro(user_id, valor)
                     ui.notification('Permissão de validação de seguro atualizada.', type='positive', timeout=3)
+                except (PermissionError, ValueError) as error:
+                    ui.notification(str(error), type='warning', timeout=3)
+                renderizar_lista()
+
+            def alternar_financeiro(user_id: int, valor: bool):
+                from services.financeiro_service import definir_permissao_financeiro
+                try:
+                    definir_permissao_financeiro(user_id, valor)
+                    ui.notification('Permissão do Financeiro atualizada.', type='positive', timeout=3)
                 except (PermissionError, ValueError) as error:
                     ui.notification(str(error), type='warning', timeout=3)
                 renderizar_lista()
