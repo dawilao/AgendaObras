@@ -1,0 +1,570 @@
+"""
+Mixin do financeiro Omie na tela de Obras: resumo no card, janela do financeiro,
+ligação obra ↔ projeto, chaves e atualização. Permissões conferidas no servidor
+(services.financeiro_service); quem não pode alterar não vê os botões de alteração.
+"""
+
+from datetime import datetime
+
+from nicegui import ui, run
+
+from core.error_logger import log_error
+from db.omie_repo import OmieRepository, CONFERIDO
+from services import omie_atualizacao as atualizacao
+from services.financeiro_service import (usuario_atual, pode_ver_financeiro, pode_editar_financeiro)
+from services.omie_financeiro import (GRUPOS, moeda, montar_custos, custos_mat_mo, totais_custos,
+                                      avisos_vinculo, resumo_obra)
+from services.omie_integracao import chaves_configuradas, modo_simulado, sugerir_projetos
+
+GRUPOS_EXTRATO = {
+    'pagamentos': 'Pagamentos (conta paga)', 'recebimentos': 'Recebimentos (conta recebida)',
+    'tarifas': 'Tarifas', 'debitos_diretos': 'Outros débitos diretos', 'creditos_diretos': 'Créditos diretos',
+    'adiantamentos': 'Adiantamentos', 'transferencias': 'Transferências',
+    'previsoes_abertos': 'Previsões / em aberto', 'cancelados': 'Cancelados', 'a_classificar': 'A classificar',
+}
+PASSOS_CONFERENCIA = (
+    '1. Abra o Omie → FINANÇAS (ícone verde) → Aprovação de pagamentos.',
+    '2. Na última coluna, dê dois cliques em Omie Cash.',
+    '3. Limpe todos os filtros → escolha o período → Atualizar.',
+    '4. Analise pelo projeto da obra (IC ou número de serviço).',
+)
+ESTILO_DIALOGO = 'width: min(1400px, 96vw); max-width: 96vw; max-height: 94vh; overflow: auto;'
+
+
+def _data_local(iso):
+    try:
+        return datetime.fromisoformat(iso).astimezone().strftime('%d/%m/%Y %H:%M')
+    except (TypeError, ValueError):
+        return iso or ''
+
+
+def _data_br(iso_dia):
+    try:
+        return datetime.strptime(iso_dia, '%Y-%m-%d').strftime('%d/%m/%Y')
+    except (TypeError, ValueError):
+        return iso_dia or ''
+
+
+class OmieFinanceiroMixin:
+
+    @property
+    def omie_repo(self):
+        if getattr(self, '_omie_repo', None) is None:
+            self._omie_repo = OmieRepository(self.db.db_name)
+        return self._omie_repo
+
+    def _usuario_omie(self):
+        """Usuário do banco (com a permissão Financeiro); None se a sessão não for válida."""
+        try:
+            return usuario_atual()
+        except PermissionError:
+            return None
+
+    # ------------------------------------------------------------------ card
+    def renderizar_bloco_omie(self, obra):
+        """Resumo do Omie na aba Financeiro do card (só para quem pode ver)."""
+        user = getattr(self, '_usuario_fin', None) or self._usuario_omie()
+        if not pode_ver_financeiro(user, obra):
+            return False
+        blocos = self.__dict__.setdefault('_blocos_omie', {})
+
+        @ui.refreshable
+        def bloco():
+            try:
+                resumo = resumo_obra(obra, self.omie_repo.situacao(obra['id']))
+            except Exception as e:
+                log_error(e, 'omie_financeiro', f"Resumo Omie - obra {obra['id']}")
+                ui.label('Financeiro Omie indisponível no momento.').style('font-size: 12px; color: #999;')
+                return
+            with ui.column().classes('w-full gap-1').style(
+                'background: #f4f8fd; border-left: 3px solid #1976d2; border-radius: 4px; padding: 6px 8px;'
+            ):
+                if resumo is None:
+                    ui.label('Financeiro Omie ainda não ligado a esta obra.').style(
+                        'font-size: 12px; color: #999; font-style: italic;')
+                    if pode_editar_financeiro(user):
+                        ui.button('Ligar ao Omie', icon='link',
+                                  on_click=lambda: self.abrir_financeiro_omie(obra)).props(
+                            'flat dense no-caps size=sm color=primary')
+                    return
+                vinculo, lote = resumo['vinculo'], resumo['lote']
+                with ui.row().classes('w-full items-center no-wrap gap-1'):
+                    ui.icon('account_balance').style('color: #1976d2; font-size: 15px;')
+                    ui.label(f"Omie · {vinculo['nome_projeto']}").style(
+                        'font-size: 12px; font-weight: 700; color: #1a2332; overflow: hidden; '
+                        'text-overflow: ellipsis; white-space: nowrap; flex: 1; min-width: 0;')
+                    conferido = vinculo['estado'] == CONFERIDO
+                    ui.badge('Conferido' if conferido else 'Em conferência',
+                             color='green' if conferido else 'orange').props('outline')
+                if lote:
+                    totais = resumo['totais']
+                    ui.label(f"Custos pagos: {moeda(totais['pago'])}").style(
+                        'font-size: 13px; color: #1a2332; font-weight: bold;')
+                    ui.label(f"Custos a pagar: {moeda(totais['aberto'])}").style('font-size: 12px; color: #666;')
+                    ui.label(f"Consulta de {_data_local(lote['consultado_em'])}").style('font-size: 10px; color: #999;')
+                else:
+                    ui.label('Ainda não atualizado do Omie.').style('font-size: 12px; color: #999; font-style: italic;')
+                if resumo['erro']:
+                    ui.label(f"Última atualização falhou em {_data_local(resumo['erro']['consultado_em'])}").style(
+                        'font-size: 11px; color: #c62828;').tooltip(resumo['erro']['motivo'] or '')
+                if resumo['avisos']:
+                    ui.label(f"⚠ {len(resumo['avisos'])} aviso(s) na ligação").style(
+                        'font-size: 11px; color: #e65100;').tooltip('\n'.join(resumo['avisos']))
+                ui.button('Abrir financeiro', icon='open_in_full',
+                          on_click=lambda: self.abrir_financeiro_omie(obra)).props(
+                    'flat dense no-caps size=sm color=primary')
+
+        blocos[obra['id']] = bloco
+        bloco()
+        return True
+
+    def _atualizar_blocos_omie(self, obra_ids=None):
+        for obra_id, bloco in list(getattr(self, '_blocos_omie', {}).items()):
+            if obra_ids is not None and obra_id not in obra_ids:
+                continue
+            try:
+                bloco.refresh()
+            except Exception:
+                # Card já removido da tela (troca de página/filtro).
+                self._blocos_omie.pop(obra_id, None)
+
+    # ------------------------------------------------------------- janela
+    def abrir_financeiro_omie(self, obra):
+        user = self._usuario_omie()
+        if not pode_ver_financeiro(user, obra):
+            ui.notify('Financeiro restrito ao administrador, ao Financeiro e ao coordenador desta obra.', type='warning')
+            return
+        editar = pode_editar_financeiro(user)
+        obra = self.db.obter_obra(obra['id']) or obra
+
+        with ui.dialog() as dialog, ui.card().style(ESTILO_DIALOGO):
+            @ui.refreshable
+            def conteudo():
+                situacao = self.omie_repo.situacao(obra['id'])
+                vinculo, lote, erro = situacao['vinculo'], situacao['lote'], situacao['erro']
+                with ui.row().classes('w-full items-center justify-between no-wrap'):
+                    with ui.column().classes('gap-0'):
+                        ic = (obra.get('contrato_ic') or '').strip() or 'não cadastrado'
+                        ui.label(f"{obra['nome_contrato']} · IC {ic}").style(
+                            'font-size: 20px; font-weight: 700; color: #1a2332;')
+                        if vinculo:
+                            with ui.row().classes('items-center gap-2'):
+                                ui.label(f"Projeto Omie: {vinculo['nome_projeto']}").style('font-size: 13px; color: #555;')
+                                conferido = vinculo['estado'] == CONFERIDO
+                                ui.badge('Conferido' if conferido else 'Em conferência',
+                                         color='green' if conferido else 'orange').props('outline')
+                            if vinculo['estado'] == CONFERIDO and vinculo.get('conferido_por_nome'):
+                                ui.label(f"Conferido por {vinculo['conferido_por_nome']} em "
+                                         f"{_data_local(vinculo['conferido_em'])}").style('font-size: 11px; color: #888;')
+                    ui.button(icon='close', on_click=dialog.close).props('flat round').tooltip('Fechar financeiro')
+
+                def recarregar():
+                    conteudo.refresh()
+                    self._atualizar_blocos_omie([obra['id']])
+
+                if not vinculo:
+                    with ui.card().classes('w-full').style('background: #fafafa; padding: 16px;'):
+                        ui.label('Financeiro Omie ainda não ligado a esta obra.').style('font-size: 14px; color: #666;')
+                        ui.label('A ligação usa o projeto do Omie que tem o IC da obra no nome; nunca a cidade.').style(
+                            'font-size: 12px; color: #999;')
+                        if editar:
+                            ui.button('Ligar a um projeto do Omie', icon='link',
+                                      on_click=lambda: self._dialogo_escolher_projeto(obra, recarregar)).props(
+                                'unelevated no-caps')
+                    return
+
+                avisos = avisos_vinculo(obra, vinculo, lote and lote['dados'])
+                if avisos:
+                    with ui.column().classes('w-full gap-1').style(
+                            'background: #fff8e1; border-left: 4px solid #f9a825; padding: 8px 12px; border-radius: 4px;'):
+                        for aviso in avisos:
+                            ui.label(f'⚠ {aviso}').style('font-size: 13px; color: #8d6e00;')
+                if erro:
+                    texto = (f"Última atualização falhou em {_data_local(erro['consultado_em'])}: {erro['motivo']}"
+                             + (f" · exibindo dados de {_data_local(lote['consultado_em'])}" if lote else ''))
+                    ui.label(texto).style('font-size: 13px; color: #c62828; background: #ffebee; '
+                                          'padding: 8px 12px; border-radius: 4px; width: 100%;')
+
+                if editar:
+                    self._acoes_financeiro_omie(obra, vinculo, lote, avisos, recarregar)
+
+                if not lote:
+                    ui.label('Ainda não há consulta do Omie para esta obra. Use "Atualizar esta obra".').style(
+                        'font-size: 14px; color: #999; padding: 12px 0;')
+                    return
+
+                ui.label(f"Consulta de {_data_local(lote['consultado_em'])} · período "
+                         f"{_data_br(lote['inicio'])} a {_data_br(lote['fim'])}").style('font-size: 12px; color: #888;')
+                with ui.tabs().props('no-caps align=center').classes('w-full text-blue-800') as abas:
+                    aba_custo = ui.tab('Custo', icon='payments')
+                with ui.tab_panels(abas, value=aba_custo).classes('w-full'):
+                    with ui.tab_panel(aba_custo):
+                        self._painel_custo(lote['dados'])
+                self._painel_conferencia(lote['dados'])
+
+            conteudo()
+        dialog.open()
+
+    def _acoes_financeiro_omie(self, obra, vinculo, lote, avisos, recarregar):
+        async def atualizar_esta():
+            await self.atualizar_omie(obra_ids=[obra['id']], ao_terminar=recarregar)
+
+        def conferir():
+            try:
+                if atualizacao.marcar_conferido(self.omie_repo, obra['id'], self._usuario_omie()):
+                    ui.notify('Consulta marcada como conferida.', type='positive')
+                recarregar()
+            except (PermissionError, ValueError) as e:
+                ui.notify(str(e), type='warning')
+
+        with ui.row().classes('w-full items-center gap-2'):
+            ui.button('Atualizar esta obra', icon='sync', on_click=atualizar_esta).props('outline no-caps')
+            if vinculo['estado'] != CONFERIDO and lote:
+                ui.button('Marcar como conferido', icon='task_alt', on_click=conferir).props('outline no-caps color=green')
+            if any('renomeado' in a or 'mudou' in a for a in avisos):
+                ui.button('Reconfirmar ligação', icon='published_with_changes',
+                          on_click=lambda: self._reconfirmar_ligacao(obra, vinculo, lote, recarregar)).props(
+                    'outline no-caps color=orange')
+            ui.button('Trocar ligação', icon='swap_horiz',
+                      on_click=lambda: self._dialogo_escolher_projeto(obra, recarregar)).props('flat no-caps')
+            ui.button('Desfazer ligação', icon='link_off',
+                      on_click=lambda: self._confirmar_desfazer_ligacao(obra, recarregar)).props('flat no-caps color=negative')
+
+    def _painel_custo(self, dados):
+        custos = montar_custos(dados)
+        grupos = custos_mat_mo(custos)
+        totais = totais_custos(custos)
+        ui.label('Gastos pagos · MAT e MO').style('font-size: 18px; font-weight: 700;')
+        with ui.row().classes('w-full gap-3'):
+            for chave, titulo in GRUPOS:
+                self._cartao_valor(titulo, grupos[chave]['pago'])
+        ui.label('MAT: Fornecedor de Material. MO provisória: Prestador de Serviço/Parceiro + Fornecedor de '
+                 'Serviços; serviços podem incluir materiais. Outros: seguros, taxas, reembolsos e demais categorias. '
+                 'Valores líquidos pagos no período consultado.').style('font-size: 12px; color: #777;')
+        with ui.row().classes('w-full gap-3'):
+            self._cartao_valor('Custos pagos líquidos', totais['pago'])
+            self._cartao_valor('Custos a pagar', totais['aberto'])
+        rotulos = dict(GRUPOS)
+        with ui.expansion('Composição por categoria e valores a pagar', icon='list').classes('w-full'):
+            ui.table(columns=[{'name': k, 'label': v, 'field': k, 'align': 'left'} for k, v in (
+                ('grupo', 'Grupo'), ('categoria', 'Categoria Omie'), ('pago', 'Pago líquido'), ('aberto', 'A pagar'))],
+                rows=[{'grupo': rotulos[c['grupo']],
+                       'categoria': c['codigo'] + (f" · {c['descricao']}" if c['descricao'] else ''),
+                       'pago': moeda(c['pago_centavos']), 'aberto': moeda(c['aberto_centavos'])} for c in custos],
+                row_key='categoria').classes('w-full')
+
+    @staticmethod
+    def _cartao_valor(titulo, valor):
+        with ui.card().classes('shadow-none').style('flex: 1; min-width: 180px; background: #f8fafc;'):
+            ui.label(titulo).style('font-size: 12px; color: #666;')
+            ui.label(moeda(valor)).style('font-size: 20px; font-weight: 700; color: #1a2332;')
+
+    def _painel_conferencia(self, dados):
+        conciliacao = dados.get('conciliacao') or {}
+        status = conciliacao.get('status', 'Pendente')
+        cor = {'Totais conferem': '#2e7d32', 'Divergência': '#c62828'}.get(status, '#e65100')
+        with ui.expansion(f'Conferência com o extrato · {status}', icon='fact_check').classes('w-full'):
+            ui.label(conciliacao.get('motivo') or conciliacao.get('escopo') or '').style(f'font-size: 12px; color: {cor};')
+            if conciliacao.get('linhas'):
+                ui.table(columns=[{'name': k, 'label': v, 'field': k, 'align': 'left'} for k, v in (
+                    ('tipo', 'Tipo'), ('conta', 'Conta'), ('categoria', 'Categoria'), ('api', 'Baixas (API)'),
+                    ('extrato', 'Extrato'), ('diferenca', 'Diferença'))],
+                    rows=[{**l, 'api': moeda(l['api']), 'extrato': moeda(l['extrato']),
+                           'diferenca': moeda(l['diferenca']), 'id': f"{l['tipo']}-{l['conta']}-{l['categoria']}"}
+                          for l in conciliacao['linhas']], row_key='id').classes('w-full')
+            if dados.get('resumo_extrato'):
+                ui.label('Movimentos do extrato do projeto, separados por origem').style(
+                    'font-size: 13px; font-weight: 600; margin-top: 8px;')
+                ui.table(columns=[{'name': k, 'label': v, 'field': k, 'align': 'left'} for k, v in (
+                    ('grupo', 'Origem'), ('quantidade', 'Registros'), ('valor', 'Valor no extrato'))],
+                    rows=[{'grupo': GRUPOS_EXTRATO.get(k, k), 'quantidade': v['quantidade'], 'valor': moeda(v['centavos'])}
+                          for k, v in dados['resumo_extrato'].items()], row_key='grupo').classes('w-full')
+            for aviso in dados.get('avisos', []):
+                if 'renomeado' not in aviso:
+                    ui.label(f'ℹ {aviso}').style('font-size: 12px; color: #777;')
+        ui.button('Origem da informação', icon='info', on_click=self._dialogo_origem_omie).props('flat no-caps')
+
+    @staticmethod
+    def _dialogo_origem_omie():
+        with ui.dialog() as dialog, ui.card().style('max-width: 720px;'):
+            ui.label('Origem da informação · Omie').style('font-size: 18px; font-weight: 700;')
+            ui.label('Como conferir na tela do Omie').style('font-weight: 600; color: #1565c0;')
+            for passo in PASSOS_CONFERENCIA:
+                ui.label(passo).style('font-size: 13px;')
+            ui.label('Consultas usadas (somente leitura)').style('font-weight: 600; color: #1565c0; margin-top: 8px;')
+            for texto in ('ConsultarProjeto / ListarProjetos · projeto ligado à obra',
+                          'ListarContasCorrentes · todas as contas, todas as páginas',
+                          'ListarExtrato · extrato de cada conta no período, filtrado pelo projeto',
+                          'ListarMovimentos · títulos (CP/CR) e baixas do período (BXCP/BXCR) do projeto'):
+                ui.label(texto).style('font-size: 13px;')
+            ui.label('Retrato da consulta: não é atualizado sozinho. Custos de tarifas, créditos diretos, previsões '
+                     'e adiantamentos ficam separados do total pago.').style('font-size: 12px; color: #777;')
+            ui.button('Fechar', on_click=dialog.close).props('flat')
+        dialog.open()
+
+    # ------------------------------------------------------------- ligação
+    async def _carregar_projetos(self, recarregar=False):
+        user = self._usuario_omie()
+        if not self._garantir_chaves():
+            return None
+        try:
+            return await run.io_bound(atualizacao.projetos_omie, user, self.db.listar_obras(), None, recarregar)
+        except (PermissionError, ValueError, RuntimeError) as e:
+            ui.notify(str(e), type='warning')
+        except Exception as e:
+            log_error(e, 'omie_financeiro', 'Listar projetos do Omie')
+            ui.notify('Não foi possível consultar os projetos do Omie.', type='warning')
+        return None
+
+    async def _dialogo_escolher_projeto(self, obra, ao_terminar=None):
+        projetos = await self._carregar_projetos()
+        if projetos is None:
+            return
+        ligados = {v['codigo_projeto'] for v in self.omie_repo.vinculos() if v['obra_id'] != obra['id']}
+        livres = [p for p in projetos if p['codigo'] not in ligados]
+        sugestao = sugerir_projetos([obra], livres)[obra['id']]
+        opcoes = {p['codigo']: p['nome'] for p in livres}
+        inicial = sugestao['projetos'][0]['codigo'] if sugestao['situacao'] == 'sugerida' else None
+        with ui.dialog() as dialog, ui.card().style('min-width: min(560px, 92vw);'):
+            ui.label(f"Ligar {obra['nome_contrato']} ao Omie").style('font-size: 18px; font-weight: 700;')
+            ic = (obra.get('contrato_ic') or '').strip() or 'não cadastrado'
+            ui.label(f'IC da obra: {ic}').style('font-size: 13px; color: #555;')
+            if sugestao['situacao'] == 'nenhuma':
+                ui.label('Nenhum projeto do Omie tem o número deste IC no nome. Confira o IC no cadastro da obra.').style(
+                    'font-size: 12px; color: #e65100;')
+            elif sugestao['situacao'] == 'ambigua':
+                ui.label(f"{len(sugestao['projetos'])} projetos têm o número deste IC no nome. Escolha o correto.").style(
+                    'font-size: 12px; color: #e65100;')
+            escolha = ui.select(opcoes, value=inicial, with_input=True, label='Projeto do Omie').props(
+                'outlined dense clearable').classes('w-full')
+
+            def confirmar():
+                if escolha.value is None:
+                    ui.notify('Escolha um projeto.', type='warning')
+                    return
+                try:
+                    atualizacao.ligar(self.omie_repo, obra, {'codigo': escolha.value, 'nome': opcoes[escolha.value]},
+                                      self._usuario_omie())
+                except (PermissionError, ValueError) as e:
+                    ui.notify(str(e), type='warning')
+                    return
+                ui.notify('Obra ligada ao projeto do Omie. Atualize para buscar os dados.', type='positive')
+                dialog.close()
+                self._atualizar_blocos_omie([obra['id']])
+                if ao_terminar:
+                    ao_terminar()
+
+            with ui.row().classes('w-full justify-end gap-2'):
+                ui.button('Cancelar', on_click=dialog.close).props('flat no-caps')
+                ui.button('Ligar', icon='link', on_click=confirmar).props('unelevated no-caps')
+        dialog.open()
+
+    def _reconfirmar_ligacao(self, obra, vinculo, lote, ao_terminar):
+        nome = ((lote or {}).get('dados') or {}).get('projeto')
+        try:
+            atualizacao.ligar(self.omie_repo, obra, {'codigo': vinculo['codigo_projeto'],
+                                                     'nome': nome or vinculo['nome_projeto']}, self._usuario_omie())
+            ui.notify('Ligação reconfirmada.', type='positive')
+        except (PermissionError, ValueError) as e:
+            ui.notify(str(e), type='warning')
+        ao_terminar()
+
+    def _confirmar_desfazer_ligacao(self, obra, ao_terminar):
+        with ui.dialog() as dialog, ui.card():
+            ui.label('Desfazer a ligação com o Omie?').style('font-size: 16px; font-weight: 700;')
+            ui.label('As consultas guardadas desta obra serão apagadas. O histórico de ações é mantido.').style(
+                'font-size: 13px; color: #666;')
+
+            def confirmar():
+                try:
+                    atualizacao.desfazer_ligacao(self.omie_repo, obra['id'], self._usuario_omie())
+                    ui.notify('Ligação desfeita.', type='positive')
+                except (PermissionError, ValueError) as e:
+                    ui.notify(str(e), type='warning')
+                dialog.close()
+                ao_terminar()
+
+            with ui.row().classes('w-full justify-end gap-2'):
+                ui.button('Cancelar', on_click=dialog.close).props('flat no-caps')
+                ui.button('Desfazer', on_click=confirmar).props('unelevated no-caps color=negative')
+        dialog.open()
+
+    async def abrir_obras_sem_ligacao(self):
+        projetos = await self._carregar_projetos(recarregar=True)
+        if projetos is None:
+            return
+        linhas = atualizacao.obras_sem_ligacao(self.omie_repo, self.db.listar_obras(), projetos)
+        with ui.dialog() as dialog, ui.card().style('width: min(900px, 96vw); max-height: 90vh; overflow: auto;'):
+            ui.label('Obras sem ligação ao Omie').style('font-size: 18px; font-weight: 700;')
+            ui.label('Sugestão pelo número do IC no nome do projeto; nunca pela cidade. Marque as sugestões '
+                     'corretas e confirme; as demais podem ser escolhidas uma a uma.').style('font-size: 12px; color: #777;')
+            if not linhas:
+                ui.label('Todas as obras já estão ligadas.').style('color: #2e7d32; padding: 12px 0;')
+            marcadas = {}
+            for linha in linhas:
+                obra = linha['obra']
+                ic = (obra.get('contrato_ic') or '').strip() or 'sem IC'
+                with ui.row().classes('w-full items-center no-wrap gap-2').style(
+                        'border-bottom: 1px solid #eee; padding: 4px 0;'):
+                    if linha['situacao'] == 'sugerida':
+                        marcadas[obra['id']] = (ui.checkbox(value=True), obra, linha['projetos'][0])
+                    else:
+                        ui.element('div').style('width: 40px;')
+                    with ui.column().classes('gap-0').style('flex: 1; min-width: 0;'):
+                        ui.label(f"{obra['nome_contrato']} · IC {ic}").style('font-size: 13px; font-weight: 600;')
+                        if linha['situacao'] == 'sugerida':
+                            texto, cor = f"Sugestão: {linha['projetos'][0]['nome']}", '#1565c0'
+                        elif linha['situacao'] == 'ambigua':
+                            texto, cor = f"{len(linha['projetos'])} projetos com este IC — escolha o correto", '#e65100'
+                        else:
+                            texto, cor = 'Nenhum projeto com este IC no Omie — conferir o cadastro', '#999'
+                        ui.label(texto).style(f'font-size: 12px; color: {cor};')
+                    if linha['situacao'] != 'sugerida':
+                        ui.button('Escolher projeto', on_click=lambda o=obra: self._dialogo_escolher_projeto(
+                            o, dialog.close)).props('flat dense no-caps')
+
+            def confirmar():
+                pares = [(obra, projeto) for caixa, obra, projeto in marcadas.values() if caixa.value]
+                if not pares:
+                    ui.notify('Nenhuma sugestão marcada.', type='warning')
+                    return
+                try:
+                    gravados = atualizacao.ligar_em_lote(self.omie_repo, pares, self._usuario_omie())
+                except (PermissionError, ValueError) as e:
+                    ui.notify(str(e), type='warning')
+                    return
+                ui.notify(f'{gravados} obra(s) ligada(s) ao Omie. Atualize para buscar os dados.', type='positive')
+                dialog.close()
+                self._atualizar_blocos_omie()
+
+            with ui.row().classes('w-full justify-end gap-2'):
+                ui.button('Fechar', on_click=dialog.close).props('flat no-caps')
+                if marcadas:
+                    ui.button('Confirmar selecionadas', icon='done_all', on_click=confirmar).props('unelevated no-caps')
+        dialog.open()
+
+    # ------------------------------------------------------- chaves e atualização
+    def _garantir_chaves(self, depois=None):
+        if modo_simulado() or chaves_configuradas()['configuradas']:
+            return True
+        self.abrir_chaves_omie(depois)
+        return False
+
+    def abrir_chaves_omie(self, depois=None):
+        info = chaves_configuradas()
+        with ui.dialog() as dialog, ui.card().style('min-width: min(480px, 92vw);'):
+            ui.label('Chaves do Omie').style('font-size: 18px; font-weight: 700;')
+            if info['origem'] == 'servidor':
+                ui.label('As chaves estão configuradas no servidor e só podem ser trocadas lá.').style('font-size: 13px;')
+                ui.button('Fechar', on_click=dialog.close).props('flat no-caps')
+                dialog.open()
+                return
+            if info['origem'] == 'tela':
+                ui.label(f"Configuradas por {info['por']} em {_data_local(info['em'])}.").style('font-size: 13px; color: #555;')
+            ui.label('As chaves ficam só na memória do servidor e somem quando ele reinicia. Nunca são exibidas '
+                     'de novo nem registradas. O AgendaObras só faz consultas de leitura.').style(
+                'font-size: 12px; color: #777;')
+            chave = ui.input('APP KEY', password=True, password_toggle_button=True).props(
+                'outlined dense autocomplete=off').classes('w-full')
+            segredo = ui.input('APP SECRET', password=True, password_toggle_button=True).props(
+                'outlined dense autocomplete=off').classes('w-full')
+
+            def limpar():
+                chave.set_value('')
+                segredo.set_value('')
+
+            dialog.on('hide', limpar)
+
+            async def salvar():
+                valores = (chave.value or '', segredo.value or '')
+                limpar()
+                try:
+                    await run.io_bound(atualizacao.configurar_chaves, self.omie_repo, *valores, self._usuario_omie())
+                except (PermissionError, ValueError) as e:
+                    ui.notify(str(e), type='warning')
+                    return
+                ui.notify('Chaves do Omie conferidas e guardadas na memória do servidor.', type='positive')
+                dialog.close()
+                if depois:
+                    await depois()
+
+            def remover():
+                try:
+                    atualizacao.remover_chaves(self.omie_repo, self._usuario_omie())
+                    ui.notify('Chaves removidas da memória do servidor.', type='positive')
+                except (PermissionError, ValueError) as e:
+                    ui.notify(str(e), type='warning')
+                dialog.close()
+
+            with ui.row().classes('w-full justify-end gap-2'):
+                if info['origem'] == 'tela':
+                    ui.button('Remover', on_click=remover).props('flat no-caps color=negative')
+                ui.button('Cancelar', on_click=dialog.close).props('flat no-caps')
+                ui.button('Testar e salvar', icon='key', on_click=salvar).props('unelevated no-caps')
+        dialog.open()
+
+    def montar_acoes_omie_topbar(self):
+        """Botões do Financeiro na barra de Obras (ao lado do toggle Grade/Kanban)."""
+        user = self._usuario_omie()
+        if not pode_editar_financeiro(user):
+            return
+        with ui.element('div').classes('ao-view-toggle').style('margin-right: 8px;'):
+            self._btn_omie_atualizar = ui.button(icon='sync', on_click=lambda: self.atualizar_omie()).props(
+                'flat dense').classes('ao-view-toggle-btn').tooltip('Atualizar do Omie')
+            ui.button(icon='link', on_click=self.abrir_obras_sem_ligacao).props('flat dense').classes(
+                'ao-view-toggle-btn').tooltip('Obras sem ligação ao Omie')
+            ui.button(icon='key', on_click=lambda: self.abrir_chaves_omie()).props('flat dense').classes(
+                'ao-view-toggle-btn').tooltip('Chaves do Omie')
+        with ui.row().classes('items-center no-wrap gap-1').style('margin-right: 8px;') as self._omie_status:
+            ui.spinner(size='sm')
+            self._omie_progresso = ui.label('').style('font-size: 12px; color: #555;')
+            ui.button(icon='stop', on_click=self._interromper_omie).props('flat dense round color=negative').tooltip(
+                'Interromper atualização')
+        self._omie_status.set_visibility(False)
+
+    def _interromper_omie(self):
+        try:
+            if atualizacao.interromper(self._usuario_omie()):
+                self._omie_progresso.set_text('Interrompendo…')
+        except PermissionError as e:
+            ui.notify(str(e), type='warning')
+
+    async def atualizar_omie(self, obra_ids=None, ao_terminar=None):
+        user = self._usuario_omie()
+        if not pode_editar_financeiro(user):
+            ui.notify('Somente o Financeiro pode atualizar do Omie.', type='warning')
+            return
+        if not self._garantir_chaves(lambda: self.atualizar_omie(obra_ids, ao_terminar)):
+            return
+        status = getattr(self, '_omie_status', None)
+        if status is not None:
+            status.set_visibility(True)
+        timer = ui.timer(0.5, lambda: status is not None and self._omie_progresso.set_text(
+            atualizacao.estado()['progresso']))
+        try:
+            resumo = await run.io_bound(atualizacao.atualizar, self.omie_repo, self.db.listar_obras(), user, obra_ids)
+        except (PermissionError, ValueError, RuntimeError) as e:
+            ui.notify(str(e), type='warning', timeout=8000)
+            return
+        except Exception as e:
+            log_error(e, 'omie_financeiro', 'Atualizar do Omie')
+            ui.notify('Atualização do Omie não concluída. Os dados anteriores foram mantidos.', type='warning')
+            return
+        finally:
+            timer.cancel()
+            if status is not None:
+                status.set_visibility(False)
+        partes = [f"{resumo['ok']} obra(s) atualizada(s)"]
+        if resumo['erro']:
+            partes.append(f"{resumo['erro']} com erro")
+        if resumo['nao_processadas']:
+            partes.append(f"{resumo['nao_processadas']} não processada(s), com os dados anteriores mantidos")
+        if resumo['bloqueado_ate']:
+            partes.append(f"o Omie bloqueou as consultas até {resumo['bloqueado_ate'].astimezone().strftime('%H:%M')}")
+        elif resumo['interrompido']:
+            partes.append('atualização interrompida')
+        ui.notify(' · '.join(partes), type='positive' if not resumo['erro'] and not resumo['bloqueado_ate'] else 'warning',
+                  timeout=10000)
+        self._atualizar_blocos_omie(obra_ids)
+        if ao_terminar:
+            ao_terminar()

@@ -89,6 +89,17 @@ Ajustes opcionais, lidos do ambiente do processo. Todos têm valor padrão, ent�
 | `AGENDA_MAIL_COMPACTAR` | `1` | Compactação sem perda dos anexos novos. Use `0` para gravar os anexos como chegaram. Com `0`, os anexos já compactados continuam legíveis |
 | `AGENDA_OBRAS_TIMEZONE` | `America/Sao_Paulo` | Fuso do processo (servidores Linux costumam rodar em UTC) |
 | `NICEGUI_STORAGE_SECRET` | — | Chave das sessões. Também pode ficar no `email_config.env` |
+| `OMIE_LOTES_MANTIDOS` | `10` | Consultas do Omie guardadas por obra (a última válida nunca é apagada) |
+| `OMIE_INTERVALO_MIN_S` | `0.3` | Intervalo mínimo entre chamadas do mesmo método do Omie (limite: 240 por minuto) |
+
+## Financeiro Omie
+
+Na aba Financeiro do card, administrador, Financeiro e coordenador da própria obra veem o resumo do Omie (custos pagos e a pagar) e abrem o detalhamento. Só quem tem a permissão **Financeiro** (marcada em Usuários) atualiza, liga obras a projetos e informa as chaves. A ligação usa o projeto do Omie com o número do IC no nome, nunca a cidade. As consultas são somente leitura.
+
+| Variável | Para que serve |
+|---|---|
+| `OMIE_APP_KEY` / `OMIE_APP_SECRET` | Chaves do Omie. Se estiverem no ambiente do serviço (ex.: `EnvironmentFile=` no systemd), são usadas direto; senão, o Financeiro as informa na tela e elas ficam só na memória do servidor até ele reiniciar |
+| `OMIE_MODO` | `simulado` usa dados fictícios, para conferir a tela sem acesso ao Omie |
 
 ## Manutenção dos anexos das Comunicações
 

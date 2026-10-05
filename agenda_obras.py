@@ -27,6 +27,7 @@ from ui.components.obra_card import ObraCardMixin
 from ui.components.obra_dialogs import ObraDialogsMixin
 from ui.components.admin_dialogs import AdminDialogsMixin
 from ui.components.obra_kanban import ObraKanbanMixin
+from ui.components.omie_financeiro import OmieFinanceiroMixin
 
 
 # Múltiplo de 1, 2, 3 e 4 colunas: a última linha da grade fica sempre completa.
@@ -49,7 +50,7 @@ def obter_servicos():
         return _servicos
 
 
-class AgendaObras(ObraCardMixin, ObraDialogsMixin, AdminDialogsMixin, ObraKanbanMixin):
+class AgendaObras(ObraCardMixin, ObraDialogsMixin, AdminDialogsMixin, ObraKanbanMixin, OmieFinanceiroMixin):
     def __init__(self):
         self.title = "AgendaObras"
         self.description = "Rastreador de Demandas de Engenharia"
@@ -1033,6 +1034,9 @@ class AgendaObras(ObraCardMixin, ObraDialogsMixin, AdminDialogsMixin, ObraKanban
 
                 ui.space()
 
+                # Financeiro: atualizar do Omie, ligar obras e chaves (só para o Financeiro)
+                self.montar_acoes_omie_topbar()
+
                 with ui.element('div').classes('ao-view-toggle'):
                     self.btn_view_grid = ui.button(
                         icon='grid_view', on_click=lambda: self.set_view_mode('grid')
@@ -1113,6 +1117,9 @@ class AgendaObras(ObraCardMixin, ObraDialogsMixin, AdminDialogsMixin, ObraKanban
                 return
 
             self._coordenadores_ctx = self._contexto_coordenadores()
+            # Usuário com a permissão Financeiro, lido uma vez para os cards desta renderização
+            self._usuario_fin = self._usuario_omie()
+            self._blocos_omie = {}
 
             # Checklist e status calculados uma única vez por obra,
             # reaproveitados tanto no agrupamento quanto na renderização do card.

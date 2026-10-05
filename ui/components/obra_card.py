@@ -260,6 +260,10 @@ class ObraCardMixin:
                             total_a_medir = total_obra - soma_medidos
 
                             with container_lazy:
+                                # Resumo do Omie (só para ADM, Financeiro e coordenador da obra)
+                                if self.renderizar_bloco_omie(obra):
+                                    ui.separator().classes('my-1')
+
                                 ui.label(f'Total Medido: {self.helper.formatar_valor(soma_medidos)}').style(
                                     'font-size: 13px; color: #1976d2; font-weight: bold;'
                                 )
