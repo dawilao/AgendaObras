@@ -94,7 +94,7 @@ Ajustes opcionais, lidos do ambiente do processo. Todos têm valor padrão, ent�
 
 ## Financeiro Omie
 
-Na aba Financeiro do card, administrador, Financeiro e coordenador da própria obra veem o resumo do Omie (custos pagos e a pagar) e abrem o detalhamento. Só quem tem a permissão **Financeiro** (marcada em Usuários) atualiza, liga obras a projetos e informa as chaves. A ligação usa o projeto do Omie com o número do IC no nome, nunca a cidade. As consultas são somente leitura.
+Na aba Financeiro do card, administrador, Financeiro e coordenador da própria obra veem o resumo do Omie (custos, recebido líquido e saldo de caixa) e abrem o detalhamento: Custo, Recebimento, Saldo bruto, o que mudou desde a consulta anterior, histórico de ações e exportação em CSV. Só quem tem a permissão **Financeiro** (marcada em Usuários) atualiza, liga obras a projetos e informa as chaves. A ligação usa o projeto do Omie com o número do IC no nome, nunca a cidade. As consultas são somente leitura.
 
 | Variável | Para que serve |
 |---|---|

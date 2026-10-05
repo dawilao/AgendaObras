@@ -227,7 +227,8 @@ class OmieRepository(BaseRepository):
 
     @staticmethod
     def _reter(conn, obra_id: int):
-        manter = max(1, OMIE_LOTES_MANTIDOS)
+        # Pelo menos 2: a consulta anterior é usada para mostrar o que mudou.
+        manter = max(2, OMIE_LOTES_MANTIDOS)
         for status in ('ok', 'erro'):
             conn.execute('DELETE FROM omie_lotes WHERE obra_id=? AND status=? AND id NOT IN '
                          '(SELECT id FROM omie_lotes WHERE obra_id=? AND status=? ORDER BY id DESC LIMIT ?)',
@@ -254,15 +255,26 @@ class OmieRepository(BaseRepository):
         finally:
             conn.close()
 
+    def lotes_ok(self, obra_id: int, limite: int = 2) -> List[Dict]:
+        """Consultas válidas mais recentes primeiro."""
+        conn = self.get_connection()
+        try:
+            rows = conn.execute("SELECT * FROM omie_lotes WHERE obra_id=? AND status='ok' ORDER BY id DESC LIMIT ?",
+                                (obra_id, limite)).fetchall()
+            return [self._lote(r) for r in rows]
+        finally:
+            conn.close()
+
     def situacao(self, obra_id: int) -> Dict:
-        """Vínculo, última consulta válida e erro mais recente que ela (se houver)."""
+        """Vínculo, última consulta válida, a válida anterior e o erro mais recente que ela (se houver)."""
         vinculo = self.vinculo(obra_id)
         if not vinculo:
-            return {'vinculo': None, 'lote': None, 'erro': None}
-        lote = self.ultimo_lote(obra_id, 'ok')
+            return {'vinculo': None, 'lote': None, 'anterior': None, 'erro': None}
+        lotes = self.lotes_ok(obra_id, 2)
         ultimo = self.ultimo_lote(obra_id)
         erro = ultimo if ultimo and ultimo['status'] == 'erro' else None
-        return {'vinculo': vinculo, 'lote': lote, 'erro': erro}
+        return {'vinculo': vinculo, 'lote': lotes[0] if lotes else None,
+                'anterior': lotes[1] if len(lotes) > 1 else None, 'erro': erro}
 
     def contar_lotes(self, obra_id: int, status: str) -> int:
         conn = self.get_connection()

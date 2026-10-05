@@ -12,9 +12,20 @@ from core.error_logger import log_error
 from db.omie_repo import OmieRepository, CONFERIDO
 from services import omie_atualizacao as atualizacao
 from services.financeiro_service import (usuario_atual, pode_ver_financeiro, pode_editar_financeiro)
-from services.omie_financeiro import (GRUPOS, moeda, montar_custos, custos_mat_mo, totais_custos,
-                                      avisos_vinculo, resumo_obra)
+from services.omie_financeiro import (GRUPOS, moeda, custos_mat_mo, totais_custos, avisos_vinculo,
+                                      resumo_obra, financeiro_obra, diferencas, textos_diferencas)
 from services.omie_integracao import chaves_configuradas, modo_simulado, sugerir_projetos
+
+ACOES_HISTORICO = {
+    'vinculo_criado': 'Ligou ao projeto do Omie', 'vinculo_trocado': 'Trocou o projeto do Omie',
+    'vinculo_reconfirmado': 'Reconfirmou a ligação', 'vinculo_desfeito': 'Desfez a ligação',
+    'vinculo_em_lote': 'Ligou obras em lote', 'lote_conferido': 'Marcou a consulta como conferida',
+    'atualizacao_iniciada': 'Iniciou a atualização do Omie', 'atualizacao_concluida': 'Concluiu a atualização do Omie',
+    'atualizacao_interrompida': 'Interrompeu a atualização do Omie',
+    'atualizacao_bloqueada': 'Atualização bloqueada pelo Omie (30 min)',
+    'chaves_configuradas': 'Informou as chaves do Omie', 'chaves_removidas': 'Removeu as chaves do Omie',
+    'financeiro_exportado': 'Exportou o financeiro (CSV)',
+}
 
 GRUPOS_EXTRATO = {
     'pagamentos': 'Pagamentos (conta paga)', 'recebimentos': 'Recebimentos (conta recebida)',
@@ -43,6 +54,13 @@ def _data_br(iso_dia):
         return datetime.strptime(iso_dia, '%Y-%m-%d').strftime('%d/%m/%Y')
     except (TypeError, ValueError):
         return iso_dia or ''
+
+
+def _cor_saldo(valor):
+    """Positivo verde, negativo vermelho; zero ou desconhecido sem sinal."""
+    if valor is None or valor == 0:
+        return '#1a2332'
+    return '#2e7d32' if valor > 0 else '#c62828'
 
 
 class OmieFinanceiroMixin:
@@ -101,6 +119,14 @@ class OmieFinanceiroMixin:
                     ui.label(f"Custos pagos: {moeda(totais['pago'])}").style(
                         'font-size: 13px; color: #1a2332; font-weight: bold;')
                     ui.label(f"Custos a pagar: {moeda(totais['aberto'])}").style('font-size: 12px; color: #666;')
+                    ind = resumo['indicadores']
+                    if resumo['notas_encontradas']:
+                        ui.label(f"Recebido líquido: {moeda(ind['recebido'])}").style('font-size: 12px; color: #1a2332;')
+                        ui.label(f"Saldo de caixa: {moeda(ind['saldo_caixa'])}").style(
+                            f"font-size: 12px; font-weight: bold; color: {_cor_saldo(ind['saldo_caixa'])};")
+                    else:
+                        ui.label('Recebimentos não encontrados no Omie').style(
+                            'font-size: 11px; color: #e65100;')
                     ui.label(f"Consulta de {_data_local(lote['consultado_em'])}").style('font-size: 10px; color: #999;')
                 else:
                     ui.label('Ainda não atualizado do Omie.').style('font-size: 12px; color: #999; font-style: italic;')
@@ -191,19 +217,86 @@ class OmieFinanceiroMixin:
                 if not lote:
                     ui.label('Ainda não há consulta do Omie para esta obra. Use "Atualizar esta obra".').style(
                         'font-size: 14px; color: #999; padding: 12px 0;')
+                    self._painel_historico(obra)
                     return
 
-                ui.label(f"Consulta de {_data_local(lote['consultado_em'])} · período "
-                         f"{_data_br(lote['inicio'])} a {_data_br(lote['fim'])}").style('font-size: 12px; color: #888;')
+                with ui.row().classes('w-full items-center justify-between'):
+                    ui.label(f"Consulta de {_data_local(lote['consultado_em'])} · período "
+                             f"{_data_br(lote['inicio'])} a {_data_br(lote['fim'])}").style('font-size: 12px; color: #888;')
+                    ui.button('Exportar', icon='download', on_click=lambda: self._exportar_financeiro_omie(obra)).props(
+                        'flat dense no-caps').tooltip('Baixar o financeiro desta consulta em CSV (abre no Excel)')
+                self._faixa_diferencas(obra, situacao['anterior'], lote)
+
+                financeiro = financeiro_obra(obra, lote['dados'])
                 with ui.tabs().props('no-caps align=center').classes('w-full text-blue-800') as abas:
                     aba_custo = ui.tab('Custo', icon='payments')
+                    aba_recebimento = ui.tab('Recebimento', icon='receipt_long')
+                    aba_saldo = ui.tab('Saldo bruto', icon='account_balance')
                 with ui.tab_panels(abas, value=aba_custo).classes('w-full'):
                     with ui.tab_panel(aba_custo):
-                        self._painel_custo(lote['dados'])
+                        self._painel_custo(financeiro['custos'])
+                    with ui.tab_panel(aba_recebimento):
+                        self._painel_recebimento(financeiro, vinculo['estado'] == CONFERIDO)
+                    with ui.tab_panel(aba_saldo):
+                        self._painel_saldo(financeiro['indicadores'])
                 self._painel_conferencia(lote['dados'])
+                self._painel_historico(obra)
 
             conteudo()
         dialog.open()
+
+    @staticmethod
+    def _faixa_diferencas(obra, anterior, lote):
+        dif = diferencas(anterior, lote, obra)
+        if not dif:
+            return
+        textos = textos_diferencas(dif)
+        desde = _data_local(dif['desde'])
+        if not textos:
+            ui.label(f'Sem mudanças desde a consulta de {desde}.').style('font-size: 12px; color: #888;')
+            return
+        with ui.column().classes('w-full gap-0').style(
+                'background: #e3f2fd; border-left: 4px solid #1976d2; padding: 6px 12px; border-radius: 4px;'):
+            ui.label(f'Desde a consulta de {desde}').style('font-size: 12px; font-weight: 700; color: #0d47a1;')
+            for texto in textos:
+                ui.label(f'• {texto}').style('font-size: 13px; color: #1a2332;')
+
+    def _exportar_financeiro_omie(self, obra):
+        try:
+            nome, conteudo = atualizacao.exportar_financeiro(self.omie_repo, obra, self._usuario_omie())
+        except (PermissionError, ValueError) as e:
+            ui.notify(str(e), type='warning')
+            return
+        ui.download.content(conteudo, nome, 'text/csv')
+
+    def _painel_historico(self, obra):
+        with ui.expansion('Histórico', icon='history').classes('w-full'):
+            try:
+                acoes = atualizacao.historico(self.omie_repo, obra, self._usuario_omie())
+            except PermissionError as e:
+                ui.label(str(e)).style('font-size: 12px; color: #999;')
+                return
+            self._linhas_historico(acoes)
+
+    @staticmethod
+    def _linhas_historico(acoes, nomes_obras=None):
+        """Ações do financeiro; com nomes_obras (histórico geral), mostra também a obra."""
+        if not acoes:
+            ui.label('Nenhuma ação registrada.').style('font-size: 12px; color: #999;')
+            return
+        for acao in acoes:
+            detalhe = acao.get('detalhe') or {}
+            extra = detalhe.get('projeto') or ''
+            if acao['acao'].startswith('atualizacao_') and 'ok' in detalhe:
+                extra = f"{detalhe['ok']} ok · {detalhe.get('erro', 0)} com erro"
+            if nomes_obras is not None and acao.get('obra_id') is not None:
+                obra = nomes_obras.get(acao['obra_id']) or f"obra {acao['obra_id']} (excluída)"
+                extra = f'{obra} · {extra}' if extra else obra
+            with ui.row().classes('w-full no-wrap gap-2').style('border-bottom: 1px solid #f0f0f0; padding: 2px 0;'):
+                ui.label(_data_local(acao['quando'])).style('font-size: 12px; color: #888; min-width: 110px;')
+                ui.label(acao.get('usuario_nome') or '—').style('font-size: 12px; color: #555; min-width: 120px;')
+                ui.label(ACOES_HISTORICO.get(acao['acao'], acao['acao']) + (f' · {extra}' if extra else '')).style(
+                    'font-size: 12px; color: #1a2332;')
 
     def _acoes_financeiro_omie(self, obra, vinculo, lote, avisos, recarregar):
         async def atualizar_esta():
@@ -230,8 +323,7 @@ class OmieFinanceiroMixin:
             ui.button('Desfazer ligação', icon='link_off',
                       on_click=lambda: self._confirmar_desfazer_ligacao(obra, recarregar)).props('flat no-caps color=negative')
 
-    def _painel_custo(self, dados):
-        custos = montar_custos(dados)
+    def _painel_custo(self, custos):
         grupos = custos_mat_mo(custos)
         totais = totais_custos(custos)
         ui.label('Gastos pagos · MAT e MO').style('font-size: 18px; font-weight: 700;')
@@ -254,10 +346,60 @@ class OmieFinanceiroMixin:
                 row_key='categoria').classes('w-full')
 
     @staticmethod
-    def _cartao_valor(titulo, valor):
+    def _cartao_valor(titulo, valor, cor='#1a2332', abaixo=None):
         with ui.card().classes('shadow-none').style('flex: 1; min-width: 180px; background: #f8fafc;'):
             ui.label(titulo).style('font-size: 12px; color: #666;')
-            ui.label(moeda(valor)).style('font-size: 20px; font-weight: 700; color: #1a2332;')
+            ui.label(moeda(valor)).style(f'font-size: 20px; font-weight: 700; color: {cor};')
+            if abaixo:
+                ui.label(abaixo).style('font-size: 11px; color: #888;')
+
+    def _painel_recebimento(self, financeiro, conferido):
+        ind, notas = financeiro['indicadores'], financeiro['notas']
+        if notas is None:
+            ui.label('Recebimentos não encontrados no Omie para este projeto — conferir no Omie. '
+                     'Não significa valor zero.').style(
+                'font-size: 14px; color: #e65100; background: #fff3e0; padding: 10px 12px; border-radius: 4px;')
+            return
+        if not conferido:
+            ui.label('Valores de NF a conferir no Omie (campos ainda não validados com uma consulta real).').style(
+                'font-size: 12px; color: #8d6e00; background: #fff8e1; padding: 6px 12px; border-radius: 4px;')
+        with ui.row().classes('w-full gap-3'):
+            self._cartao_valor('Recebido da CAIXA (líquido)', ind['recebido'],
+                               abaixo=f"(BRUTO: {moeda(ind['recebido_bruto'])})")
+            self._cartao_valor('Faturado nos títulos consultados', ind['faturado'])
+            self._cartao_valor('Faturado em aberto — líquido', ind['faturado_aberto'])
+        ui.label('Medições faturadas · títulos vinculados às NFs').style('font-size: 16px; font-weight: 700;')
+        ui.table(columns=[{'name': k, 'label': v, 'field': k, 'align': 'left'} for k, v in (
+            ('nf', 'NF'), ('vencimento', 'Vencimento'), ('bruto', 'Valor bruto'), ('retencoes', 'Retenções'),
+            ('recebido', 'Recebido líquido'), ('aberto', 'Aberto líquido'), ('situacao', 'Situação'))],
+            rows=[{'id': i, 'nf': n['nf'] + (f" · {n['parcela']}" if n['parcela'] else ''),
+                   'vencimento': n['vencimento'], 'bruto': moeda(n['bruto_centavos']),
+                   'retencoes': moeda(n['retencoes_centavos']), 'recebido': moeda(n['recebido_centavos']),
+                   'aberto': moeda(n['aberto_centavos']), 'situacao': n['situacao']} for i, n in enumerate(notas)],
+            row_key='id').classes('w-full')
+        ui.label('Recebimento parcial sem bruto atribuível fica "A confirmar". Retenções ainda sem campo '
+                 'identificado no Omie: "A confirmar" não significa "sem retenção".').style('font-size: 12px; color: #777;')
+
+    def _painel_saldo(self, ind):
+        ui.label('Saldo bruto de caixa').style('font-size: 18px; font-weight: 700;')
+        ui.label('Recebido da CAIXA (líquido) − custos pagos líquidos').style('font-size: 12px; color: #777;')
+        with ui.row().classes('w-full gap-3'):
+            self._cartao_valor('Recebido da CAIXA (líquido)', ind['recebido'],
+                               abaixo=f"(BRUTO: {moeda(ind['recebido_bruto'])})")
+            self._cartao_valor('Custos pagos líquidos', ind['custos_pagos'])
+            self._cartao_valor('Saldo bruto de caixa', ind['saldo_caixa'], cor=_cor_saldo(ind['saldo_caixa']))
+        ui.label('Retrato do caixa consultado: não é lucro e não inclui contas ainda a pagar ou a receber.').style(
+            'font-size: 12px; color: #777;')
+        ui.separator()
+        with ui.row().classes('w-full gap-3'):
+            self._cartao_valor('Total da Obra (cadastro)', ind['valor_obra'])
+            self._cartao_valor('Saldo contratual a receber', ind['saldo_contratual'])
+        if ind['valor_obra'] is None:
+            ui.label('Total da Obra não informado no cadastro: saldo contratual indisponível.').style(
+                'font-size: 12px; color: #e65100;')
+        ui.label('Saldo contratual = Total da Obra (contrato + aditivo do cadastro) − recebido líquido. Inclui '
+                 'retenções e valores ainda não faturados; não equivale a NFs vencidas.').style(
+            'font-size: 12px; color: #777;')
 
     def _painel_conferencia(self, dados):
         conciliacao = dados.get('conciliacao') or {}
@@ -437,6 +579,13 @@ class OmieFinanceiroMixin:
                 dialog.close()
                 self._atualizar_blocos_omie()
 
+            with ui.expansion('Histórico de ações do Financeiro', icon='history').classes('w-full'):
+                try:
+                    nomes = {o['id']: o.get('nome_contrato') or '' for o in self.db.listar_obras()}
+                    self._linhas_historico(atualizacao.historico_geral(self.omie_repo, self._usuario_omie()), nomes)
+                except PermissionError as e:
+                    ui.label(str(e)).style('font-size: 12px; color: #999;')
+
             with ui.row().classes('w-full justify-end gap-2'):
                 ui.button('Fechar', on_click=dialog.close).props('flat no-caps')
                 if marcadas:
@@ -555,6 +704,11 @@ class OmieFinanceiroMixin:
             if status is not None:
                 status.set_visibility(False)
         partes = [f"{resumo['ok']} obra(s) atualizada(s)"]
+        mudancas = resumo.get('mudancas') or {}
+        if mudancas.get('pagamentos'):
+            partes.append(f"{mudancas['pagamentos']} pagamento(s) novo(s)")
+        if mudancas.get('notas_recebidas'):
+            partes.append(f"{mudancas['notas_recebidas']} NF(s) recebida(s)")
         if resumo['erro']:
             partes.append(f"{resumo['erro']} com erro")
         if resumo['nao_processadas']:

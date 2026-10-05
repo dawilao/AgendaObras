@@ -3,12 +3,15 @@
 Toda operação confere a permissão no servidor (services.financeiro_service). Uma atualização
 por vez no processo; o bloqueio de 30 min do Omie (HTTP 425) desabilita novas tentativas.
 """
+import re
 import threading
 import time
+import unicodedata
 from datetime import date, datetime, timezone
 
 from services import omie_integracao as omie
-from services.financeiro_service import pode_editar_financeiro
+from services.financeiro_service import pode_editar_financeiro, pode_ver_financeiro
+from services.omie_financeiro import diferencas, exportar_csv
 
 PERIODO_INICIO_PADRAO = '2026-01-01'
 CACHE_PROJETOS_S = 300
@@ -81,16 +84,24 @@ def atualizar(repo, obras, user, obra_ids=None, cliente=None, hoje=None) -> dict
               'ic': v.get('ic_na_confirmacao')} for v in vinculos],
             inicio, fim, progresso=lambda texto: _estado.update(progresso=texto), cancelar=cancelar)
         ok = erro = 0
+        mudancas = {'pagamentos': 0, 'notas_recebidas': 0}
         for obra_id, item in resultado['obras'].items():
             if item['status'] == 'ok':
+                anterior = repo.ultimo_lote(obra_id, 'ok')
                 repo.gravar_lote(obra_id, 'ok', inicio, fim, dados=item['dados'], consultado_em=resultado['consultado_em'])
+                dif = diferencas(anterior, {'dados': item['dados'], 'consultado_em': resultado['consultado_em']},
+                                 por_id.get(obra_id))
+                if dif:
+                    mudancas['pagamentos'] += dif['pagamentos']['quantidade']
+                    mudancas['notas_recebidas'] += len(dif['notas_recebidas'])
                 ok += 1
             else:
                 repo.gravar_lote(obra_id, 'erro', inicio, fim, motivo=item['motivo'],
                                  consultado_em=resultado['consultado_em'])
                 erro += 1
         resumo = {'ok': ok, 'erro': erro, 'nao_processadas': len(vinculos) - ok - erro,
-                  'interrompido': resultado['interrompido'], 'bloqueado_ate': resultado['bloqueio']}
+                  'interrompido': resultado['interrompido'], 'bloqueado_ate': resultado['bloqueio'],
+                  'mudancas': mudancas}
         if resultado['bloqueio']:
             _estado['bloqueado_ate'] = resultado['bloqueio']
             acao = 'atualizacao_bloqueada'
@@ -174,3 +185,40 @@ def configurar_chaves(repo, chave, segredo, user, testar=None):
 def remover_chaves(repo, user):
     omie.remover_chaves(user)
     repo.registrar_acao(user, 'chaves_removidas')
+
+
+# ---------------------------------------------------------------------------
+# Consulta (mesma regra de quem vê o financeiro)
+# ---------------------------------------------------------------------------
+
+def _exigir_ver(user, obra):
+    if not pode_ver_financeiro(user, obra):
+        raise PermissionError('Financeiro restrito ao administrador, ao Financeiro e ao coordenador desta obra.')
+
+
+def _nome_arquivo(texto):
+    texto = unicodedata.normalize('NFKD', texto or 'obra').encode('ascii', 'ignore').decode()
+    return re.sub(r'[^A-Za-z0-9]+', '_', texto).strip('_').lower() or 'obra'
+
+
+def exportar_financeiro(repo, obra, user, hoje=None):
+    """(nome do arquivo, conteúdo CSV) da última consulta válida da obra."""
+    _exigir_ver(user, obra)
+    situacao = repo.situacao(obra['id'])
+    if not situacao['lote']:
+        raise ValueError('Ainda não há consulta do Omie para exportar.')
+    conteudo = exportar_csv(obra, situacao['vinculo'], situacao['lote'])
+    repo.registrar_acao(user, 'financeiro_exportado', obra['id'], {'consulta': situacao['lote']['consultado_em']})
+    nome = f"financeiro_omie_{_nome_arquivo(obra.get('nome_contrato'))}_{(hoje or date.today()).isoformat()}.csv"
+    return nome, conteudo
+
+
+def historico(repo, obra, user, limite=50):
+    """Ações do financeiro desta obra (sem chaves nem valores sensíveis)."""
+    _exigir_ver(user, obra)
+    return repo.auditoria(obra['id'], limite)
+
+
+def historico_geral(repo, user, limite=40):
+    _exigir_financeiro(user)
+    return repo.auditoria(None, limite)

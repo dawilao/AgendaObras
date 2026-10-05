@@ -2,12 +2,17 @@
 
 Um projeto por obra com IC ("…/CIDADE/<número do IC>"), duas contas, pagamento parcial em duas
 baixas, títulos em aberto, notas da CAIXA (recebida, parcial e em aberto) e tarifa no extrato.
-Nenhum dado real; os valores são sempre os mesmos para a mesma obra e período.
+Nenhum dado real; os valores são sempre os mesmos para a mesma obra, período e rodada. A partir
+da 2ª atualização no processo (rodada ≥ 1) aparecem pagamentos novos e a nota parcial é quitada,
+para conferir na tela o que mudou desde a consulta anterior.
 """
+import itertools
 import random
 from datetime import date, datetime, timedelta
 
 from services.omie_integracao import ErroIntegracao, numero_ic
+
+_rodadas = itertools.count()
 
 CONTAS = ((101, 'Conta simulada A'), (102, 'Conta simulada B'))
 CATEGORIAS = {'2.01.99': 'Fornecedor de Material', '2.01.97': 'Prestador de Serviço/Parceiro',
@@ -27,7 +32,13 @@ def _de_br(texto):
 class ClienteSimulado:
     ao_esperar = None
 
-    def __init__(self, obras):
+    @classmethod
+    def proxima(cls, obras):
+        """Cliente da próxima rodada do processo (usado pela tela em OMIE_MODO=simulado)."""
+        return cls(obras, rodada=next(_rodadas))
+
+    def __init__(self, obras, rodada=0):
+        self.rodada = rodada
         self.projetos = {}
         for obra in obras:
             numero = numero_ic(obra.get('contrato_ic'))
@@ -111,13 +122,23 @@ class ClienteSimulado:
             if not parcial:
                 cp.append(movimento(titulo, None, conta, categoria, fornecedor, valor, data, 'PAGO',
                                     {'nValPago': valor, 'nValAberto': 0, 'nValLiquido': valor}))
+        for r in range(min(self.rodada, 3)):     # pagamentos novos a cada rodada
+            k = len(pagamentos) + r
+            valor = round(random.Random(codigo * 10 + r).uniform(800, 9000), 2)   # não altera os demais valores
+            titulo, baixa, data = codigo * 100 + 60 + r, codigo * 1000 + 600 + r, _br(fim)
+            bxcp.append(movimento(titulo, baixa, CONTAS[k % 2][0], '2.01.99', FORNECEDORES['2.01.99'][0], valor,
+                                  data, 'PAGO', {'nValLiquido': valor, 'nValPago': valor, 'nValAberto': 0}))
+            cp.append(movimento(titulo, None, CONTAS[k % 2][0], '2.01.99', FORNECEDORES['2.01.99'][0], valor,
+                                data, 'PAGO', {'nValPago': valor, 'nValAberto': 0, 'nValLiquido': valor}))
+            linhas_extrato.append(extrato(baixa, CONTAS[k % 2][0], '2.01.99', FORNECEDORES['2.01.99'][0], -valor,
+                                          data, 'Conta Paga'))
         for j, categoria in enumerate(('2.01.99', '2.01.97')):
             valor = round(rng.uniform(2000, 15000), 2)
             cp.append(movimento(codigo * 100 + 40 + j, None, CONTAS[0][0], categoria,
                                 FORNECEDORES[categoria][0], valor, dia(0), 'A VENCER',
                                 {'nValPago': 0, 'nValAberto': valor, 'nValLiquido': valor}))
-        # Notas da CAIXA: recebida, parcialmente recebida e em aberto.
-        for j, fator in enumerate((1.0, 0.5, 0.0)):
+        # Notas da CAIXA: recebida, parcialmente recebida (quitada a partir da rodada 1) e em aberto.
+        for j, fator in enumerate((1.0, 1.0 if self.rodada else 0.5, 0.0)):
             bruto = round(rng.uniform(40000, 120000), 2)
             liquido = round(bruto * 0.89, 2)
             recebido = round(liquido * fator, 2)

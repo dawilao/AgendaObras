@@ -16,7 +16,8 @@ from core.migrations import run_migrations
 from db import Database
 from db.omie_repo import OmieRepository, CONFERIDO, EM_CONFERENCIA
 from services import omie_atualizacao as atualizacao
-from services.omie_financeiro import (avisos_vinculo, custos_mat_mo, moeda, montar_custos, resumo_obra,
+from services.omie_financeiro import (avisos_vinculo, custos_mat_mo, diferencas, exportar_csv, financeiro_obra,
+                                      moeda, montar_custos, montar_notas, resumo_obra, textos_diferencas,
                                       totais_custos)
 from services.omie_integracao import BloqueioOmie, ErroIntegracao
 from services.omie_simulado import ClienteSimulado
@@ -72,6 +73,77 @@ class ConversaoTest(unittest.TestCase):
         self.assertTrue(any('IC cadastrado' in a for a in avisos_vinculo({'contrato_ic': ''}, vinculo)))
         renomeado = {'avisos': ['O projeto foi renomeado no Omie para "X". Ligação a reconferir.']}
         self.assertEqual(len(avisos_vinculo({'contrato_ic': '00744/2026'}, vinculo, renomeado)), 1)
+
+
+def nota(codigo, nf, bruto, recebido, aberto, status='A VENCER'):
+    resumo = {k: v for k, v in (('nValPago', recebido), ('nValAberto', aberto)) if v is not None}
+    return {'detalhes': {'nCodTitulo': codigo, 'cNumDocFiscal': nf, 'nValorTitulo': bruto, 'cStatus': status,
+                         'dDtVenc': '10/09/2026'}, 'resumo': resumo}
+
+
+class RecebimentoTest(unittest.TestCase):
+    OBRA = {'id': 1, 'nome_contrato': 'ALMENARA', 'contrato_ic': '00744/2026', 'total_obra': 1000.00}
+
+    def dados(self, cr, bxcp=None, cp=None):
+        return {'series': {'CR': cr, 'BXCR': [], 'BXCP': bxcp or [baixa(1, 10, '2.01.99', 100)], 'CP': cp or []},
+                'extrato': []}
+
+    def test_valores_das_notas_e_retencao_a_confirmar(self):
+        notas = montar_notas(self.dados([nota(1, '1000', 120, 100, 0), nota(2, '1001', 60, 20, 30),
+                                         nota(3, '1002', 50, 0, 45), nota(1, '1000', 120, 100, 0),
+                                         nota(4, '1003', 80, None, 80), nota(5, '9', 10, 0, 10, 'CANCELADO')]))
+        self.assertEqual([n['nf'] for n in notas], ['1000', '1001', '1002', '1003'])   # duplicado e cancelada fora
+        self.assertEqual([n['situacao'] for n in notas], ['Recebida', 'Recebida em parte', 'Em aberto', 'A confirmar'])
+        self.assertEqual(notas[0]['bruto_centavos'], 12000)
+        self.assertTrue(all(n['retencoes_centavos'] is None for n in notas))
+        self.assertEqual(moeda(notas[0]['retencoes_centavos']), 'A confirmar')
+
+    def test_obra_sem_notas_nao_vira_zero(self):
+        ind = financeiro_obra(self.OBRA, self.dados([]))['indicadores']
+        self.assertIsNone(montar_notas(self.dados([])))
+        for chave in ('recebido', 'faturado', 'saldo_caixa', 'saldo_contratual'):
+            self.assertIsNone(ind[chave])
+        self.assertEqual(ind['custos_pagos'], 10000)
+
+    def test_saldos_e_bruto_atribuivel(self):
+        ind = financeiro_obra(self.OBRA, self.dados([nota(1, '1000', 120, 100, 0), nota(3, '1002', 50, 0, 45)]))['indicadores']
+        self.assertEqual((ind['recebido'], ind['recebido_bruto'], ind['faturado'], ind['faturado_aberto']),
+                         (10000, 12000, 17000, 4500))
+        self.assertEqual(ind['saldo_caixa'], 0)                       # 100 recebido − 100 pago
+        self.assertEqual(ind['saldo_contratual'], 100000 - 10000)     # Total da Obra − recebido
+        parcial = financeiro_obra(self.OBRA, self.dados([nota(1, '1000', 120, 100, 0), nota(2, '1001', 60, 20, 30)]))
+        self.assertIsNone(parcial['indicadores']['recebido_bruto'])  # bruto da parcial não é atribuível
+        sem_total = financeiro_obra(dict(self.OBRA, total_obra=None), self.dados([nota(1, '1000', 120, 100, 0)]))
+        self.assertIsNone(sem_total['indicadores']['saldo_contratual'])
+
+    def test_diferencas_entre_consultas(self):
+        antes = {'consultado_em': '2026-10-01T12:00:00+00:00',
+                 'dados': self.dados([nota(2, '1001', 60, 20, 30)], cp=[titulo(30, '2.01.99', 5)])}
+        antes['dados']['series']['CP'][0]['detalhes']['dDtVenc'] = '03/10/2026'
+        self.assertEqual(textos_diferencas(diferencas(antes, antes, self.OBRA)), [])
+        self.assertIsNone(diferencas(None, antes))
+        agora = {'consultado_em': '2026-10-05T12:00:00+00:00',
+                 'dados': self.dados([nota(2, '1001', 60, 50, 0), nota(3, '1002', 50, 0, 45)],
+                                     bxcp=[baixa(1, 10, '2.01.99', 100), baixa(7, 11, '2.01.97', 40)],
+                                     cp=antes['dados']['series']['CP'])}
+        dif = diferencas(antes, agora, self.OBRA)
+        self.assertEqual(dif['pagamentos'], {'quantidade': 1, 'centavos': 4000})
+        self.assertEqual((dif['notas_recebidas'], dif['notas_novas']), (['1001'], ['1002']))
+        self.assertEqual(dif['vencidos'], {'quantidade': 1, 'centavos': 500})
+        self.assertEqual(dif['variacao_recebido'], 3000)
+        self.assertEqual(len(textos_diferencas(dif)), 4)
+
+    def test_csv_com_cabecalho_e_texto_seguro(self):
+        lote = {'consultado_em': '2026-10-05T12:00:00+00:00', 'inicio': '2026-07-01', 'fim': '2026-10-05',
+                'dados': self.dados([nota(1, '=HYPERLINK("x")', 120, 100, 0)])}
+        conteudo = exportar_csv(self.OBRA, {'nome_projeto': 'P/ALMENARA/00744', 'estado': 'em_conferencia'}, lote)
+        self.assertTrue(conteudo.startswith(b'\xef\xbb\xbf'))
+        texto = conteudo.decode('utf-8-sig')
+        self.assertIn('Obra;ALMENARA', texto)
+        self.assertIn('Situação;Em conferência', texto)
+        self.assertIn('Recebido da CAIXA (líquido);100,00', texto)
+        self.assertIn("'=HYPERLINK", texto)
+        self.assertIn(';a confirmar;', texto)      # retenções
 
 
 class BancoTest(unittest.TestCase):
@@ -269,6 +341,55 @@ class BancoTest(unittest.TestCase):
         linhas = atualizacao.obras_sem_ligacao(self.repo, self.obras(), projetos)
         self.assertEqual(len(linhas), 2)
         self.assertTrue(all(l['situacao'] == 'sugerida' for l in linhas))
+
+    def test_retencao_guarda_ao_menos_a_consulta_anterior(self):
+        self.repo.salvar_vinculo(1, 900001, 'P/A/00744', '00744/2026', FIN)
+        with mock.patch('db.omie_repo.OMIE_LOTES_MANTIDOS', 1):
+            for i in range(4):
+                self.repo.gravar_lote(1, 'ok', '2026-08-01', '2026-10-05', dados={'n': i})
+        self.assertEqual(self.repo.contar_lotes(1, 'ok'), 2)
+        situacao = self.repo.situacao(1)
+        self.assertEqual((situacao['lote']['dados'], situacao['anterior']['dados']), ({'n': 3}, {'n': 2}))
+
+    def test_segunda_atualizacao_mostra_o_que_mudou(self):
+        self.ligar_todas()
+        primeira = atualizacao.atualizar(self.repo, self.obras(), FIN, cliente=ClienteSimulado(self.obras()),
+                                         hoje=date(2026, 10, 5))
+        self.assertEqual(primeira['mudancas'], {'pagamentos': 0, 'notas_recebidas': 0})
+        segunda = atualizacao.atualizar(self.repo, self.obras(), FIN, cliente=ClienteSimulado(self.obras(), rodada=1),
+                                        hoje=date(2026, 10, 5))
+        self.assertEqual(segunda['mudancas'], {'pagamentos': 3, 'notas_recebidas': 3})
+        situacao = self.repo.situacao(1)
+        self.assertEqual(situacao['lote']['dados']['conciliacao']['status'], 'Totais conferem')
+        dif = diferencas(situacao['anterior'], situacao['lote'], self.db.obter_obra(1))
+        self.assertEqual(dif['pagamentos']['quantidade'], 1)
+        resumo_card = resumo_obra(self.db.obter_obra(1), situacao)
+        self.assertTrue(resumo_card['notas_encontradas'])
+        self.assertIsNotNone(resumo_card['indicadores']['saldo_contratual'])
+
+    def test_exportar_e_historico_seguem_quem_ve(self):
+        with sqlite3.connect(self.path) as conn:
+            conn.execute('UPDATE obras SET coordenador_id=7 WHERE id=1')
+        conn.close()
+        self.ligar_todas()
+        obra = self.db.obter_obra(1)
+        with self.assertRaises(ValueError):
+            atualizacao.exportar_financeiro(self.repo, obra, FIN)        # sem consulta
+        atualizacao.atualizar(self.repo, self.obras(), FIN, cliente=ClienteSimulado(self.obras()), hoje=date(2026, 10, 5))
+        coordenador = {'id': 7, 'nome': 'Coord', 'financeiro': 0}
+        outro = {'id': 8, 'nome': 'Outro', 'financeiro': 0}
+        nome, conteudo = atualizacao.exportar_financeiro(self.repo, obra, coordenador, hoje=date(2026, 10, 5))
+        self.assertEqual(nome, 'financeiro_omie_almenara_2026-10-05.csv')
+        self.assertIn('ALMENARA', conteudo.decode('utf-8-sig'))
+        self.assertEqual(atualizacao.historico(self.repo, obra, coordenador)[0]['acao'], 'financeiro_exportado')
+        for user in (outro, None):
+            with self.assertRaises(PermissionError):
+                atualizacao.exportar_financeiro(self.repo, obra, user)
+            with self.assertRaises(PermissionError):
+                atualizacao.historico(self.repo, obra, user)
+        with self.assertRaises(PermissionError):
+            atualizacao.historico_geral(self.repo, ADMIN)
+        self.assertTrue(atualizacao.historico_geral(self.repo, FIN))
 
     def test_periodo_padrao(self):
         self.assertEqual(atualizacao.periodo_padrao([{'data_inicio': None}], date(2026, 10, 5)),

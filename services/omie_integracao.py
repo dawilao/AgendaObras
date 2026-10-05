@@ -206,7 +206,7 @@ def remover_chaves(user):
 def criar_cliente(obras=None):
     if modo_simulado():
         from services.omie_simulado import ClienteSimulado
-        return ClienteSimulado(obras or [])
+        return ClienteSimulado.proxima(obras or [])
     return ClienteOmie(os.environ.get('OMIE_APP_KEY'), os.environ.get('OMIE_APP_SECRET'))
 
 
