@@ -10,8 +10,8 @@ import unicodedata
 from datetime import date, datetime, timezone
 
 from services import omie_integracao as omie
-from services.financeiro_service import pode_editar_financeiro, pode_ver_financeiro
-from services.omie_financeiro import diferencas, exportar_csv
+from services.financeiro_service import pode_editar_financeiro, pode_validar_parceiros, pode_ver_financeiro
+from services.omie_financeiro import diferencas, exportar_csv, pagamentos_por_fornecedor
 
 PERIODO_INICIO_PADRAO = '2026-01-01'
 CACHE_PROJETOS_S = 300
@@ -99,6 +99,8 @@ def atualizar(repo, obras, user, obra_ids=None, cliente=None, hoje=None) -> dict
                 repo.gravar_lote(obra_id, 'erro', inicio, fim, motivo=item['motivo'],
                                  consultado_em=resultado['consultado_em'])
                 erro += 1
+        if not resultado['bloqueio'] and not resultado['interrompido']:
+            resultado['bloqueio'] = _buscar_fornecedores_novos(repo, cliente, resultado, cancelar)
         resumo = {'ok': ok, 'erro': erro, 'nao_processadas': len(vinculos) - ok - erro,
                   'interrompido': resultado['interrompido'], 'bloqueado_ate': resultado['bloqueio'],
                   'mudancas': mudancas}
@@ -112,6 +114,22 @@ def atualizar(repo, obras, user, obra_ids=None, cliente=None, hoje=None) -> dict
     finally:
         _estado.update(rodando=False, progresso='', cancelar=None)
         _trava.release()
+
+
+def _buscar_fornecedores_novos(repo, cliente, resultado, cancelar):
+    """Nome e documento mascarado dos fornecedores da 2.01.97 ainda não conhecidos (um ConsultarCliente
+    por fornecedor novo). Falha não afeta as obras; devolve o horário do bloqueio do Omie, se houver."""
+    codigos = {p['codigo'] for item in resultado['obras'].values() if item['status'] == 'ok'
+               for p in pagamentos_por_fornecedor(item['dados']) if p['codigo']}
+    novos = codigos - set(repo.fornecedores(codigos))
+    if not novos:
+        return None
+    try:
+        repo.salvar_fornecedores(omie.consultar_fornecedores(
+            cliente, novos, progresso=lambda texto: _estado.update(progresso=texto), cancelar=cancelar))
+    except omie.BloqueioOmie as bloqueio:
+        return bloqueio.ate
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -222,3 +240,24 @@ def historico(repo, obra, user, limite=50):
 def historico_geral(repo, user, limite=40):
     _exigir_financeiro(user)
     return repo.auditoria(None, limite)
+
+
+# ---------------------------------------------------------------------------
+# Parceiros da obra (Financeiro ou coordenador da própria obra)
+# ---------------------------------------------------------------------------
+
+def _exigir_validar(user, obra):
+    if not pode_validar_parceiros(user, obra):
+        raise PermissionError('Somente o Financeiro e o coordenador desta obra validam os parceiros.')
+
+
+def validar_parceiro(repo, obra, codigo, papel, user) -> bool:
+    _exigir_validar(user, obra)
+    nome = (repo.fornecedores([codigo]).get(int(codigo)) or {}).get('nome', '') if codigo else ''
+    return repo.validar_parceiro(obra['id'], codigo, papel, user, nome)
+
+
+def desfazer_parceiro(repo, obra, codigo, user) -> bool:
+    _exigir_validar(user, obra)
+    nome = (repo.fornecedores([codigo]).get(int(codigo)) or {}).get('nome', '')
+    return repo.desfazer_validacao(obra['id'], codigo, user, nome)

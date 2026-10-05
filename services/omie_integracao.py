@@ -1,6 +1,7 @@
 """Consulta somente leitura ao Omie, por projeto (obra). Portado de Novos_ajustes (Dia 4).
 
-Fontes: /api/v1/financas/mf/, /financas/extrato/, /geral/projetos/, /geral/contacorrente/.
+Fontes: /api/v1/financas/mf/, /financas/extrato/, /geral/projetos/, /geral/contacorrente/,
+/geral/clientes/ (só nome e documento mascarado dos fornecedores).
 A chave do Omie dá acesso total à conta: a lista fechada ROTAS é a barreira do lado do
 AgendaObras. Resultado incompleto nunca vira zero; erro numa obra não derruba as outras.
 
@@ -28,6 +29,7 @@ ROTAS = {
     'ListarContasCorrentes': 'geral/contacorrente/',
     'ListarMovimentos': 'financas/mf/',
     'ListarExtrato': 'financas/extrato/',
+    'ConsultarCliente': 'geral/clientes/',
 }
 ESPERA_IDENTICA_S = 60
 BLOQUEIO_MIN = 30
@@ -510,3 +512,41 @@ def coletar(chamar, vinculos, inicio, fim, progresso=None, cancelar=None):
     except BloqueioOmie as bloqueio:
         resultado['bloqueio'] = bloqueio.ate
     return resultado
+
+
+# ---------------------------------------------------------------------------
+# Fornecedores (nome e documento mascarado, para validar os parceiros da obra)
+# ---------------------------------------------------------------------------
+
+def mascarar_documento(documento):
+    """CNPJ 12.345.***/0001-** · CPF ***.456.789-**. O documento completo nunca sai desta função."""
+    digitos = re.sub(r'\D', '', str(documento or ''))
+    if len(digitos) == 14:
+        return f'{digitos[:2]}.{digitos[2:5]}.***/{digitos[8:12]}-**'
+    if len(digitos) == 11:
+        return f'***.{digitos[3:6]}.{digitos[6:9]}-**'
+    return 'documento não informado'
+
+
+def consultar_fornecedores(chamar, codigos, progresso=None, cancelar=None):
+    """{codigo: {'nome', 'documento_mascarado'}}. Fornecedor que falhar fica de fora (a tela mostra o
+    nome do extrato ou o código); só o bloqueio do Omie interrompe."""
+    encontrados = {}
+    codigos = sorted({int(c) for c in codigos if c})
+    for i, codigo in enumerate(codigos, 1):
+        if cancelar is not None and cancelar.is_set():
+            break
+        if progresso:
+            progresso(f'Fornecedor {i} de {len(codigos)}')
+        try:
+            resposta = chamar('ConsultarCliente', {'codigo_cliente_omie': codigo})
+        except BloqueioOmie:
+            raise
+        except ErroIntegracao:
+            continue
+        if str(resposta.get('codigo_cliente_omie', codigo)) != str(codigo):
+            continue
+        nome = str(resposta.get('razao_social') or resposta.get('nome_fantasia') or '').strip()
+        if nome:
+            encontrados[codigo] = {'nome': nome[:150], 'documento_mascarado': mascarar_documento(resposta.get('cnpj_cpf'))}
+    return encontrados

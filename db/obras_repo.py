@@ -404,6 +404,7 @@ class ObrasRepository(BaseRepository):
             # Financeiro Omie: ligação e consultas saem com a obra; a auditoria fica.
             cursor.execute('DELETE FROM omie_lotes WHERE obra_id = ?', (obra_id,))
             cursor.execute('DELETE FROM omie_vinculos WHERE obra_id = ?', (obra_id,))
+            cursor.execute('DELETE FROM obra_parceiros WHERE obra_id = ?', (obra_id,))
             cursor.execute('DELETE FROM obra_checklist WHERE obra_id = ?', (obra_id,))
             cursor.execute('DELETE FROM obras WHERE id = ?', (obra_id,))
             conn.commit()

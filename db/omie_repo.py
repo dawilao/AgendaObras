@@ -41,6 +41,28 @@ def _criar_schema(conn):
     conn.execute('CREATE INDEX IF NOT EXISTS idx_fin_auditoria_obra ON financeiro_auditoria(obra_id, id)')
 
 
+def criar_schema_parceiros(conn):
+    conn.execute('SAVEPOINT omie_parceiros_schema')
+    try:
+        # Fornecedor: só código, nome e documento já mascarado (nunca o documento completo).
+        conn.execute("""CREATE TABLE IF NOT EXISTS omie_fornecedores (
+            codigo INTEGER PRIMARY KEY, nome TEXT NOT NULL, documento_mascarado TEXT, consultado_em TEXT NOT NULL)""")
+        conn.execute("""CREATE TABLE IF NOT EXISTS obra_parceiros (
+            obra_id INTEGER NOT NULL, fornecedor_codigo INTEGER NOT NULL,
+            papel TEXT NOT NULL CHECK(papel IN ('parceiro','outro')),
+            validado_por INTEGER, validado_por_nome TEXT, validado_em TEXT NOT NULL,
+            PRIMARY KEY (obra_id, fornecedor_codigo))""")
+        conn.execute('RELEASE SAVEPOINT omie_parceiros_schema')
+    except Exception:
+        conn.execute('ROLLBACK TO SAVEPOINT omie_parceiros_schema')
+        conn.execute('RELEASE SAVEPOINT omie_parceiros_schema')
+        raise
+
+
+PARCEIRO = 'parceiro'
+OUTRO = 'outro'
+
+
 def agora() -> str:
     return datetime.now(timezone.utc).isoformat(timespec='seconds')
 
@@ -275,6 +297,80 @@ class OmieRepository(BaseRepository):
         erro = ultimo if ultimo and ultimo['status'] == 'erro' else None
         return {'vinculo': vinculo, 'lote': lotes[0] if lotes else None,
                 'anterior': lotes[1] if len(lotes) > 1 else None, 'erro': erro}
+
+    # ---------- fornecedores e parceiros ----------
+    def fornecedores(self, codigos: Optional[Iterable[int]] = None) -> Dict[int, Dict]:
+        conn = self.get_connection()
+        try:
+            rows = [dict(r) for r in conn.execute('SELECT * FROM omie_fornecedores')]
+        finally:
+            conn.close()
+        por_codigo = {r['codigo']: r for r in rows}
+        if codigos is not None:
+            pedidos = {int(c) for c in codigos if c is not None}
+            por_codigo = {c: r for c, r in por_codigo.items() if c in pedidos}
+        return por_codigo
+
+    def salvar_fornecedores(self, encontrados: Dict[int, Dict]):
+        """encontrados: {codigo: {'nome', 'documento_mascarado'}}."""
+        if not encontrados:
+            return
+        conn = self.get_connection()
+        try:
+            for codigo, f in encontrados.items():
+                conn.execute('INSERT INTO omie_fornecedores(codigo,nome,documento_mascarado,consultado_em) '
+                             'VALUES(?,?,?,?) ON CONFLICT(codigo) DO UPDATE SET nome=excluded.nome, '
+                             'documento_mascarado=excluded.documento_mascarado, consultado_em=excluded.consultado_em',
+                             (int(codigo), f['nome'], f.get('documento_mascarado'), agora()))
+            conn.commit()
+        finally:
+            conn.close()
+
+    def parceiros_da_obra(self, obra_id: int) -> Dict[int, Dict]:
+        conn = self.get_connection()
+        try:
+            rows = conn.execute('SELECT * FROM obra_parceiros WHERE obra_id=?', (obra_id,)).fetchall()
+            return {r['fornecedor_codigo']: dict(r) for r in rows}
+        finally:
+            conn.close()
+
+    def validar_parceiro(self, obra_id: int, codigo: int, papel: str, user, nome: str = '') -> bool:
+        """Marca o fornecedor como parceiro da obra ou outro prestador. False quando nada mudou."""
+        if papel not in (PARCEIRO, OUTRO):
+            raise ValueError('Papel inválido.')
+        if codigo is None or int(codigo) <= 0:
+            raise ValueError('Fornecedor sem código no Omie: não é possível validar.')
+        uid, autor = _autor(user)
+        conn = self.get_connection()
+        try:
+            atual = conn.execute('SELECT papel FROM obra_parceiros WHERE obra_id=? AND fornecedor_codigo=?',
+                                 (obra_id, int(codigo))).fetchone()
+            if atual and atual['papel'] == papel:
+                return False
+            conn.execute('INSERT INTO obra_parceiros(obra_id,fornecedor_codigo,papel,validado_por,validado_por_nome,'
+                         'validado_em) VALUES(?,?,?,?,?,?) ON CONFLICT(obra_id, fornecedor_codigo) DO UPDATE SET '
+                         'papel=excluded.papel, validado_por=excluded.validado_por, '
+                         'validado_por_nome=excluded.validado_por_nome, validado_em=excluded.validado_em',
+                         (obra_id, int(codigo), papel, uid, autor, agora()))
+            self._registrar(conn, user, 'parceiro_alterado' if atual else 'parceiro_validado', obra_id,
+                            {'fornecedor': int(codigo), 'nome': nome, 'papel': papel})
+            conn.commit()
+            return True
+        finally:
+            conn.close()
+
+    def desfazer_validacao(self, obra_id: int, codigo: int, user, nome: str = '') -> bool:
+        conn = self.get_connection()
+        try:
+            cur = conn.execute('DELETE FROM obra_parceiros WHERE obra_id=? AND fornecedor_codigo=?',
+                               (obra_id, int(codigo)))
+            if not cur.rowcount:
+                return False
+            self._registrar(conn, user, 'parceiro_desfeito', obra_id, {'fornecedor': int(codigo), 'nome': nome})
+            conn.commit()
+            return True
+        finally:
+            conn.close()
 
     def contar_lotes(self, obra_id: int, status: str) -> int:
         conn = self.get_connection()

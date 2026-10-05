@@ -2,6 +2,7 @@
 
 Ver: administrador, Financeiro ou coordenador da própria obra (obras.coordenador_id).
 Alterar: só quem tem a permissão Financeiro. Estar vinculado ao contrato não dá acesso.
+Exceção: validar os parceiros da obra também cabe ao coordenador da própria obra.
 """
 from db.auth_repo import AuthDatabase
 
@@ -36,6 +37,13 @@ def pode_ver_financeiro(user, obra) -> bool:
 
 def pode_editar_financeiro(user) -> bool:
     return eh_financeiro(user)
+
+
+def pode_validar_parceiros(user, obra) -> bool:
+    """Financeiro ou coordenador da própria obra; administrador sem a permissão Financeiro, não."""
+    if not user or not user.get('id'):
+        return False
+    return eh_financeiro(user) or eh_coordenador_da_obra(user, obra)
 
 
 def exigir_ver(obra, usuario_provider=usuario_atual):

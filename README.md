@@ -96,6 +96,8 @@ Ajustes opcionais, lidos do ambiente do processo. Todos têm valor padrão, ent�
 
 Na aba Financeiro do card, administrador, Financeiro e coordenador da própria obra veem o resumo do Omie (custos, recebido líquido e saldo de caixa) e abrem o detalhamento: Custo, Recebimento, Saldo bruto, o que mudou desde a consulta anterior, histórico de ações e exportação em CSV. Só quem tem a permissão **Financeiro** (marcada em Usuários) atualiza, liga obras a projetos e informa as chaves. A ligação usa o projeto do Omie com o número do IC no nome, nunca a cidade. As consultas são somente leitura.
 
+Os fornecedores da categoria 2.01.97 (Prestador de Serviço/Parceiro) são validados por obra, pelo código do fornecedor no Omie: o Financeiro e o coordenador da obra marcam quem é o parceiro contratado, e só esses pagamentos são comparados com o "Parceiro medido" e o total previsto. O documento do fornecedor é guardado apenas mascarado.
+
 | Variável | Para que serve |
 |---|---|
 | `OMIE_APP_KEY` / `OMIE_APP_SECRET` | Chaves do Omie. Se estiverem no ambiente do serviço (ex.: `EnvironmentFile=` no systemd), são usadas direto; senão, o Financeiro as informa na tela e elas ficam só na memória do servidor até ele reiniciar |

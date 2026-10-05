@@ -9,9 +9,11 @@ import io
 from datetime import date, datetime
 
 from services.omie_integracao import centavos, numero_ic, numeros_no_nome
+from utils.formatters import calcular_valor_parceiro
 
 CATEGORIA_MAT = '2.01.99'
 CATEGORIAS_MO = ('2.01.97', '2.01.98')
+CATEGORIA_PARCEIROS = '2.01.97'   # Prestador de Serviço/Parceiro: reúne vários prestadores
 GRUPOS = (('mat', 'MAT · materiais'), ('mo', 'MO / serviços · provisório'), ('outros', 'Outros gastos'))
 
 
@@ -283,6 +285,91 @@ def textos_diferencas(dif):
     if dif['variacao_recebido'] and not dif['notas_recebidas']:
         textos.append(f"Recebido: {_variacao(dif['variacao_recebido'])}")
     return textos
+
+
+# ---------------------------------------------------------------------------
+# Parceiros (categoria 2.01.97)
+# ---------------------------------------------------------------------------
+# O total da 2.01.97 reúne vários prestadores e nunca é comparado com o % Parceiro.
+# Só os fornecedores validados como parceiro da obra (pelo código do fornecedor no Omie)
+# entram na comparação com as medições; o pago na categoria continua em "MO / serviços".
+
+def pagamentos_por_fornecedor(dados, categoria=CATEGORIA_PARCEIROS):
+    """Baixas líquidas da categoria somadas por fornecedor, sem repetir a mesma baixa."""
+    nomes = {r.get('nCodCliente'): r.get('cDesCliente') for r in dados.get('extrato', [])
+             if r.get('nCodCliente') and r.get('cDesCliente')}
+    por_fornecedor, baixas = {}, set()
+    for linha in dados.get('series', {}).get('BXCP', []):
+        detalhes = linha.get('detalhes', {})
+        if _cancelado(linha) or (detalhes.get('cCodCateg') or '').strip() != categoria:
+            continue
+        baixa = detalhes.get('nCodBaixa')
+        if baixa is not None:
+            if baixa in baixas:
+                continue
+            baixas.add(baixa)
+        codigo = detalhes.get('nCodCliente') or None
+        item = por_fornecedor.setdefault(codigo, {'codigo': codigo, 'nome_extrato': nomes.get(codigo),
+                                                  'pago_centavos': 0, 'pagamentos': 0})
+        item['pago_centavos'] = _somar(item['pago_centavos'],
+                                       _centavos_ou_none(linha.get('resumo', {}).get('nValLiquido')))
+        item['pagamentos'] += 1
+    return sorted(por_fornecedor.values(), key=lambda i: (-(i['pago_centavos'] or 0), str(i['codigo'])))
+
+
+def classificar_parceiros(pagos, validacoes, fornecedores):
+    """Separa em parceiros da obra, outros prestadores e a validar.
+
+    validacoes: {codigo: linha de obra_parceiros}; fornecedores: {codigo: {'nome', 'documento_mascarado'}}.
+    Parceiro validado sem pagamento no período aparece com R$ 0,00.
+    """
+    grupos = {'parceiros': [], 'outros': [], 'a_validar': []}
+    por_codigo = {p['codigo']: p for p in pagos}
+    for codigo, validacao in validacoes.items():
+        if codigo not in por_codigo and validacao['papel'] == 'parceiro':
+            por_codigo[codigo] = {'codigo': codigo, 'nome_extrato': None, 'pago_centavos': 0, 'pagamentos': 0}
+    for codigo, pago in por_codigo.items():
+        cadastro = fornecedores.get(codigo) or {}
+        item = {**pago, 'nome': cadastro.get('nome') or pago.get('nome_extrato')
+                or (f'Fornecedor {codigo}' if codigo else 'Fornecedor não informado no Omie'),
+                'documento': cadastro.get('documento_mascarado') or 'documento não consultado',
+                'validacao': validacoes.get(codigo)}
+        if item['validacao'] is None:
+            grupos['a_validar'].append(item)
+        else:
+            grupos['parceiros' if item['validacao']['papel'] == 'parceiro' else 'outros'].append(item)
+    for lista in grupos.values():
+        lista.sort(key=lambda i: (-(i['pago_centavos'] or 0), i['nome']))
+    return grupos
+
+
+def _medido_parceiro(medicoes):
+    return centavos(round(sum(float(m.get('valor_parceiro_medicao') or 0) for m in medicoes), 2))
+
+
+def comparar_parceiro(obra, parceiros, medicoes):
+    """Pago aos parceiros validados × parceiro medido × previsto. Só aviso; nunca bloqueia."""
+    percentual = float(obra.get('valor_percentual') or 0)
+    if percentual <= 0:
+        return {'nivel': 'indisponivel', 'texto': 'Comparação indisponível: obra sem % Parceiro.'}
+    if not parceiros:
+        return {'nivel': 'sem_parceiro', 'texto': 'Valide os parceiros da obra para comparar com as medições.'}
+    pago = _soma(p['pago_centavos'] for p in parceiros)
+    medido = _medido_parceiro(medicoes)
+    previsto = centavos(calcular_valor_parceiro(obra.get('valor_contrato'), obra.get('total_obra'), percentual))
+    resultado = {'pago': pago, 'medido': medido, 'previsto': previsto}
+    if pago is None:
+        return {**resultado, 'nivel': 'a_confirmar', 'texto': 'Pago ao parceiro a confirmar.'}
+    if previsto and pago > previsto:
+        return {**resultado, 'nivel': 'vermelho', 'texto': f'Pago ao parceiro acima do previsto: {moeda(pago - previsto)}'}
+    if pago > medido:
+        return {**resultado, 'nivel': 'ambar', 'texto': f'Pago ao parceiro acima do medido: {moeda(pago - medido)}'}
+    return {**resultado, 'nivel': 'ok', 'texto': 'Pago ao parceiro dentro do medido.'}
+
+
+def parceiros_obra(obra, dados, validacoes, fornecedores, medicoes):
+    grupos = classificar_parceiros(pagamentos_por_fornecedor(dados), validacoes, fornecedores)
+    return {**grupos, 'comparacao': comparar_parceiro(obra, grupos['parceiros'], medicoes)}
 
 
 # ---------------------------------------------------------------------------

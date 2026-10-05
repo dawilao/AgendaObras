@@ -11,9 +11,11 @@ from nicegui import ui, run
 from core.error_logger import log_error
 from db.omie_repo import OmieRepository, CONFERIDO
 from services import omie_atualizacao as atualizacao
-from services.financeiro_service import (usuario_atual, pode_ver_financeiro, pode_editar_financeiro)
+from services.financeiro_service import (usuario_atual, pode_ver_financeiro, pode_editar_financeiro,
+                                         pode_validar_parceiros)
 from services.omie_financeiro import (GRUPOS, moeda, custos_mat_mo, totais_custos, avisos_vinculo,
-                                      resumo_obra, financeiro_obra, diferencas, textos_diferencas)
+                                      resumo_obra, financeiro_obra, diferencas, textos_diferencas,
+                                      pagamentos_por_fornecedor, parceiros_obra)
 from services.omie_integracao import chaves_configuradas, modo_simulado, sugerir_projetos
 
 ACOES_HISTORICO = {
@@ -25,7 +27,12 @@ ACOES_HISTORICO = {
     'atualizacao_bloqueada': 'Atualização bloqueada pelo Omie (30 min)',
     'chaves_configuradas': 'Informou as chaves do Omie', 'chaves_removidas': 'Removeu as chaves do Omie',
     'financeiro_exportado': 'Exportou o financeiro (CSV)',
+    'parceiro_validado': 'Validou fornecedor da 2.01.97', 'parceiro_alterado': 'Alterou a validação de fornecedor',
+    'parceiro_desfeito': 'Desfez a validação de fornecedor',
 }
+PAPEIS = {'parceiro': 'Parceiro da obra', 'outro': 'Outro prestador'}
+CORES_COMPARACAO = {'vermelho': ('#ffebee', '#c62828'), 'ambar': ('#fff8e1', '#8d6e00'),
+                    'ok': ('#e8f5e9', '#2e7d32')}
 
 GRUPOS_EXTRATO = {
     'pagamentos': 'Pagamentos (conta paga)', 'recebimentos': 'Recebimentos (conta recebida)',
@@ -127,6 +134,7 @@ class OmieFinanceiroMixin:
                     else:
                         ui.label('Recebimentos não encontrados no Omie').style(
                             'font-size: 11px; color: #e65100;')
+                    self._resumo_parceiros_card(obra, lote['dados'])
                     ui.label(f"Consulta de {_data_local(lote['consultado_em'])}").style('font-size: 10px; color: #999;')
                 else:
                     ui.label('Ainda não atualizado do Omie.').style('font-size: 12px; color: #999; font-style: italic;')
@@ -143,6 +151,19 @@ class OmieFinanceiroMixin:
         blocos[obra['id']] = bloco
         bloco()
         return True
+
+    def _resumo_parceiros_card(self, obra, dados):
+        try:
+            parceiros = self._dados_parceiros(obra, dados)
+        except Exception as e:
+            log_error(e, 'omie_financeiro', f"Parceiros no card - obra {obra['id']}")
+            return
+        comparacao = parceiros['comparacao']
+        if comparacao['nivel'] in ('ambar', 'vermelho'):
+            ui.label(f"⚠ {comparacao['texto']}").style(
+                f"font-size: 11px; color: {CORES_COMPARACAO[comparacao['nivel']][1]}; font-weight: 600;")
+        if parceiros['a_validar']:
+            ui.label(f"{len(parceiros['a_validar'])} parceiro(s) a validar").style('font-size: 11px; color: #e65100;')
 
     def _atualizar_blocos_omie(self, obra_ids=None):
         for obra_id, bloco in list(getattr(self, '_blocos_omie', {}).items()):
@@ -235,6 +256,7 @@ class OmieFinanceiroMixin:
                 with ui.tab_panels(abas, value=aba_custo).classes('w-full'):
                     with ui.tab_panel(aba_custo):
                         self._painel_custo(financeiro['custos'])
+                        self._painel_parceiros(obra, lote['dados'], pode_validar_parceiros(user, obra), recarregar)
                     with ui.tab_panel(aba_recebimento):
                         self._painel_recebimento(financeiro, vinculo['estado'] == CONFERIDO)
                     with ui.tab_panel(aba_saldo):
@@ -289,6 +311,9 @@ class OmieFinanceiroMixin:
             extra = detalhe.get('projeto') or ''
             if acao['acao'].startswith('atualizacao_') and 'ok' in detalhe:
                 extra = f"{detalhe['ok']} ok · {detalhe.get('erro', 0)} com erro"
+            if 'fornecedor' in detalhe:
+                extra = ' · '.join(t for t in (detalhe.get('nome') or f"código {detalhe['fornecedor']}",
+                                               PAPEIS.get(detalhe.get('papel'), '')) if t)
             if nomes_obras is not None and acao.get('obra_id') is not None:
                 obra = nomes_obras.get(acao['obra_id']) or f"obra {acao['obra_id']} (excluída)"
                 extra = f'{obra} · {extra}' if extra else obra
@@ -352,6 +377,95 @@ class OmieFinanceiroMixin:
             ui.label(moeda(valor)).style(f'font-size: 20px; font-weight: 700; color: {cor};')
             if abaixo:
                 ui.label(abaixo).style('font-size: 11px; color: #888;')
+
+    def _dados_parceiros(self, obra, dados):
+        pagos = pagamentos_por_fornecedor(dados)
+        validacoes = self.omie_repo.parceiros_da_obra(obra['id'])
+        fornecedores = self.omie_repo.fornecedores({p['codigo'] for p in pagos if p['codigo']} | set(validacoes))
+        # Medições só são lidas quando há comparação possível.
+        comparar = float(obra.get('valor_percentual') or 0) > 0 and any(
+            v['papel'] == 'parceiro' for v in validacoes.values())
+        medicoes = self.db.obter_valores_medicoes(obra['id']) if comparar else []
+        return parceiros_obra(obra, dados, validacoes, fornecedores, medicoes)
+
+    def _painel_parceiros(self, obra, dados, pode_validar, recarregar):
+        try:
+            parceiros = self._dados_parceiros(obra, dados)
+        except Exception as e:
+            log_error(e, 'omie_financeiro', f"Parceiros Omie - obra {obra['id']}")
+            ui.label('Parceiros indisponíveis no momento.').style('font-size: 12px; color: #999;')
+            return
+        ui.separator().classes('my-2')
+        ui.label('Parceiros · categoria 2.01.97').style('font-size: 18px; font-weight: 700;')
+        ui.label('O total da categoria 2.01.97 reúne vários prestadores e não é comparado com o % Parceiro. '
+                 'Marque qual fornecedor é o parceiro contratado; só os parceiros validados entram na comparação '
+                 'com as medições. O pago na categoria continua em "MO / serviços".').style(
+            'font-size: 12px; color: #777;')
+
+        comparacao = parceiros['comparacao']
+        fundo, cor = CORES_COMPARACAO.get(comparacao['nivel'], ('#f5f5f5', '#666'))
+        ui.label(comparacao['texto']).style(f'font-size: 13px; color: {cor}; background: {fundo}; '
+                                            'padding: 6px 12px; border-radius: 4px; width: 100%;')
+        if 'pago' in comparacao:
+            with ui.row().classes('w-full gap-3'):
+                self._cartao_valor('Pago aos parceiros validados', comparacao['pago'])
+                self._cartao_valor('Parceiro medido até agora', comparacao['medido'])
+                self._cartao_valor('Total previsto do parceiro', comparacao['previsto'])
+
+        def executar(funcao, item, *args):
+            try:
+                funcao(self.omie_repo, obra, item['codigo'], *args, self._usuario_omie())
+            except (PermissionError, ValueError) as e:
+                ui.notify(str(e), type='warning')
+                return
+            recarregar()
+
+        def linha(item):
+            validacao = item['validacao']
+            with ui.row().classes('w-full items-center no-wrap gap-2').style(
+                    'border-bottom: 1px solid #eee; padding: 4px 0;'):
+                with ui.column().classes('gap-0').style('flex: 1; min-width: 0;'):
+                    ui.label(item['nome']).style('font-size: 13px; font-weight: 600; color: #1a2332;')
+                    codigo = f"Código Omie {item['codigo']}" if item['codigo'] else 'Sem código no Omie'
+                    ui.label(f"{codigo} · {item['documento']}").style('font-size: 11px; color: #888;')
+                    if validacao:
+                        ui.label(f"{PAPEIS[validacao['papel']]} · validado por {validacao['validado_por_nome'] or '—'} "
+                                 f"em {_data_local(validacao['validado_em'])}").style('font-size: 11px; color: #888;')
+                with ui.column().classes('gap-0 items-end'):
+                    ui.label(moeda(item['pago_centavos'])).style('font-size: 13px; font-weight: 700;')
+                    ui.label(f"{item['pagamentos']} pagamento(s)").style('font-size: 11px; color: #888;')
+                if not pode_validar or not item['codigo']:
+                    return
+                if validacao is None:
+                    ui.button('É parceiro da obra', icon='handshake',
+                              on_click=lambda i=item: executar(atualizacao.validar_parceiro, i, 'parceiro')).props(
+                        'outline dense no-caps size=sm color=primary')
+                    ui.button('Outro prestador',
+                              on_click=lambda i=item: executar(atualizacao.validar_parceiro, i, 'outro')).props(
+                        'flat dense no-caps size=sm')
+                else:
+                    outro_papel = 'outro' if validacao['papel'] == 'parceiro' else 'parceiro'
+                    ui.button('Alterar', icon='swap_horiz',
+                              on_click=lambda i=item, p=outro_papel: executar(atualizacao.validar_parceiro, i, p)).props(
+                        'flat dense no-caps size=sm').tooltip(f'Mudar para "{PAPEIS[outro_papel]}"')
+                    ui.button('Desfazer', icon='undo',
+                              on_click=lambda i=item: executar(atualizacao.desfazer_parceiro, i)).props(
+                        'flat dense no-caps size=sm color=negative').tooltip('Voltar para "a validar"')
+
+        ui.label('Parceiros da obra').style('font-size: 14px; font-weight: 700; margin-top: 8px;')
+        if not parceiros['parceiros']:
+            ui.label('Nenhum parceiro validado.').style('font-size: 12px; color: #999;')
+        for item in parceiros['parceiros']:
+            linha(item)
+        if parceiros['a_validar']:
+            ui.label(f"Outros parceiros identificados (a validar) · {len(parceiros['a_validar'])}").style(
+                'font-size: 14px; font-weight: 700; color: #e65100; margin-top: 8px;')
+            for item in parceiros['a_validar']:
+                linha(item)
+        if parceiros['outros']:
+            with ui.expansion(f"Outros prestadores · {len(parceiros['outros'])}", icon='engineering').classes('w-full'):
+                for item in parceiros['outros']:
+                    linha(item)
 
     def _painel_recebimento(self, financeiro, conferido):
         ind, notas = financeiro['indicadores'], financeiro['notas']

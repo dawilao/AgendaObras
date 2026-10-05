@@ -19,6 +19,11 @@ CATEGORIAS = {'2.01.99': 'Fornecedor de Material', '2.01.97': 'Prestador de Serv
               '2.01.98': 'Fornecedor de Serviços', '2.04.08': 'Seguros', '1.01.01': 'Medições CAIXA'}
 FORNECEDORES = {'2.01.99': (601, 602), '2.01.97': (501, 502, 503), '2.01.98': (701,), '2.04.08': (801,)}
 ORDEM_CATEGORIAS = ('2.01.99', '2.01.97', '2.01.98', '2.01.99', '2.01.97', '2.04.08', '2.01.97', '2.01.99')
+# Cadastro fictício (documentos inventados; o 503 é pessoa física).
+CADASTRO = {501: ('Prestador Simulado Alfa Ltda', '11222333000181'), 502: ('Montagens Simuladas Beta ME', '44555666000172'),
+            503: ('Fulano Simulado de Tal', '12345678909'), 601: ('Materiais Simulados SA', '77888999000163'),
+            602: ('Depósito Simulado Ltda', '22333444000155'), 701: ('Serviços Simulados Gama', '55666777000144'),
+            801: ('Seguradora Simulada', '88999000000133')}
 
 
 def _br(d):
@@ -76,6 +81,13 @@ class ClienteSimulado:
             codigo = int(p['nCodProjeto'])
             linhas = self._dados(codigo)[p['cTpLancamento']] if codigo in self.projetos else []
             return {'nPagina': 1, 'nTotPaginas': 1, 'nTotRegistros': len(linhas), 'movimentos': linhas}
+        if metodo == 'ConsultarCliente':
+            codigo = int(p['codigo_cliente_omie'])
+            if codigo not in CADASTRO:
+                raise ErroIntegracao('O Omie recusou ConsultarCliente: cliente não cadastrado.')
+            nome, documento = CADASTRO[codigo]
+            return {'codigo_cliente_omie': codigo, 'razao_social': nome, 'nome_fantasia': nome,
+                    'cnpj_cpf': documento, 'pessoa_fisica': 'S' if len(documento) == 11 else 'N'}
         raise ErroIntegracao(f'Método {metodo} não simulado.')
 
     def _dados(self, codigo):

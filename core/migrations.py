@@ -67,6 +67,7 @@ class MigrationManager:
         self.migrations.append(Migration(version=16, description="Controle de seguro (garantia e seguro da obra) com rodadas e auditoria", upgrade=self._migration_016_seguro))
         self.migrations.append(Migration(version=17, description="Adicionar coordenador_id (responsável da obra) à tabela obras", upgrade=self._migration_017_add_coordenador))
         self.migrations.append(Migration(version=18, description="Financeiro Omie: vínculos obra-projeto, consultas e auditoria", upgrade=self._migration_018_financeiro_omie))
+        self.migrations.append(Migration(version=19, description="Financeiro Omie: fornecedores e parceiros validados por obra", upgrade=self._migration_019_parceiros_omie))
 
     def _migration_016_seguro(self, conn: sqlite3.Connection):
         from db.seguro_repo import criar_schema
@@ -75,6 +76,11 @@ class MigrationManager:
     def _migration_018_financeiro_omie(self, conn: sqlite3.Connection):
         from db.omie_repo import criar_schema
         criar_schema(conn)
+        conn.commit()
+
+    def _migration_019_parceiros_omie(self, conn: sqlite3.Connection):
+        from db.omie_repo import criar_schema_parceiros
+        criar_schema_parceiros(conn)
         conn.commit()
 
     def _migration_001_add_tipo_recorrencia(self, conn: sqlite3.Connection):
