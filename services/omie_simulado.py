@@ -36,6 +36,8 @@ def _de_br(texto):
 
 class ClienteSimulado:
     ao_esperar = None
+    cancelar = None
+    simulado = True   # a atualização marca as consultas como fictícias
 
     @classmethod
     def proxima(cls, obras):

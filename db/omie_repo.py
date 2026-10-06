@@ -61,13 +61,15 @@ def criar_schema_parceiros(conn):
 
 PARCEIRO = 'parceiro'
 OUTRO = 'outro'
+_BLOCO_IN = 500
 
 
 def agora() -> str:
     return datetime.now(timezone.utc).isoformat(timespec='seconds')
 
 
-def _autor(user) -> tuple:
+def autor(user) -> tuple:
+    """(id, nome para exibição) de quem fez a ação."""
     user = user or {}
     nome = f"{user.get('nome') or ''} {user.get('sobrenome') or ''}".strip() or user.get('email') or ''
     return user.get('id'), nome
@@ -75,7 +77,7 @@ def _autor(user) -> tuple:
 
 def registrar_auditoria(conn, user, acao: str, obra_id: Optional[int] = None, detalhe: Optional[Dict] = None):
     """Grava uma ação em financeiro_auditoria na transação de conn (o chamador faz o commit)."""
-    uid, nome = _autor(user)
+    uid, nome = autor(user)
     conn.execute('INSERT INTO financeiro_auditoria(quando,usuario_id,usuario_nome,acao,obra_id,detalhe_json) '
                  'VALUES(?,?,?,?,?,?)',
                  (agora(), uid, nome, acao, obra_id,
@@ -119,15 +121,27 @@ class OmieRepository(BaseRepository):
             conn.close()
 
     def vinculos(self, obra_ids: Optional[Iterable[int]] = None) -> List[Dict]:
+        if obra_ids is None:
+            conn = self.get_connection()
+            try:
+                return [dict(r) for r in conn.execute('SELECT * FROM omie_vinculos ORDER BY obra_id')]
+            finally:
+                conn.close()
+        rows = self._por_codigos('SELECT * FROM omie_vinculos WHERE obra_id IN ({})', obra_ids)
+        return sorted(rows, key=lambda r: r['obra_id'])
+
+    def _por_codigos(self, sql: str, codigos: Iterable) -> List[Dict]:
+        """Linhas cujo código está em codigos, em blocos (limite de parâmetros do SQLite)."""
+        codigos = sorted({int(c) for c in codigos if c is not None})
         conn = self.get_connection()
         try:
-            rows = [dict(r) for r in conn.execute('SELECT * FROM omie_vinculos ORDER BY obra_id')]
+            rows = []
+            for i in range(0, len(codigos), _BLOCO_IN):
+                bloco = codigos[i:i + _BLOCO_IN]
+                rows.extend(dict(r) for r in conn.execute(sql.format(','.join('?' * len(bloco))), bloco))
+            return rows
         finally:
             conn.close()
-        if obra_ids is not None:
-            ids = {int(i) for i in obra_ids}
-            rows = [r for r in rows if r['obra_id'] in ids]
-        return rows
 
     def _validar_projeto_livre(self, conn, obra_id: int, codigo_projeto: int):
         if int(codigo_projeto) <= 0:
@@ -144,7 +158,7 @@ class OmieRepository(BaseRepository):
             raise ValueError('Informe o nome do projeto do Omie.')
         self._validar_projeto_livre(conn, obra_id, codigo_projeto)
         ic = (ic or '').strip() or None
-        uid, nome = _autor(user)
+        uid, nome = autor(user)
         anterior = conn.execute('SELECT codigo_projeto, nome_projeto, ic_na_confirmacao FROM omie_vinculos '
                                 'WHERE obra_id=?', (obra_id,)).fetchone()
         anterior = dict(anterior) if anterior else None
@@ -223,12 +237,26 @@ class OmieRepository(BaseRepository):
         try:
             if not conn.execute("SELECT 1 FROM omie_lotes WHERE obra_id=? AND status='ok'", (obra_id,)).fetchone():
                 raise ValueError('Atualize a obra do Omie antes de marcar como conferida.')
-            uid, nome = _autor(user)
+            uid, nome = autor(user)
             cur = conn.execute("UPDATE omie_vinculos SET estado=?, conferido_por=?, conferido_por_nome=?, conferido_em=? "
                                "WHERE obra_id=? AND estado<>?", (CONFERIDO, uid, nome, agora(), obra_id, CONFERIDO))
             if not cur.rowcount:
                 return False
             self._registrar(conn, user, 'lote_conferido', obra_id)
+            conn.commit()
+            return True
+        finally:
+            conn.close()
+
+    def reabrir_conferencia(self, obra_id: int, user, detalhe: Optional[Dict] = None) -> bool:
+        """A consulta nova trouxe mudanças: a obra volta para "Em conferência". False se não estava conferida."""
+        conn = self.get_connection()
+        try:
+            cur = conn.execute('UPDATE omie_vinculos SET estado=?, conferido_por=NULL, conferido_por_nome=NULL, '
+                               'conferido_em=NULL WHERE obra_id=? AND estado=?', (EM_CONFERENCIA, obra_id, CONFERIDO))
+            if not cur.rowcount:
+                return False
+            self._registrar(conn, user, 'conferencia_reaberta', obra_id, detalhe)
             conn.commit()
             return True
         finally:
@@ -292,29 +320,39 @@ class OmieRepository(BaseRepository):
         finally:
             conn.close()
 
-    def situacao(self, obra_id: int) -> Dict:
-        """Vínculo, última consulta válida, a válida anterior e o erro mais recente que ela (se houver)."""
-        vinculo = self.vinculo(obra_id)
-        if not vinculo:
-            return {'vinculo': None, 'lote': None, 'anterior': None, 'erro': None}
-        lotes = self.lotes_ok(obra_id, 2)
-        ultimo = self.ultimo_lote(obra_id)
-        erro = ultimo if ultimo and ultimo['status'] == 'erro' else None
-        return {'vinculo': vinculo, 'lote': lotes[0] if lotes else None,
+    def situacao(self, obra_id: int, com_anterior: bool = True) -> Dict:
+        """Vínculo, última consulta válida, a válida anterior e o erro mais recente que ela (se houver).
+
+        com_anterior=False (card) não lê a consulta anterior. O erro vem sem conteúdo (lote com erro
+        não guarda dados), então o último lote é lido sem o payload.
+        """
+        conn = self.get_connection()
+        try:
+            vinculo = conn.execute('SELECT * FROM omie_vinculos WHERE obra_id=?', (obra_id,)).fetchone()
+            if not vinculo:
+                return {'vinculo': None, 'lote': None, 'anterior': None, 'erro': None}
+            lotes = [self._lote(r) for r in conn.execute(
+                "SELECT * FROM omie_lotes WHERE obra_id=? AND status='ok' ORDER BY id DESC LIMIT ?",
+                (obra_id, 2 if com_anterior else 1))]
+            ultimo = conn.execute('SELECT id, obra_id, consultado_em, inicio, fim, status, motivo FROM omie_lotes '
+                                  'WHERE obra_id=? ORDER BY id DESC LIMIT 1', (obra_id,)).fetchone()
+        finally:
+            conn.close()
+        erro = {**dict(ultimo), 'dados': None} if ultimo and ultimo['status'] == 'erro' else None
+        return {'vinculo': dict(vinculo), 'lote': lotes[0] if lotes else None,
                 'anterior': lotes[1] if len(lotes) > 1 else None, 'erro': erro}
 
     # ---------- fornecedores e parceiros ----------
     def fornecedores(self, codigos: Optional[Iterable[int]] = None) -> Dict[int, Dict]:
-        conn = self.get_connection()
-        try:
-            rows = [dict(r) for r in conn.execute('SELECT * FROM omie_fornecedores')]
-        finally:
-            conn.close()
-        por_codigo = {r['codigo']: r for r in rows}
         if codigos is not None:
-            pedidos = {int(c) for c in codigos if c is not None}
-            por_codigo = {c: r for c, r in por_codigo.items() if c in pedidos}
-        return por_codigo
+            rows = self._por_codigos('SELECT * FROM omie_fornecedores WHERE codigo IN ({})', codigos)
+        else:
+            conn = self.get_connection()
+            try:
+                rows = [dict(r) for r in conn.execute('SELECT * FROM omie_fornecedores')]
+            finally:
+                conn.close()
+        return {r['codigo']: r for r in rows}
 
     def salvar_fornecedores(self, encontrados: Dict[int, Dict]):
         """encontrados: {codigo: {'nome', 'documento_mascarado'}}."""
@@ -345,7 +383,7 @@ class OmieRepository(BaseRepository):
             raise ValueError('Papel inválido.')
         if codigo is None or int(codigo) <= 0:
             raise ValueError('Fornecedor sem código no Omie: não é possível validar.')
-        uid, autor = _autor(user)
+        uid, nome_autor = autor(user)
         conn = self.get_connection()
         try:
             atual = conn.execute('SELECT papel FROM obra_parceiros WHERE obra_id=? AND fornecedor_codigo=?',
@@ -356,7 +394,7 @@ class OmieRepository(BaseRepository):
                          'validado_em) VALUES(?,?,?,?,?,?) ON CONFLICT(obra_id, fornecedor_codigo) DO UPDATE SET '
                          'papel=excluded.papel, validado_por=excluded.validado_por, '
                          'validado_por_nome=excluded.validado_por_nome, validado_em=excluded.validado_em',
-                         (obra_id, int(codigo), papel, uid, autor, agora()))
+                         (obra_id, int(codigo), papel, uid, nome_autor, agora()))
             self._registrar(conn, user, 'parceiro_alterado' if atual else 'parceiro_validado', obra_id,
                             {'fornecedor': int(codigo), 'nome': nome, 'papel': papel})
             conn.commit()

@@ -5,6 +5,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import threading
 import unittest
+from unittest import mock
 from datetime import datetime, timezone
 
 from services import omie_integracao as omie
@@ -99,6 +100,43 @@ class ColetaTest(unittest.TestCase):
                         progresso=progresso, cancelar=cancelar)
         self.assertTrue(dados['interrompido'])
         self.assertIn(10, dados['obras'])
+        self.assertNotIn(20, dados['obras'])
+
+    def test_valor_malformado_vira_erro_so_da_obra(self):
+        base = chamada_padrao()
+
+        def chamar(metodo, args):
+            resposta = base(metodo, args)
+            if metodo == 'ListarMovimentos' and args['nCodProjeto'] == 10 and args['cTpLancamento'] == 'BXCP':
+                for linha in resposta['movimentos']:
+                    linha['resumo']['nValLiquido'] = ''
+            return resposta
+        dados = coletar(chamar, [vinculo(), vinculo(20, '002')], '2026-09-01', '2026-09-30')
+        self.assertEqual(dados['obras'][10]['status'], 'erro')
+        self.assertEqual(dados['obras'][20]['status'], 'ok')
+
+    def test_conta_sem_codigo_vira_erro_das_obras_sem_derrubar_a_coleta(self):
+        base = chamada_padrao()
+
+        def chamar(metodo, args):
+            if metodo == 'ListarContasCorrentes':
+                return {'pagina': 1, 'total_de_paginas': 1, 'total_de_registros': 1,
+                        'ListarContasCorrentes': [{'descricao': 'sem código'}]}
+            return base(metodo, args)
+        dados = coletar(chamar, [vinculo(), vinculo(20, '002')], '2026-09-01', '2026-09-30')
+        self.assertEqual({o['status'] for o in dados['obras'].values()}, {'erro'})
+        self.assertIn('formato inesperado', dados['obras'][10]['motivo'])
+
+    def test_interrupcao_durante_a_espera_guarda_obras_concluidas(self):
+        base = chamada_padrao()
+
+        def chamar(metodo, args):
+            if metodo == 'ListarMovimentos' and args['nCodProjeto'] == 20:
+                raise omie.Interrompida()
+            return base(metodo, args)
+        dados = coletar(chamar, [vinculo(), vinculo(20, '002')], '2026-09-01', '2026-09-30')
+        self.assertTrue(dados['interrompido'])
+        self.assertEqual(dados['obras'][10]['status'], 'ok')
         self.assertNotIn(20, dados['obras'])
 
     def test_bloqueio_guarda_obras_concluidas(self):
@@ -252,6 +290,37 @@ class ClienteTest(unittest.TestCase):
         with self.assertRaises(ErroIntegracao):
             c('IncluirContaPagar', {})
         self.assertEqual(self.enviados, [])
+
+    def test_centavos_invalido_e_erro_de_integracao(self):
+        for valor in ('', 'abc', [1]):
+            with self.assertRaises(ErroIntegracao):
+                omie.centavos(valor)
+        self.assertEqual(omie.centavos('12.345'), 1235)
+
+    def test_dois_clientes_do_mesmo_processo_respeitam_os_60_segundos(self):
+        relogio, enviados, ritmo = Relogio(), [], omie.novo_ritmo()
+
+        def enviar(url, corpo):
+            enviados.append(relogio.t)
+            return 200, {'ok': 1}
+        for _ in range(2):   # ex.: "Atualizar esta obra" e logo depois "Atualizar" na barra
+            ClienteOmie('chave', 'segredo', intervalo=0.3, relogio=relogio.agora, dormir=relogio.dormir,
+                        enviar=enviar, ritmo=ritmo)('ListarContasCorrentes', {'pagina': 1})
+        self.assertGreaterEqual(enviados[1] - enviados[0], 60)
+
+    def test_criar_cliente_usa_o_ritmo_do_processo(self):
+        with mock.patch.dict(os.environ, {'OMIE_APP_KEY': 'k', 'OMIE_APP_SECRET': 's', 'OMIE_MODO': ''}):
+            primeiro, segundo = omie.criar_cliente(), omie.criar_cliente()
+        self.assertIs(primeiro.ritmo, segundo.ritmo)
+
+    def test_interromper_nao_espera_a_pausa(self):
+        c = self.cliente([(200, {'ok': 1})])
+        c('ListarProjetos', {'pagina': 1})
+        c.cancelar = threading.Event()
+        c.cancelar.set()
+        with self.assertRaises(omie.Interrompida):
+            c('ListarProjetos', {'pagina': 1})     # idêntica: esperaria 60 s
+        self.assertEqual(len(self.enviados), 1)
 
     def test_mensagem_de_erro_nao_contem_as_chaves(self):
         c = self.cliente([(500, {'faultstring': 'ERROR: Tag inválida'})])

@@ -70,6 +70,7 @@ def obter_usuario_logado() -> dict:
         'sobrenome': usuario_db.get('sobrenome', usuario_sessao['sobrenome']),
         'email': usuario_db.get('email', usuario_sessao['email']),
         'is_admin': bool(usuario_db.get('is_admin', usuario_sessao['is_admin'])),
+        'financeiro': bool(usuario_db.get('financeiro')),
     }
 
 

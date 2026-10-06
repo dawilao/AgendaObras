@@ -229,6 +229,8 @@ def diferencas(anterior, novo, obra=None):
     if not anterior or not novo or not anterior.get('dados') or not novo.get('dados'):
         return None
     antes, agora = anterior['dados'], novo['dados']
+    if bool(antes.get('simulado')) != bool(agora.get('simulado')):
+        return None   # dados fictícios não são comparados com dados reais
     obra = obra or {}
 
     baixas_antes = {l['detalhes'].get('nCodBaixa') for l in antes.get('series', {}).get('BXCP', [])}
@@ -261,6 +263,11 @@ def diferencas(anterior, novo, obra=None):
         'variacao_pago': _menos(fin_agora['indicadores']['custos_pagos'], fin_antes['indicadores']['custos_pagos']),
         'variacao_recebido': _menos(fin_agora['indicadores']['recebido'], fin_antes['indicadores']['recebido']),
     }
+
+
+def houve_mudanca(dif) -> bool:
+    """A consulta nova trouxe alguma diferença (o mesmo critério da faixa "Desde a consulta de…")."""
+    return bool(textos_diferencas(dif))
 
 
 def _variacao(valor):
@@ -367,8 +374,11 @@ def comparar_parceiro(obra, parceiros, medicoes):
     return {**resultado, 'nivel': 'ok', 'texto': 'Pago ao parceiro dentro do medido.'}
 
 
-def parceiros_obra(obra, dados, validacoes, fornecedores, medicoes):
-    grupos = classificar_parceiros(pagamentos_por_fornecedor(dados), validacoes, fornecedores)
+def parceiros_obra(obra, dados, validacoes, fornecedores, medicoes, pagos=None):
+    """pagos: pagamentos_por_fornecedor(dados), se já calculado."""
+    if pagos is None:
+        pagos = pagamentos_por_fornecedor(dados)
+    grupos = classificar_parceiros(pagos, validacoes, fornecedores)
     return {**grupos, 'comparacao': comparar_parceiro(obra, grupos['parceiros'], medicoes)}
 
 
@@ -422,6 +432,8 @@ def exportar_csv(obra, vinculo, lote):
                           ('Período', f"{lote.get('inicio') or ''} a {lote.get('fim') or ''}"),
                           ('Exportado em', date.today().isoformat())):
         w.writerow([rotulo, _texto(valor)])
+    if lote['dados'].get('simulado'):
+        w.writerow(['Dados simulados', 'sim (OMIE_MODO=simulado; não são dados reais)'])
     w.writerow([])
     w.writerow(['Indicador', 'Valor (R$)'])
     for rotulo, chave in (('Custos pagos líquidos', 'custos_pagos'), ('Custos a pagar', 'custos_abertos'),

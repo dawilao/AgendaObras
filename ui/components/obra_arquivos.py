@@ -4,23 +4,16 @@ Ver e baixar: ADM, Financeiro e coordenador da obra. Enviar e anexar das Comunic
 Financeiro. Permissões conferidas no servidor (services.obra_arquivos).
 """
 
-from datetime import datetime
-
 from nicegui import ui, run
 
 from core.error_logger import log_error
 from db.obra_arquivos_repo import ObraArquivosRepository, TIPOS
 from services import obra_arquivos as arquivos
 from services.financeiro_service import pode_editar_financeiro, pode_ver_financeiro
+from ui.components.omie_financeiro import apagar_ao_fechar
+from utils.formatters import formatar_data_hora_local as _data_local
 
 ICONES_TIPO = {'cct': 'gavel', 'orcamento': 'request_quote', 'aditivo': 'post_add'}
-
-
-def _data_local(iso):
-    try:
-        return datetime.fromisoformat(iso).astimezone().strftime('%d/%m/%Y %H:%M')
-    except (TypeError, ValueError):
-        return iso or ''
 
 
 def _tamanho(n):
@@ -102,7 +95,7 @@ class ObraArquivosMixin:
         ui.download.content(conteudo, nome, 'application/octet-stream')
 
     def _dialogo_enviar_arquivo(self, obra, ao_terminar):
-        with ui.dialog() as dialog, ui.card().style('min-width: min(480px, 92vw);'):
+        with apagar_ao_fechar(ui.dialog()) as dialog, ui.card().style('min-width: min(480px, 92vw);'):
             ui.label(f"Enviar arquivo · {obra['nome_contrato']}").style('font-size: 18px; font-weight: 700;')
             tipo = ui.select(TIPOS, value='orcamento', label='Tipo').props('outlined dense').classes('w-full')
             ajuda = ui.label('').style('font-size: 12px; color: #777;')
@@ -146,7 +139,8 @@ class ObraArquivosMixin:
             log_error(e, 'obra_arquivos', f"Anexos das Comunicações - obra {obra['id']}")
             ui.notify('Não foi possível ler as Comunicações desta obra.', type='warning')
             return
-        with ui.dialog() as dialog, ui.card().style('width: min(760px, 96vw); max-height: 90vh; overflow: auto;'):
+        with apagar_ao_fechar(ui.dialog()) as dialog, ui.card().style(
+                'width: min(760px, 96vw); max-height: 90vh; overflow: auto;'):
             ui.label(f"Anexar das Comunicações · {obra['nome_contrato']}").style('font-size: 18px; font-weight: 700;')
             ui.label('Anexos (PDF, planilhas e CSV) dos e-mails vinculados a esta obra no Histórico da equipe. '
                      'Caixas pessoais não aparecem aqui.').style('font-size: 12px; color: #777;')

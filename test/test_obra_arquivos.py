@@ -9,6 +9,7 @@ import sqlite3
 import tempfile
 import unittest
 from email.message import EmailMessage
+from unittest import mock
 from pathlib import Path
 
 from comunicacoes.blobs import BlobStore
@@ -90,6 +91,24 @@ class ArquivosObraTest(unittest.TestCase):
         self.assertEqual(sum(1 for _ in self.store.files()), 2)
         acoes = [a['acao'] for a in OmieRepository(self.path).auditoria(1)]
         self.assertEqual(acoes, ['arquivo_enviado', 'arquivo_enviado'])
+
+    def test_falha_no_disco_nao_deixa_registro(self):
+        class DiscoCheio(BlobStore):
+            def put(self, data, nested=False):
+                raise OSError('disco cheio')
+        with self.assertRaises(OSError):
+            arquivos.enviar(self.repo, self.obra, 'orcamento', 'orc.pdf', PDF, FIN, store=DiscoCheio(self.store.root))
+        self.assertEqual(self.repo.listar(1), [])
+        self.assertEqual(OmieRepository(self.path).auditoria(1), [])
+        self.assertEqual(self.enviar()['nome'], 'orc.pdf')       # depois, o mesmo arquivo entra normalmente
+
+    def test_registro_repetido_nao_grava_no_disco(self):
+        self.enviar()
+        outro = BlobStore(Path(self.tmp.name) / 'outro')
+        # Duas abas enviando o mesmo arquivo ao mesmo tempo: o banco recusa antes de gravar no disco.
+        with mock.patch.object(self.repo, 'existe_sha', return_value=None), self.assertRaises(ValueError):
+            arquivos.enviar(self.repo, self.obra, 'orcamento', 'copia.pdf', PDF, FIN, store=outro)
+        self.assertEqual(list(outro.files()), [])
 
     def test_so_o_financeiro_envia(self):
         for user in (ADMIN, COORDENADOR, OUTRO, None):

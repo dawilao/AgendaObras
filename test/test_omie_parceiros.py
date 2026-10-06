@@ -98,6 +98,16 @@ class RegrasTest(unittest.TestCase):
         with self.assertRaises(BloqueioOmie):
             consultar_fornecedores(bloqueia, [501])
 
+    def test_para_apos_falhas_seguidas_e_informa_quais(self):
+        chamadas, falhas = [], set()
+
+        def falha(metodo, p):
+            chamadas.append(p['codigo_cliente_omie'])
+            raise ErroIntegracao('falhou')
+        self.assertEqual(consultar_fornecedores(falha, [1, 2, 3, 4, 5], falhas=falhas), {})
+        self.assertEqual(chamadas, [1, 2, 3])       # o Omie bloqueia o método após 10 erros seguidos
+        self.assertEqual(falhas, {1, 2, 3})
+
     def test_permissao_de_validar(self):
         obra = {'id': 1, 'coordenador_id': 7}
         self.assertTrue(pode_validar_parceiros(FIN, obra))
@@ -121,6 +131,8 @@ class BancoParceirosTest(unittest.TestCase):
         conn.close()
         self.repo = OmieRepository(self.path)
         atualizacao._estado.update(bloqueado_ate=None, rodando=False, cancelar=None)
+        atualizacao._fornecedores_falhos.clear()
+        atualizacao._projetos_cache.update(em=None, lista=None)
 
     def obras(self):
         return self.db.listar_obras()
@@ -180,6 +192,21 @@ class BancoParceirosTest(unittest.TestCase):
         resumo = self.ligar_e_atualizar(falha_cliente)
         self.assertEqual((resumo['ok'], resumo['erro']), (2, 0))
         self.assertEqual(self.repo.fornecedores(), {})
+
+    def test_fornecedor_que_falhou_nao_e_consultado_de_novo(self):
+        simulado = ClienteSimulado(self.obras())
+        consultas = []
+
+        def falha_cliente(metodo, p):
+            if metodo == 'ConsultarCliente':
+                consultas.append(p['codigo_cliente_omie'])
+                raise ErroIntegracao('O Omie recusou ConsultarCliente: erro.')
+            return simulado(metodo, p)
+        self.ligar_e_atualizar(falha_cliente)
+        primeira = len(consultas)
+        self.assertTrue(primeira)
+        atualizacao.atualizar(self.repo, self.obras(), FIN, cliente=falha_cliente, hoje=date(2026, 10, 5))
+        self.assertEqual(len(consultas), primeira)
 
     def test_validar_alterar_desfazer_por_obra(self):
         obra1, obra2 = self.db.obter_obra(1), self.db.obter_obra(2)

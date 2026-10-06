@@ -97,6 +97,8 @@ Ajustes opcionais, lidos do ambiente do processo. Todos têm valor padrão, ent�
 
 Na aba Financeiro do card, administrador, Financeiro e coordenador da própria obra veem o resumo do Omie (custos, recebido líquido e saldo de caixa) e abrem o detalhamento: Custo, Recebimento, Saldo bruto, o que mudou desde a consulta anterior, histórico de ações e exportação em CSV. Só quem tem a permissão **Financeiro** (marcada em Usuários) atualiza, liga obras a projetos e informa as chaves. A ligação usa o projeto do Omie com o número do IC no nome, nunca a cidade. As consultas são somente leitura.
 
+Administrador e Financeiro veem todas as obras na tela de Obras (só ver: abrir e editar a obra continua pelo contrato vinculado). Uma consulta marcada como **Conferido** volta para **Em conferência** quando uma atualização traz alguma mudança (pagamento novo, NF nova ou recebida, título vencido, variação de pago ou recebido); a mudança fica no histórico. Com `OMIE_MODO=simulado`, as consultas aparecem marcadas como **dados simulados** e não são comparadas com consultas reais.
+
 Os fornecedores da categoria 2.01.97 (Prestador de Serviço/Parceiro) são validados por obra, pelo código do fornecedor no Omie: o Financeiro e o coordenador da obra marcam quem é o parceiro contratado, e só esses pagamentos são comparados com o "Parceiro medido" e o total previsto. O documento do fornecedor é guardado apenas mascarado.
 
 | Variável | Para que serve |

@@ -12,11 +12,12 @@ até 240 chamadas por minuto por método.
 import json
 import os
 import re
+import threading
 import time
 import unicodedata
 from collections import defaultdict
 from datetime import date, datetime, timedelta, timezone
-from decimal import Decimal, ROUND_HALF_UP
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
@@ -34,6 +35,10 @@ ROTAS = {
 ESPERA_IDENTICA_S = 60
 BLOQUEIO_MIN = 30
 HTTP_TRANSITORIO = (429, 502, 503, 504)
+# Falhas seguidas de ConsultarCliente antes de desistir (o Omie bloqueia o método após 10).
+MAX_FALHAS_SEGUIDAS = 3
+# Resposta fora do formato esperado vira erro da obra, nunca derruba a atualização inteira.
+_FALHAS_FORMATO = (KeyError, TypeError, ValueError, ArithmeticError)
 
 # (página, total de páginas, total de registros, lista, tamanho da página)
 FORMATOS = {
@@ -58,10 +63,21 @@ class BloqueioOmie(ErroIntegracao):
                          f'{ate.astimezone().strftime("%H:%M")}.')
 
 
+class Interrompida(Exception):
+    """O Financeiro interrompeu a atualização durante uma espera. Não é erro da obra."""
+
+
+def _motivo(erro):
+    return str(erro) if isinstance(erro, ErroIntegracao) else 'Resposta do Omie em formato inesperado.'
+
+
 def centavos(valor):
     if valor is None:
         raise ErroIntegracao('Valor obrigatório ausente; não foi convertido em zero.')
-    return int((Decimal(str(valor)) * 100).quantize(Decimal('1'), rounding=ROUND_HALF_UP))
+    try:
+        return int((Decimal(str(valor)) * 100).quantize(Decimal('1'), rounding=ROUND_HALF_UP))
+    except (InvalidOperation, TypeError, ValueError):
+        raise ErroIntegracao('Valor inválido na resposta do Omie.') from None
 
 
 def normalizar(texto):
@@ -94,35 +110,60 @@ def _enviar_http(url, corpo):
         return erro.code, dados
 
 
+def novo_ritmo():
+    """Horários das últimas chamadas, por método e por requisição idêntica."""
+    return {'por_metodo': {}, 'identica': {}, 'trava': threading.Lock()}
+
+
+# Compartilhado pelos clientes do processo (criar_cliente): uma atualização logo depois da outra,
+# ou duas aberturas da lista de projetos, também respeitam os limites do Omie.
+_RITMO_PROCESSO = novo_ritmo()
+
+
 class ClienteOmie:
     """Chamadas sequenciais, com ritmo mínimo por método e sem repetir requisição idêntica em < 60 s."""
 
     def __init__(self, chave, segredo, intervalo=None, relogio=time.monotonic, dormir=time.sleep,
-                 enviar=_enviar_http, agora=lambda: datetime.now(timezone.utc)):
+                 enviar=_enviar_http, agora=lambda: datetime.now(timezone.utc), ritmo=None):
         if not chave or not segredo:
             raise ErroIntegracao('Chaves do Omie não configuradas.')
         self._chave, self._segredo = chave, segredo
         self.intervalo = OMIE_INTERVALO_MIN_S if intervalo is None else intervalo
         self.relogio, self.dormir, self.enviar, self.agora = relogio, dormir, enviar, agora
-        self._ultima_por_metodo = {}
-        self._ultima_identica = {}
+        self.ritmo = ritmo if ritmo is not None else novo_ritmo()
         self.ao_esperar = None   # callback opcional (segundos) para mostrar a espera no progresso
+        self.cancelar = None     # threading.Event opcional: interrompe a espera (Interrompida)
+
+    def _reservar(self, metodo, assinatura):
+        """Instante em que a chamada pode sair, já reservado: uma chamada concorrente espera depois dele."""
+        ritmo = self.ritmo
+        with ritmo['trava']:
+            agora = self.relogio()
+            identicas = ritmo['identica']
+            if len(identicas) > 2000:   # descarta o que já passou da janela de 60 s
+                for chave in [k for k, t in identicas.items() if t + ESPERA_IDENTICA_S < agora]:
+                    del identicas[chave]
+            instante = max(agora, ritmo['por_metodo'].get(metodo, float('-inf')) + self.intervalo,
+                           identicas.get(assinatura, float('-inf')) + ESPERA_IDENTICA_S)
+            ritmo['por_metodo'][metodo] = instante
+            identicas[assinatura] = instante
+        return instante
 
     def _esperar_ate(self, instante):
         falta = instante - self.relogio()
-        if falta > 0:
-            if self.ao_esperar and falta >= 1:
-                self.ao_esperar(falta)
+        if falta <= 0:
+            return
+        if self.ao_esperar and falta >= 1:
+            self.ao_esperar(falta)
+        if self.cancelar is None:
             self.dormir(falta)
+        elif self.cancelar.wait(falta):
+            raise Interrompida()
 
     def _tentar(self, metodo, parametros, assinatura):
-        self._esperar_ate(self._ultima_por_metodo.get(metodo, float('-inf')) + self.intervalo)
-        self._esperar_ate(self._ultima_identica.get(assinatura, float('-inf')) + ESPERA_IDENTICA_S)
+        self._esperar_ate(self._reservar(metodo, assinatura))
         corpo = json.dumps({'call': metodo, 'app_key': self._chave, 'app_secret': self._segredo,
                             'param': [parametros]}).encode()
-        momento = self.relogio()
-        self._ultima_por_metodo[metodo] = momento
-        self._ultima_identica[assinatura] = momento
         try:
             return self.enviar(URL_BASE + ROTAS[metodo], corpo)
         except (URLError, TimeoutError, OSError):
@@ -181,7 +222,7 @@ def configurar_chaves(chave, segredo, user, testar=None):
     if not chave or not segredo:
         raise ValueError('Informe a APP KEY e a APP SECRET.')
     if testar is None:
-        testar = lambda: ClienteOmie(chave, segredo)(
+        testar = lambda: ClienteOmie(chave, segredo, ritmo=_RITMO_PROCESSO)(
             'ListarContasCorrentes', {'pagina': 1, 'registros_por_pagina': 1, 'apenas_importado_api': 'N'})
     try:
         testar()
@@ -209,7 +250,7 @@ def criar_cliente(obras=None):
     if modo_simulado():
         from services.omie_simulado import ClienteSimulado
         return ClienteSimulado.proxima(obras or [])
-    return ClienteOmie(os.environ.get('OMIE_APP_KEY'), os.environ.get('OMIE_APP_SECRET'))
+    return ClienteOmie(os.environ.get('OMIE_APP_KEY'), os.environ.get('OMIE_APP_SECRET'), ritmo=_RITMO_PROCESSO)
 
 
 # ---------------------------------------------------------------------------
@@ -440,8 +481,8 @@ def coletar(chamar, vinculos, inicio, fim, progresso=None, cancelar=None):
                 pendentes[oid] = {'vinculo': v, 'projeto': nome or v['projeto'], 'avisos': avisos}
             except BloqueioOmie:
                 raise
-            except ErroIntegracao as e:
-                erro(oid, str(e))
+            except _FALHAS_FORMATO as e:
+                erro(oid, _motivo(e))
         if not pendentes:
             return resultado
 
@@ -475,17 +516,18 @@ def coletar(chamar, vinculos, inicio, fim, progresso=None, cancelar=None):
                         if chave in chaves[oid]:
                             raise ErroIntegracao('Extrato com identidade repetida; conferir antes de somar.')
                         chaves[oid].add(chave)
-                    except ValueError as e:
-                        erros_extrato[oid] = str(e) if isinstance(e, ErroIntegracao) else 'Data inválida no extrato.'
+                    except _FALHAS_FORMATO as e:
+                        erros_extrato[oid] = (str(e) if isinstance(e, ErroIntegracao)
+                                              else 'Data inválida ou movimento incompleto no extrato.')
                         continue
                     # Sem CPF/CNPJ, dados bancários, observações ou credenciais no resultado.
                     extratos[oid].append({**{k: r.get(k) for k in CAMPOS_EXTRATO},
                                           'conta_codigo': cc, 'conta_nome': conta.get('descricao', str(cc))})
         except BloqueioOmie:
             raise
-        except ErroIntegracao as e:
+        except _FALHAS_FORMATO as e:
             for oid in pendentes:
-                erro(oid, f'Consulta de contas/extrato falhou: {e}')
+                erro(oid, f'Consulta de contas/extrato falhou: {_motivo(e)}')
             return resultado
 
         contas_resumo = [{'codigo': c['nCodCC'], 'nome': c.get('descricao')} for c in contas]
@@ -507,10 +549,12 @@ def coletar(chamar, vinculos, inicio, fim, progresso=None, cancelar=None):
                     'conciliacao': conciliar(series, registros), 'contas': contas_resumo, 'avisos': avisos}}
             except BloqueioOmie:
                 raise
-            except ErroIntegracao as e:
-                erro(oid, str(e))
+            except _FALHAS_FORMATO as e:
+                erro(oid, _motivo(e))
     except BloqueioOmie as bloqueio:
         resultado['bloqueio'] = bloqueio.ate
+    except Interrompida:
+        resultado['interrompido'] = True
     return resultado
 
 
@@ -528,25 +572,34 @@ def mascarar_documento(documento):
     return 'documento não informado'
 
 
-def consultar_fornecedores(chamar, codigos, progresso=None, cancelar=None):
+def consultar_fornecedores(chamar, codigos, progresso=None, cancelar=None, falhas=None):
     """{codigo: {'nome', 'documento_mascarado'}}. Fornecedor que falhar fica de fora (a tela mostra o
-    nome do extrato ou o código); só o bloqueio do Omie interrompe."""
+    nome do extrato ou o código) e entra no set falhas, se informado. Após MAX_FALHAS_SEGUIDAS falhas
+    seguidas a consulta para (10 erros seguidos no mesmo método bloqueiam o Omie por 30 min).
+    O bloqueio do Omie e a interrupção são relançados."""
     encontrados = {}
     codigos = sorted({int(c) for c in codigos if c})
+    seguidas = 0
     for i, codigo in enumerate(codigos, 1):
         if cancelar is not None and cancelar.is_set():
+            break
+        if seguidas >= MAX_FALHAS_SEGUIDAS:
             break
         if progresso:
             progresso(f'Fornecedor {i} de {len(codigos)}')
         try:
             resposta = chamar('ConsultarCliente', {'codigo_cliente_omie': codigo})
-        except BloqueioOmie:
+            confere = str(resposta.get('codigo_cliente_omie', codigo)) == str(codigo)
+            nome = str(resposta.get('razao_social') or resposta.get('nome_fantasia') or '').strip() if confere else ''
+        except (BloqueioOmie, Interrompida):
             raise
-        except ErroIntegracao:
+        except _FALHAS_FORMATO:
+            nome = ''
+        if not nome:
+            seguidas += 1
+            if falhas is not None:
+                falhas.add(codigo)
             continue
-        if str(resposta.get('codigo_cliente_omie', codigo)) != str(codigo):
-            continue
-        nome = str(resposta.get('razao_social') or resposta.get('nome_fantasia') or '').strip()
-        if nome:
-            encontrados[codigo] = {'nome': nome[:150], 'documento_mascarado': mascarar_documento(resposta.get('cnpj_cpf'))}
+        seguidas = 0
+        encontrados[codigo] = {'nome': nome[:150], 'documento_mascarado': mascarar_documento(resposta.get('cnpj_cpf'))}
     return encontrados

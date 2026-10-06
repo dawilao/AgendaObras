@@ -13,7 +13,7 @@ from pathlib import Path
 
 from comunicacoes.blobs import BlobStore
 from db.obra_arquivos_repo import TIPOS
-from services.financeiro_service import pode_editar_financeiro, pode_ver_financeiro
+from services.financeiro_service import checar_editar, checar_ver
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 LIMITE_BYTES = 20 * 1024 * 1024
@@ -31,13 +31,11 @@ def blob_store():
 
 
 def _exigir_ver(user, obra):
-    if not pode_ver_financeiro(user, obra):
-        raise PermissionError('Arquivos restritos ao administrador, ao Financeiro e ao coordenador desta obra.')
+    checar_ver(user, obra, 'Arquivos restritos ao administrador, ao Financeiro e ao coordenador desta obra.')
 
 
 def _exigir_enviar(user):
-    if not pode_editar_financeiro(user):
-        raise PermissionError('Somente o Financeiro envia arquivos da obra.')
+    checar_editar(user, 'Somente o Financeiro envia arquivos da obra.')
 
 
 def nome_limpo(nome):
@@ -87,8 +85,10 @@ def _gravar(repo, obra, tipo, nome, conteudo, user, origem, origem_ref=None, sto
     existente = repo.existe_sha(obra['id'], sha)
     if existente:
         raise ValueError(f"Este arquivo já está na obra ({TIPOS[existente['tipo']]}: {existente['nome']}).")
-    sha, tamanho = store.put(conteudo)
-    arquivo_id = repo.registrar(obra['id'], tipo, nome, sha, tamanho, origem, user, origem_ref)
+    # O conteúdo vai para o disco dentro da transação do registro: falha no disco não deixa registro,
+    # e falha no registro não chega a gravar o arquivo.
+    arquivo_id = repo.registrar(obra['id'], tipo, nome, sha, len(conteudo), origem, user, origem_ref,
+                                antes_do_commit=lambda: store.put(conteudo))
     return repo.obter(arquivo_id)
 
 

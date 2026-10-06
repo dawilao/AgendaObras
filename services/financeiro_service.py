@@ -3,8 +3,13 @@
 Ver: administrador, Financeiro ou coordenador da própria obra (obras.coordenador_id).
 Alterar: só quem tem a permissão Financeiro. Estar vinculado ao contrato não dá acesso.
 Exceção: validar os parceiros da obra também cabe ao coordenador da própria obra.
+Lista de obras: administrador e Financeiro veem todas (só ver; editar a obra segue o contrato).
 """
 from db.auth_repo import AuthDatabase
+from db.omie_repo import autor
+
+MSG_VER = 'Financeiro restrito ao administrador, ao Financeiro e ao coordenador desta obra.'
+MSG_EDITAR = 'Somente o Financeiro pode fazer esta alteração.'
 
 
 def usuario_atual():
@@ -39,6 +44,11 @@ def pode_editar_financeiro(user) -> bool:
     return eh_financeiro(user)
 
 
+def ve_todas_as_obras(user) -> bool:
+    """Administrador e Financeiro veem todas as obras na tela de Obras (só ver)."""
+    return bool(user and (user.get('is_admin') or user.get('financeiro')))
+
+
 def pode_validar_parceiros(user, obra) -> bool:
     """Financeiro ou coordenador da própria obra; administrador sem a permissão Financeiro, não."""
     if not user or not user.get('id'):
@@ -46,22 +56,30 @@ def pode_validar_parceiros(user, obra) -> bool:
     return eh_financeiro(user) or eh_coordenador_da_obra(user, obra)
 
 
+def checar_ver(user, obra, mensagem=MSG_VER):
+    if not pode_ver_financeiro(user, obra):
+        raise PermissionError(mensagem)
+
+
+def checar_editar(user, mensagem=MSG_EDITAR):
+    if not pode_editar_financeiro(user):
+        raise PermissionError(mensagem)
+
+
 def exigir_ver(obra, usuario_provider=usuario_atual):
     user = usuario_provider()
-    if not pode_ver_financeiro(user, obra):
-        raise PermissionError('Financeiro restrito ao administrador, ao Financeiro e ao coordenador desta obra.')
+    checar_ver(user, obra)
     return user
 
 
 def exigir_editar(usuario_provider=usuario_atual):
     user = usuario_provider()
-    if not pode_editar_financeiro(user):
-        raise PermissionError('Somente o Financeiro pode fazer esta alteração.')
+    checar_editar(user)
     return user
 
 
 def nome_usuario(user) -> str:
-    return f"{user.get('nome') or ''} {user.get('sobrenome') or ''}".strip() or (user.get('email') or '')
+    return autor(user)[1]
 
 
 def definir_permissao_financeiro(user_id, valor, usuario_provider=usuario_atual, auth_db=None):

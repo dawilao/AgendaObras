@@ -7,6 +7,7 @@ import contextlib
 import io
 import sqlite3
 import tempfile
+import time
 import unittest
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
@@ -162,6 +163,8 @@ class BancoTest(unittest.TestCase):
         conn.close()
         self.repo = OmieRepository(self.path)
         atualizacao._estado.update(bloqueado_ate=None, rodando=False, cancelar=None)
+        atualizacao._fornecedores_falhos.clear()
+        atualizacao._projetos_cache.update(em=None, lista=None)
 
     # ----- migração
     def test_migracao_18_aplicada_e_idempotente(self):
@@ -367,6 +370,77 @@ class BancoTest(unittest.TestCase):
         self.assertTrue(resumo_card['notas_encontradas'])
         self.assertIsNotNone(resumo_card['indicadores']['saldo_contratual'])
 
+    # ----- conferência volta quando a consulta muda
+    def test_mudanca_na_consulta_reabre_a_conferencia(self):
+        self.ligar_todas()
+        atualizacao.atualizar(self.repo, self.obras(), FIN, cliente=ClienteSimulado(self.obras()), hoje=date(2026, 10, 5))
+        self.assertTrue(atualizacao.marcar_conferido(self.repo, 1, FIN))
+        resumo = atualizacao.atualizar(self.repo, self.obras(), FIN, cliente=ClienteSimulado(self.obras(), rodada=1),
+                                       hoje=date(2026, 10, 5))
+        self.assertEqual(resumo['reabertas'], 1)          # só a obra 1 estava conferida
+        vinculo = self.repo.vinculo(1)
+        self.assertEqual(vinculo['estado'], EM_CONFERENCIA)
+        self.assertIsNone(vinculo['conferido_por_nome'])
+        reaberta = [a for a in self.repo.auditoria(1) if a['acao'] == 'conferencia_reaberta']
+        self.assertEqual(len(reaberta), 1)
+        self.assertTrue(reaberta[0]['detalhe']['mudancas'])
+
+    def test_consulta_sem_mudanca_mantem_conferido(self):
+        self.ligar_todas()
+        atualizacao.atualizar(self.repo, self.obras(), FIN, cliente=ClienteSimulado(self.obras()), hoje=date(2026, 10, 5))
+        atualizacao.marcar_conferido(self.repo, 1, FIN)
+        resumo = atualizacao.atualizar(self.repo, self.obras(), FIN, cliente=ClienteSimulado(self.obras()),
+                                       hoje=date(2026, 10, 5))
+        self.assertEqual(resumo['reabertas'], 0)
+        self.assertEqual(self.repo.vinculo(1)['estado'], CONFERIDO)
+
+    def test_consulta_simulada_fica_marcada(self):
+        self.ligar_todas()
+        atualizacao.atualizar(self.repo, self.obras(), FIN, cliente=ClienteSimulado(self.obras()), hoje=date(2026, 10, 5))
+        lote = self.repo.ultimo_lote(1, 'ok')
+        self.assertTrue(lote['dados']['simulado'])
+        csv = exportar_csv(self.db.obter_obra(1), self.repo.vinculo(1), lote).decode('utf-8-sig')
+        self.assertIn('Dados simulados', csv)
+
+    # ----- leituras enxutas
+    def test_situacao_do_card_le_so_a_ultima_consulta(self):
+        self.repo.salvar_vinculo(1, 900001, 'P/A/00744', '00744/2026', FIN)
+        for i in range(2):
+            self.repo.gravar_lote(1, 'ok', '2026-08-01', '2026-10-05', dados={'n': i})
+        self.repo.gravar_lote(1, 'erro', '2026-08-01', '2026-10-05', motivo='falhou')
+        card = self.repo.situacao(1, com_anterior=False)
+        self.assertEqual(card['lote']['dados'], {'n': 1})
+        self.assertIsNone(card['anterior'])
+        self.assertEqual((card['erro']['motivo'], card['erro']['dados']), ('falhou', None))
+        self.assertEqual(self.repo.situacao(1)['anterior']['dados'], {'n': 0})
+        self.assertEqual(self.repo.situacao(2), {'vinculo': None, 'lote': None, 'anterior': None, 'erro': None})
+
+    def test_fornecedores_e_vinculos_filtrados_no_banco(self):
+        self.repo.salvar_fornecedores({501: {'nome': 'A'}, 502: {'nome': 'B'}})
+        self.assertEqual(set(self.repo.fornecedores([502, None, 999])), {502})
+        self.assertEqual(set(self.repo.fornecedores()), {501, 502})
+        self.assertEqual(self.repo.fornecedores([]), {})
+        self.repo.salvar_vinculo(2, 900002, 'P2', None, FIN)
+        self.repo.salvar_vinculo(1, 900001, 'P1', None, FIN)
+        self.assertEqual([v['obra_id'] for v in self.repo.vinculos([2, 5])], [2])
+        self.assertEqual([v['obra_id'] for v in self.repo.vinculos([2, 1])], [1, 2])
+        self.assertEqual([v['obra_id'] for v in self.repo.vinculos()], [1, 2])
+
+    def test_lista_de_projetos_recente_nao_e_repetida(self):
+        chamadas = []
+
+        def chamar(metodo, p):
+            chamadas.append(metodo)
+            return {'pagina': 1, 'total_de_paginas': 1, 'total_de_registros': 1,
+                    'cadastro': [{'codigo': 1, 'nome': 'X'}]}
+        atualizacao.projetos_omie(FIN, cliente=chamar)
+        atualizacao.projetos_omie(FIN, cliente=chamar, recarregar=True)   # < 60 s: o Omie recusaria a repetição
+        self.assertEqual(chamadas, ['ListarProjetos'])
+        depois = time.monotonic() + 61
+        with mock.patch.object(atualizacao.time, 'monotonic', return_value=depois):
+            atualizacao.projetos_omie(FIN, cliente=chamar, recarregar=True)
+        self.assertEqual(len(chamadas), 2)
+
     def test_exportar_e_historico_seguem_quem_ve(self):
         with sqlite3.connect(self.path) as conn:
             conn.execute('UPDATE obras SET coordenador_id=7 WHERE id=1')
@@ -396,6 +470,17 @@ class BancoTest(unittest.TestCase):
                          ('2026-01-01', '2026-10-05'))
         self.assertEqual(atualizacao.periodo_padrao([{'data_inicio': '2026-12-01'}], date(2026, 10, 5)),
                          ('2026-10-05', '2026-10-05'))
+
+
+class SimuladoTest(unittest.TestCase):
+    def test_consulta_simulada_nao_e_comparada_com_real(self):
+        antes = {'dados': {'series': {'BXCP': [baixa(1, 1, '2.01.99', 100)]}, 'simulado': True},
+                 'consultado_em': '2026-10-01T10:00:00+00:00'}
+        depois = {'dados': {'series': {'BXCP': [baixa(1, 1, '2.01.99', 100), baixa(2, 2, '2.01.99', 50)]}},
+                  'consultado_em': '2026-10-02T10:00:00+00:00'}
+        self.assertIsNone(diferencas(antes, depois))
+        real = {**antes, 'dados': {**antes['dados'], 'simulado': False}}
+        self.assertEqual(diferencas(real, depois)['pagamentos']['quantidade'], 1)
 
 
 if __name__ == '__main__':

@@ -17,6 +17,7 @@ from services.omie_financeiro import (GRUPOS, moeda, custos_mat_mo, totais_custo
                                       resumo_obra, financeiro_obra, diferencas, textos_diferencas,
                                       pagamentos_por_fornecedor, parceiros_obra)
 from services.omie_integracao import chaves_configuradas, modo_simulado, sugerir_projetos
+from utils.formatters import formatar_data_hora_local as _data_local
 
 ACOES_HISTORICO = {
     'vinculo_criado': 'Ligou ao projeto do Omie', 'vinculo_trocado': 'Trocou o projeto do Omie',
@@ -29,6 +30,7 @@ ACOES_HISTORICO = {
     'financeiro_exportado': 'Exportou o financeiro (CSV)',
     'parceiro_validado': 'Validou fornecedor da 2.01.97', 'parceiro_alterado': 'Alterou a validação de fornecedor',
     'parceiro_desfeito': 'Desfez a validação de fornecedor',
+    'conferencia_reaberta': 'Consulta voltou para conferência (houve mudanças)',
 }
 PAPEIS = {'parceiro': 'Parceiro da obra', 'outro': 'Outro prestador'}
 CORES_COMPARACAO = {'vermelho': ('#ffebee', '#c62828'), 'ambar': ('#fff8e1', '#8d6e00'),
@@ -49,11 +51,17 @@ PASSOS_CONFERENCIA = (
 ESTILO_DIALOGO = 'width: min(1400px, 96vw); max-width: 96vw; max-height: 94vh; overflow: auto;'
 
 
-def _data_local(iso):
-    try:
-        return datetime.fromisoformat(iso).astimezone().strftime('%d/%m/%Y %H:%M')
-    except (TypeError, ValueError):
-        return iso or ''
+def apagar_ao_fechar(dialog):
+    """Remove o diálogo da página quando ele fecha (senão cada abertura fica acumulada no navegador)."""
+    dialog.on('hide', lambda: None if dialog.is_deleted else dialog.delete())
+    return dialog
+
+
+def _selo_simulado(dados):
+    if (dados or {}).get('simulado'):
+        ui.label('DADOS SIMULADOS · não são do Omie').style(
+            'font-size: 11px; font-weight: 700; color: #6a1b9a; background: #f3e5f5; '
+            'padding: 2px 8px; border-radius: 4px;')
 
 
 def _data_br(iso_dia):
@@ -96,7 +104,7 @@ class OmieFinanceiroMixin:
         @ui.refreshable
         def bloco():
             try:
-                resumo = resumo_obra(obra, self.omie_repo.situacao(obra['id']))
+                resumo = resumo_obra(obra, self.omie_repo.situacao(obra['id'], com_anterior=False))
             except Exception as e:
                 log_error(e, 'omie_financeiro', f"Resumo Omie - obra {obra['id']}")
                 ui.label('Financeiro Omie indisponível no momento.').style('font-size: 12px; color: #999;')
@@ -122,6 +130,7 @@ class OmieFinanceiroMixin:
                     ui.badge('Conferido' if conferido else 'Em conferência',
                              color='green' if conferido else 'orange').props('outline')
                 if lote:
+                    _selo_simulado(lote['dados'])
                     totais = resumo['totais']
                     ui.label(f"Custos pagos: {moeda(totais['pago'])}").style(
                         'font-size: 13px; color: #1a2332; font-weight: bold;')
@@ -184,7 +193,7 @@ class OmieFinanceiroMixin:
         editar = pode_editar_financeiro(user)
         obra = self.db.obter_obra(obra['id']) or obra
 
-        with ui.dialog() as dialog, ui.card().style(ESTILO_DIALOGO):
+        with apagar_ao_fechar(ui.dialog()) as dialog, ui.card().style(ESTILO_DIALOGO):
             @ui.refreshable
             def conteudo():
                 situacao = self.omie_repo.situacao(obra['id'])
@@ -206,7 +215,8 @@ class OmieFinanceiroMixin:
                     ui.button(icon='close', on_click=dialog.close).props('flat round').tooltip('Fechar financeiro')
 
                 def recarregar():
-                    conteudo.refresh()
+                    if not dialog.is_deleted:   # a janela pode ter sido fechada durante a atualização
+                        conteudo.refresh()
                     self._atualizar_blocos_omie([obra['id']])
 
                 if not vinculo:
@@ -241,6 +251,7 @@ class OmieFinanceiroMixin:
                     self._painel_historico(obra)
                     return
 
+                _selo_simulado(lote['dados'])
                 with ui.row().classes('w-full items-center justify-between'):
                     ui.label(f"Consulta de {_data_local(lote['consultado_em'])} · período "
                              f"{_data_br(lote['inicio'])} a {_data_br(lote['fim'])}").style('font-size: 12px; color: #888;')
@@ -311,6 +322,8 @@ class OmieFinanceiroMixin:
             extra = detalhe.get('projeto') or ''
             if acao['acao'].startswith('atualizacao_') and 'ok' in detalhe:
                 extra = f"{detalhe['ok']} ok · {detalhe.get('erro', 0)} com erro"
+            if detalhe.get('mudancas'):
+                extra = '; '.join(detalhe['mudancas'])
             if 'fornecedor' in detalhe:
                 extra = ' · '.join(t for t in (detalhe.get('nome') or f"código {detalhe['fornecedor']}",
                                                PAPEIS.get(detalhe.get('papel'), '')) if t)
@@ -386,7 +399,7 @@ class OmieFinanceiroMixin:
         comparar = float(obra.get('valor_percentual') or 0) > 0 and any(
             v['papel'] == 'parceiro' for v in validacoes.values())
         medicoes = self.db.obter_valores_medicoes(obra['id']) if comparar else []
-        return parceiros_obra(obra, dados, validacoes, fornecedores, medicoes)
+        return parceiros_obra(obra, dados, validacoes, fornecedores, medicoes, pagos=pagos)
 
     def _painel_parceiros(self, obra, dados, pode_validar, recarregar):
         try:
@@ -542,7 +555,7 @@ class OmieFinanceiroMixin:
 
     @staticmethod
     def _dialogo_origem_omie():
-        with ui.dialog() as dialog, ui.card().style('max-width: 720px;'):
+        with apagar_ao_fechar(ui.dialog()) as dialog, ui.card().style('max-width: 720px;'):
             ui.label('Origem da informação · Omie').style('font-size: 18px; font-weight: 700;')
             ui.label('Como conferir na tela do Omie').style('font-weight: 600; color: #1565c0;')
             for passo in PASSOS_CONFERENCIA:
@@ -581,7 +594,7 @@ class OmieFinanceiroMixin:
         sugestao = sugerir_projetos([obra], livres)[obra['id']]
         opcoes = {p['codigo']: p['nome'] for p in livres}
         inicial = sugestao['projetos'][0]['codigo'] if sugestao['situacao'] == 'sugerida' else None
-        with ui.dialog() as dialog, ui.card().style('min-width: min(560px, 92vw);'):
+        with apagar_ao_fechar(ui.dialog()) as dialog, ui.card().style('min-width: min(560px, 92vw);'):
             ui.label(f"Ligar {obra['nome_contrato']} ao Omie").style('font-size: 18px; font-weight: 700;')
             ic = (obra.get('contrato_ic') or '').strip() or 'não cadastrado'
             ui.label(f'IC da obra: {ic}').style('font-size: 13px; color: #555;')
@@ -626,7 +639,7 @@ class OmieFinanceiroMixin:
         ao_terminar()
 
     def _confirmar_desfazer_ligacao(self, obra, ao_terminar):
-        with ui.dialog() as dialog, ui.card():
+        with apagar_ao_fechar(ui.dialog()) as dialog, ui.card():
             ui.label('Desfazer a ligação com o Omie?').style('font-size: 16px; font-weight: 700;')
             ui.label('As consultas guardadas desta obra serão apagadas. O histórico de ações é mantido.').style(
                 'font-size: 13px; color: #666;')
@@ -650,7 +663,8 @@ class OmieFinanceiroMixin:
         if projetos is None:
             return
         linhas = atualizacao.obras_sem_ligacao(self.omie_repo, self.db.listar_obras(), projetos)
-        with ui.dialog() as dialog, ui.card().style('width: min(900px, 96vw); max-height: 90vh; overflow: auto;'):
+        with apagar_ao_fechar(ui.dialog()) as dialog, ui.card().style(
+                'width: min(900px, 96vw); max-height: 90vh; overflow: auto;'):
             ui.label('Obras sem ligação ao Omie').style('font-size: 18px; font-weight: 700;')
             ui.label('Sugestão pelo número do IC no nome do projeto; nunca pela cidade. Marque as sugestões '
                      'corretas e confirme; as demais podem ser escolhidas uma a uma.').style('font-size: 12px; color: #777;')
@@ -771,6 +785,9 @@ class OmieFinanceiroMixin:
         user = self._usuario_omie()
         if not pode_editar_financeiro(user):
             return
+        if modo_simulado():
+            ui.badge('Omie simulado', color='purple').props('outline').style('margin-right: 6px;').tooltip(
+                'OMIE_MODO=simulado: as consultas usam dados fictícios')
         with ui.element('div').classes('ao-view-toggle').style('margin-right: 8px;'):
             self._btn_omie_atualizar = ui.button(icon='sync', on_click=lambda: self.atualizar_omie()).props(
                 'flat dense').classes('ao-view-toggle-btn').tooltip('Atualizar do Omie')
@@ -799,11 +816,14 @@ class OmieFinanceiroMixin:
             return
         if not self._garantir_chaves(lambda: self.atualizar_omie(obra_ids, ao_terminar)):
             return
+        # Progresso e timer ficam na barra de Obras, não no diálogo de onde a atualização partiu
+        # (ele pode ser fechado e apagado enquanto a consulta roda).
         status = getattr(self, '_omie_status', None)
+        timer = None
         if status is not None:
             status.set_visibility(True)
-        timer = ui.timer(0.5, lambda: status is not None and self._omie_progresso.set_text(
-            atualizacao.estado()['progresso']))
+            with status:
+                timer = ui.timer(0.5, lambda: self._omie_progresso.set_text(atualizacao.estado()['progresso']))
         try:
             resumo = await run.io_bound(atualizacao.atualizar, self.omie_repo, self.db.listar_obras(), user, obra_ids)
         except (PermissionError, ValueError, RuntimeError) as e:
@@ -814,7 +834,8 @@ class OmieFinanceiroMixin:
             ui.notify('Atualização do Omie não concluída. Os dados anteriores foram mantidos.', type='warning')
             return
         finally:
-            timer.cancel()
+            if timer is not None:
+                timer.cancel()
             if status is not None:
                 status.set_visibility(False)
         partes = [f"{resumo['ok']} obra(s) atualizada(s)"]
@@ -823,6 +844,8 @@ class OmieFinanceiroMixin:
             partes.append(f"{mudancas['pagamentos']} pagamento(s) novo(s)")
         if mudancas.get('notas_recebidas'):
             partes.append(f"{mudancas['notas_recebidas']} NF(s) recebida(s)")
+        if resumo.get('reabertas'):
+            partes.append(f"{resumo['reabertas']} obra(s) com mudanças voltaram para conferência")
         if resumo['erro']:
             partes.append(f"{resumo['erro']} com erro")
         if resumo['nao_processadas']:

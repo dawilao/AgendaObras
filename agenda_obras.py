@@ -21,6 +21,7 @@ from core.version_checker import VersionChecker
 from core.config import VERSION
 from core.error_logger import log_error
 from services.auth_service import obter_usuario_logado, atualizar_usuario_sessao
+from services.financeiro_service import ve_todas_as_obras
 from db.auth_repo import AuthDatabase
 from db.contratos_repo import ContratosDatabase
 from ui.components.obra_card import ObraCardMixin
@@ -418,6 +419,8 @@ class AgendaObras(ObraCardMixin, ObraDialogsMixin, AdminDialogsMixin, ObraKanban
             'is_admin': is_admin,
             'user_id': user_id,
             'contratos_vinculados': contratos_vinculados,
+            # ADM e Financeiro veem todas as obras; editar continua pelo contrato vinculado.
+            've_todas_obras': ve_todas_as_obras(usuario),
         }
 
     def _usuario_pode_acessar_contrato(self, contrato_nome: str) -> bool:
@@ -1110,7 +1113,7 @@ class AgendaObras(ObraCardMixin, ObraDialogsMixin, AdminDialogsMixin, ObraKanban
 
             permissoes = self._obter_permissoes_usuario()
 
-            if permissoes['is_admin']:
+            if permissoes['ve_todas_obras']:
                 obras = self.db.listar_obras(self.filtro_pesquisa if self.filtro_pesquisa else None)
             else:
                 obras = self.db.listar_obras_por_contratos(
@@ -1156,7 +1159,7 @@ class AgendaObras(ObraCardMixin, ObraDialogsMixin, AdminDialogsMixin, ObraKanban
                 ui.label(f'Não há obras que correspondam a "{self.filtro_pesquisa}"').style('font-size: 14px; color: #bbb;')
                 ui.button('Limpar pesquisa', on_click=self.atualizar_dados).props('outlined').style('margin-top: 15px;')
             else:
-                if not permissoes['is_admin'] and not permissoes['contratos_vinculados']:
+                if not permissoes['ve_todas_obras'] and not permissoes['contratos_vinculados']:
                     ui.label('Nenhum contrato vinculado ao seu usuário').style('font-size: 18px; color: #999;')
                     ui.label('Solicite a um administrador o vínculo com um contrato.').style('font-size: 14px; color: #bbb;')
                 else:

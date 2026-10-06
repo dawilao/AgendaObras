@@ -2,6 +2,7 @@
 
 Toda operação confere a permissão no servidor (services.financeiro_service). Uma atualização
 por vez no processo; o bloqueio de 30 min do Omie (HTTP 425) desabilita novas tentativas.
+Consulta nova com alguma mudança devolve a obra conferida para "Em conferência".
 """
 import re
 import threading
@@ -10,20 +11,19 @@ import unicodedata
 from datetime import date, datetime, timezone
 
 from services import omie_integracao as omie
-from services.financeiro_service import pode_editar_financeiro, pode_validar_parceiros, pode_ver_financeiro
-from services.omie_financeiro import diferencas, exportar_csv, pagamentos_por_fornecedor
+from services.financeiro_service import checar_editar, checar_ver, pode_validar_parceiros
+from services.omie_financeiro import (diferencas, exportar_csv, houve_mudanca, pagamentos_por_fornecedor,
+                                      textos_diferencas)
 
 PERIODO_INICIO_PADRAO = '2026-01-01'
 CACHE_PROJETOS_S = 300
+# Fornecedor que o Omie não devolveu não é consultado de novo antes disso.
+FORNECEDOR_FALHO_S = 24 * 3600
 
 _trava = threading.Lock()
 _estado = {'rodando': False, 'progresso': '', 'cancelar': None, 'bloqueado_ate': None}
 _projetos_cache = {'em': None, 'lista': None}
-
-
-def _exigir_financeiro(user):
-    if not pode_editar_financeiro(user):
-        raise PermissionError('Somente o Financeiro pode fazer esta alteração.')
+_fornecedores_falhos = {}   # {codigo: time.monotonic() da falha}
 
 
 def estado() -> dict:
@@ -51,7 +51,7 @@ def periodo_padrao(obras, hoje=None):
 
 
 def interromper(user) -> bool:
-    _exigir_financeiro(user)
+    checar_editar(user)
     evento = _estado['cancelar']
     if evento is None:
         return False
@@ -61,7 +61,7 @@ def interromper(user) -> bool:
 
 def atualizar(repo, obras, user, obra_ids=None, cliente=None, hoje=None) -> dict:
     """Consulta o Omie para as obras ligadas (todas, ou só obra_ids) e grava uma consulta por obra."""
-    _exigir_financeiro(user)
+    checar_editar(user)
     _sem_bloqueio()
     if not _trava.acquire(blocking=False):
         raise RuntimeError('Já existe uma atualização do Omie em andamento. Aguarde ou interrompa a anterior.')
@@ -76,6 +76,9 @@ def atualizar(repo, obras, user, obra_ids=None, cliente=None, hoje=None) -> dict
         cliente = cliente or omie.criar_cliente(list(por_id.values()))
         if hasattr(cliente, 'ao_esperar'):
             cliente.ao_esperar = lambda s: _estado.update(progresso=f'Aguardando o limite do Omie ({int(s)} s)')
+        if hasattr(cliente, 'cancelar'):
+            cliente.cancelar = cancelar   # "Interromper" não espera o fim de uma pausa de até 60 s
+        simulado = bool(getattr(cliente, 'simulado', False))
         unica = vinculos[0]['obra_id'] if obra_ids is not None and len(vinculos) == 1 else None
         repo.registrar_acao(user, 'atualizacao_iniciada', unica, {'obras': len(vinculos), 'inicio': inicio, 'fim': fim})
         resultado = omie.coletar(
@@ -83,17 +86,23 @@ def atualizar(repo, obras, user, obra_ids=None, cliente=None, hoje=None) -> dict
             [{'obra_id': v['obra_id'], 'codigo_projeto': v['codigo_projeto'], 'projeto': v['nome_projeto'],
               'ic': v.get('ic_na_confirmacao')} for v in vinculos],
             inicio, fim, progresso=lambda texto: _estado.update(progresso=texto), cancelar=cancelar)
-        ok = erro = 0
+        ok = erro = reabertas = 0
         mudancas = {'pagamentos': 0, 'notas_recebidas': 0}
         for obra_id, item in resultado['obras'].items():
             if item['status'] == 'ok':
+                dados = item['dados']
+                if simulado:
+                    dados['simulado'] = True   # a tela e o CSV avisam que não são dados reais
                 anterior = repo.ultimo_lote(obra_id, 'ok')
-                repo.gravar_lote(obra_id, 'ok', inicio, fim, dados=item['dados'], consultado_em=resultado['consultado_em'])
-                dif = diferencas(anterior, {'dados': item['dados'], 'consultado_em': resultado['consultado_em']},
+                dif = diferencas(anterior, {'dados': dados, 'consultado_em': resultado['consultado_em']},
                                  por_id.get(obra_id))
+                repo.gravar_lote(obra_id, 'ok', inicio, fim, dados=dados, consultado_em=resultado['consultado_em'])
                 if dif:
                     mudancas['pagamentos'] += dif['pagamentos']['quantidade']
                     mudancas['notas_recebidas'] += len(dif['notas_recebidas'])
+                if houve_mudanca(dif) and repo.reabrir_conferencia(
+                        obra_id, user, {'mudancas': textos_diferencas(dif)[:5]}):
+                    reabertas += 1
                 ok += 1
             else:
                 repo.gravar_lote(obra_id, 'erro', inicio, fim, motivo=item['motivo'],
@@ -103,7 +112,7 @@ def atualizar(repo, obras, user, obra_ids=None, cliente=None, hoje=None) -> dict
             resultado['bloqueio'] = _buscar_fornecedores_novos(repo, cliente, resultado, cancelar)
         resumo = {'ok': ok, 'erro': erro, 'nao_processadas': len(vinculos) - ok - erro,
                   'interrompido': resultado['interrompido'], 'bloqueado_ate': resultado['bloqueio'],
-                  'mudancas': mudancas}
+                  'mudancas': mudancas, 'reabertas': reabertas}
         if resultado['bloqueio']:
             _estado['bloqueado_ate'] = resultado['bloqueio']
             acao = 'atualizacao_bloqueada'
@@ -118,17 +127,29 @@ def atualizar(repo, obras, user, obra_ids=None, cliente=None, hoje=None) -> dict
 
 def _buscar_fornecedores_novos(repo, cliente, resultado, cancelar):
     """Nome e documento mascarado dos fornecedores da 2.01.97 ainda não conhecidos (um ConsultarCliente
-    por fornecedor novo). Falha não afeta as obras; devolve o horário do bloqueio do Omie, se houver."""
+    por fornecedor novo). Falha não afeta as obras; o fornecedor que falhou só é consultado de novo após
+    FORNECEDOR_FALHO_S. Devolve o horário do bloqueio do Omie, se houver; interrupção marca o resultado."""
     codigos = {p['codigo'] for item in resultado['obras'].values() if item['status'] == 'ok'
                for p in pagamentos_por_fornecedor(item['dados']) if p['codigo']}
-    novos = codigos - set(repo.fornecedores(codigos))
+    agora = time.monotonic()
+    novos = {c for c in codigos - set(repo.fornecedores(codigos))
+             if agora - _fornecedores_falhos.get(c, float('-inf')) >= FORNECEDOR_FALHO_S}
     if not novos:
         return None
+    falhas = set()
     try:
-        repo.salvar_fornecedores(omie.consultar_fornecedores(
-            cliente, novos, progresso=lambda texto: _estado.update(progresso=texto), cancelar=cancelar))
+        encontrados = omie.consultar_fornecedores(cliente, novos, progresso=lambda texto: _estado.update(progresso=texto),
+                                                  cancelar=cancelar, falhas=falhas)
     except omie.BloqueioOmie as bloqueio:
         return bloqueio.ate
+    except omie.Interrompida:
+        resultado['interrompido'] = True
+        return None
+    finally:
+        _fornecedores_falhos.update(dict.fromkeys(falhas, agora))
+    repo.salvar_fornecedores(encontrados)
+    if cancelar is not None and cancelar.is_set():
+        resultado['interrompido'] = True
     return None
 
 
@@ -137,12 +158,17 @@ def _buscar_fornecedores_novos(repo, cliente, resultado, cancelar):
 # ---------------------------------------------------------------------------
 
 def projetos_omie(user, obras=None, cliente=None, recarregar=False):
-    """Projetos ativos do Omie, guardados por alguns minutos (evita repetir a mesma consulta)."""
-    _exigir_financeiro(user)
+    """Projetos ativos do Omie, guardados por alguns minutos (evita repetir a mesma consulta).
+
+    Mesmo com recarregar, uma lista com menos de 60 s é reaproveitada: o Omie recusa a mesma
+    requisição repetida nesse intervalo.
+    """
+    checar_editar(user)
     agora = time.monotonic()
-    if (not recarregar and _projetos_cache['lista'] is not None
-            and agora - _projetos_cache['em'] < CACHE_PROJETOS_S):
-        return _projetos_cache['lista']
+    if _projetos_cache['lista'] is not None and _projetos_cache['em'] is not None:
+        idade = agora - _projetos_cache['em']
+        if idade < omie.ESPERA_IDENTICA_S or (not recarregar and idade < CACHE_PROJETOS_S):
+            return _projetos_cache['lista']
     _sem_bloqueio()
     try:
         lista = omie.listar_projetos(cliente or omie.criar_cliente(obras))
@@ -167,25 +193,25 @@ def obras_sem_ligacao(repo, obras, projetos):
 
 
 def ligar(repo, obra, projeto, user) -> bool:
-    _exigir_financeiro(user)
+    checar_editar(user)
     return repo.salvar_vinculo(obra['id'], projeto['codigo'], projeto['nome'], obra.get('contrato_ic'), user)
 
 
 def ligar_em_lote(repo, pares, user) -> int:
     """pares: [(obra, projeto)]; tudo ou nada."""
-    _exigir_financeiro(user)
+    checar_editar(user)
     return repo.salvar_vinculos_em_lote(
         [{'obra_id': o['id'], 'codigo_projeto': p['codigo'], 'nome_projeto': p['nome'], 'ic': o.get('contrato_ic')}
          for o, p in pares], user)
 
 
 def desfazer_ligacao(repo, obra_id, user) -> bool:
-    _exigir_financeiro(user)
+    checar_editar(user)
     return repo.desfazer_vinculo(obra_id, user)
 
 
 def marcar_conferido(repo, obra_id, user) -> bool:
-    _exigir_financeiro(user)
+    checar_editar(user)
     return repo.marcar_conferido(obra_id, user)
 
 
@@ -209,11 +235,6 @@ def remover_chaves(repo, user):
 # Consulta (mesma regra de quem vê o financeiro)
 # ---------------------------------------------------------------------------
 
-def _exigir_ver(user, obra):
-    if not pode_ver_financeiro(user, obra):
-        raise PermissionError('Financeiro restrito ao administrador, ao Financeiro e ao coordenador desta obra.')
-
-
 def _nome_arquivo(texto):
     texto = unicodedata.normalize('NFKD', texto or 'obra').encode('ascii', 'ignore').decode()
     return re.sub(r'[^A-Za-z0-9]+', '_', texto).strip('_').lower() or 'obra'
@@ -221,7 +242,7 @@ def _nome_arquivo(texto):
 
 def exportar_financeiro(repo, obra, user, hoje=None):
     """(nome do arquivo, conteúdo CSV) da última consulta válida da obra."""
-    _exigir_ver(user, obra)
+    checar_ver(user, obra)
     situacao = repo.situacao(obra['id'])
     if not situacao['lote']:
         raise ValueError('Ainda não há consulta do Omie para exportar.')
@@ -233,12 +254,12 @@ def exportar_financeiro(repo, obra, user, hoje=None):
 
 def historico(repo, obra, user, limite=50):
     """Ações do financeiro desta obra (sem chaves nem valores sensíveis)."""
-    _exigir_ver(user, obra)
+    checar_ver(user, obra)
     return repo.auditoria(obra['id'], limite)
 
 
 def historico_geral(repo, user, limite=40):
-    _exigir_financeiro(user)
+    checar_editar(user)
     return repo.auditoria(None, limite)
 
 

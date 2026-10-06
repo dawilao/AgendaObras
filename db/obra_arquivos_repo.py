@@ -3,10 +3,11 @@
 O conteúdo fica no disco, endereçado pelo sha256 (services.obra_arquivos). Nada é apagado pela
 tela: cada envio é uma versão nova, e o mesmo conteúdo não é registrado duas vezes na obra.
 """
-from typing import Dict, List, Optional
+import sqlite3
+from typing import Callable, Dict, List, Optional
 
 from db.connection import BaseRepository
-from db.omie_repo import _autor, agora, registrar_auditoria
+from db.omie_repo import agora, autor, registrar_auditoria
 
 TIPOS = {'cct': 'CCT', 'orcamento': 'Orçamento', 'aditivo': 'Aditivos'}
 ORIGENS = ('upload', 'comunicacoes')
@@ -38,21 +39,26 @@ def criar_schema(conn):
 class ObraArquivosRepository(BaseRepository):
 
     def registrar(self, obra_id: int, tipo: str, nome: str, sha256: str, tamanho: int, origem: str,
-                  user, origem_ref: Optional[str] = None) -> int:
+                  user, origem_ref: Optional[str] = None, antes_do_commit: Optional[Callable] = None) -> int:
+        """Registra a versão. antes_do_commit (gravar o conteúdo no disco) roda dentro da transação:
+        se falhar, nada fica registrado."""
         if tipo not in TIPOS:
             raise ValueError('Tipo de documento inválido.')
         if origem not in ORIGENS:
             raise ValueError('Origem inválida.')
-        uid, autor = _autor(user)
+        uid, nome_autor = autor(user)
         conn = self.get_connection()
         try:
-            if conn.execute('SELECT 1 FROM obra_arquivos WHERE obra_id=? AND sha256=?', (obra_id, sha256)).fetchone():
-                raise ValueError('Este arquivo já foi enviado para esta obra.')
-            cur = conn.execute('INSERT INTO obra_arquivos(obra_id,tipo,nome,sha256,bytes,origem,origem_ref,'
-                               'enviado_por,enviado_por_nome,enviado_em) VALUES(?,?,?,?,?,?,?,?,?,?)',
-                               (obra_id, tipo, nome, sha256, tamanho, origem, origem_ref, uid, autor, agora()))
+            try:
+                cur = conn.execute('INSERT INTO obra_arquivos(obra_id,tipo,nome,sha256,bytes,origem,origem_ref,'
+                                   'enviado_por,enviado_por_nome,enviado_em) VALUES(?,?,?,?,?,?,?,?,?,?)',
+                                   (obra_id, tipo, nome, sha256, tamanho, origem, origem_ref, uid, nome_autor, agora()))
+            except sqlite3.IntegrityError:
+                raise ValueError('Este arquivo já foi enviado para esta obra.') from None
             registrar_auditoria(conn, user, 'arquivo_anexado' if origem == 'comunicacoes' else 'arquivo_enviado',
                                 obra_id, {'tipo': tipo, 'nome': nome})
+            if antes_do_commit:
+                antes_do_commit()
             conn.commit()
             return cur.lastrowid
         except Exception:

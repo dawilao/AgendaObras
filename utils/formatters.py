@@ -93,6 +93,14 @@ def formatar_data_exibicao(data_str) -> str:
     return data_str
 
 
+def formatar_data_hora_local(iso) -> str:
+    """Instante ISO (ex.: gravado em UTC) para dd/mm/aaaa HH:MM no fuso local; inválido volta como veio."""
+    try:
+        return datetime.datetime.fromisoformat(iso).astimezone().strftime('%d/%m/%Y %H:%M')
+    except (TypeError, ValueError):
+        return iso or ''
+
+
 def tempo_desde_data(data_str, hoje: datetime.date = None) -> str:
     """Distância entre a data e hoje em dias ('há 27 dias', 'hoje', 'em 3 dias'). Retorna '' se inválida."""
     try:
