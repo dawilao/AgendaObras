@@ -110,11 +110,14 @@ class ArquivosObraTest(unittest.TestCase):
             arquivos.enviar(self.repo, self.obra, 'orcamento', 'copia.pdf', PDF, FIN, store=outro)
         self.assertEqual(list(outro.files()), [])
 
-    def test_so_o_financeiro_envia(self):
-        for user in (ADMIN, COORDENADOR, OUTRO, None):
+    def test_financeiro_e_coordenador_enviam(self):
+        for user in (ADMIN, OUTRO, None):
             with self.assertRaises(PermissionError):
                 self.enviar(user=user)
         self.assertEqual(self.repo.listar(1), [])
+        self.assertEqual(self.enviar(user=COORDENADOR)['enviado_por_nome'], 'Coord')
+        with self.assertRaises(PermissionError):     # coordenador de outra obra
+            self.enviar(user=COORDENADOR, obra=dict(self.db.obter_obra(2), coordenador_id=99), conteudo=PDF + b'x')
 
     def test_baixar_confere_permissao_e_obra(self):
         arquivo = self.enviar()
@@ -171,14 +174,77 @@ class ArquivosObraTest(unittest.TestCase):
                                             shared=shared, store=self.store)
         self.assertIn('arquivo_anexado', [a['acao'] for a in OmieRepository(self.path).auditoria(1)])
 
-    def test_anexar_so_pelo_financeiro(self):
+    def test_anexar_pelo_financeiro_e_coordenador(self):
         shared, ids = self.historico()
-        for user in (ADMIN, COORDENADOR):
+        for user in (ADMIN, OUTRO):
             with self.assertRaises(PermissionError):
                 arquivos.anexos_comunicacoes(self.repo, self.obra, user, shared=shared)
             with self.assertRaises(PermissionError):
                 arquivos.anexar_de_comunicacoes(self.repo, self.obra, 'orcamento', ids['orcamento.pdf'], user,
                                                 shared=shared, store=self.store)
+        self.assertEqual(len(arquivos.anexos_comunicacoes(self.repo, self.obra, COORDENADOR, shared=shared)), 1)
+        arquivo = arquivos.anexar_de_comunicacoes(self.repo, self.obra, 'orcamento', ids['orcamento.pdf'], COORDENADOR,
+                                                  shared=shared, store=self.store)
+        self.assertEqual(arquivo['enviado_por'], COORDENADOR['id'])
+
+    # ----- corrigir e excluir
+    def test_corrigir_nome_e_tipo(self):
+        arquivo = self.enviar(nome='orcamento.pdf')
+        self.assertTrue(arquivos.corrigir(self.repo, self.obra, arquivo['id'], 'Aditivo 01', 'aditivo', COORDENADOR))
+        corrigido = self.repo.obter(arquivo['id'])
+        self.assertEqual((corrigido['nome'], corrigido['tipo']), ('Aditivo 01.pdf', 'aditivo'))   # extensão mantida
+        self.assertTrue(arquivos.corrigir(self.repo, self.obra, arquivo['id'], 'CCT 2026.PDF', 'cct', FIN))
+        self.assertEqual(self.repo.obter(arquivo['id'])['nome'], 'CCT 2026.pdf')
+        self.assertFalse(arquivos.corrigir(self.repo, self.obra, arquivo['id'], 'CCT 2026', 'cct', FIN))  # nada mudou
+        self.assertEqual(arquivos.baixar(self.repo, self.obra, arquivo['id'], ADMIN, self.store), ('CCT 2026.pdf', PDF))
+        planilha = self.enviar(nome='orc.xlsx', conteudo=XLSX)
+        with self.assertRaises(ValueError):          # CCT só aceita PDF
+            arquivos.corrigir(self.repo, self.obra, planilha['id'], 'orc', 'cct', FIN)
+        with self.assertRaises(ValueError):          # nome vazio
+            arquivos.corrigir(self.repo, self.obra, planilha['id'], '  .xlsx', 'orcamento', FIN)
+        correcoes = [a for a in OmieRepository(self.path).auditoria(1) if a['acao'] == 'arquivo_corrigido']
+        self.assertEqual(len(correcoes), 2)                  # tentativas recusadas não registram
+        self.assertEqual(correcoes[0]['detalhe']['antes']['tipo'], 'aditivo')
+        self.assertEqual(correcoes[0]['detalhe']['depois'], {'nome': 'CCT 2026.pdf', 'tipo': 'cct'})
+
+    def test_excluir_e_reenviar(self):
+        arquivo = self.enviar()
+        self.assertTrue(arquivos.excluir(self.repo, self.obra, arquivo['id'], COORDENADOR))
+        self.assertEqual(arquivos.listar(self.repo, self.obra, FIN)['orcamento'], [])
+        with self.assertRaises(ValueError):
+            arquivos.baixar(self.repo, self.obra, arquivo['id'], FIN, self.store)
+        with self.assertRaises(ValueError):
+            arquivos.corrigir(self.repo, self.obra, arquivo['id'], 'x', 'orcamento', FIN)
+        with self.assertRaises(ValueError):
+            arquivos.excluir(self.repo, self.obra, arquivo['id'], FIN)
+        # O mesmo conteúdo enviado de novo volta, com o novo tipo e nome.
+        de_volta = self.enviar(tipo='aditivo', nome='aditivo.pdf', user=FIN)
+        self.assertEqual((de_volta['id'], de_volta['tipo'], de_volta['nome']), (arquivo['id'], 'aditivo', 'aditivo.pdf'))
+        self.assertIsNone(de_volta['excluido_em'])
+        acoes = [a['acao'] for a in OmieRepository(self.path).auditoria(1)]
+        self.assertEqual(acoes, ['arquivo_enviado', 'arquivo_excluido', 'arquivo_enviado'])
+
+    def test_corrigir_e_excluir_conferem_permissao_e_obra(self):
+        arquivo = self.enviar()
+        for user in (ADMIN, OUTRO, None):
+            with self.assertRaises(PermissionError):
+                arquivos.corrigir(self.repo, self.obra, arquivo['id'], 'x', 'orcamento', user)
+            with self.assertRaises(PermissionError):
+                arquivos.excluir(self.repo, self.obra, arquivo['id'], user)
+        outra_obra = self.db.obter_obra(2)
+        with self.assertRaises(ValueError):          # arquivo da obra 1 pela obra 2
+            arquivos.excluir(self.repo, outra_obra, arquivo['id'], FIN)
+        self.assertEqual(len(self.repo.listar(1)), 1)
+
+    def test_migracao_21_idempotente(self):
+        with contextlib.redirect_stdout(io.StringIO()):
+            run_migrations(self.path)
+        with sqlite3.connect(self.path) as conn:
+            colunas = {r[1] for r in conn.execute('PRAGMA table_info(obra_arquivos)')}
+            versoes = {r[0] for r in conn.execute('SELECT version FROM schema_migrations')}
+        conn.close()
+        self.assertIn(21, versoes)
+        self.assertTrue({'excluido_por', 'excluido_por_nome', 'excluido_em'} <= colunas)
 
     def test_raiz_separada_das_comunicacoes(self):
         from comunicacoes.blobs import default_root

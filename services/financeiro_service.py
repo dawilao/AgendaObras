@@ -2,7 +2,8 @@
 
 Ver: administrador, Financeiro ou coordenador da própria obra (obras.coordenador_id).
 Alterar: só quem tem a permissão Financeiro. Estar vinculado ao contrato não dá acesso.
-Exceção: validar os parceiros da obra também cabe ao coordenador da própria obra.
+Exceções: validar os parceiros e cuidar dos documentos da aba Arquivos (enviar, corrigir, excluir)
+também cabem ao coordenador da própria obra.
 Lista de obras: administrador e Financeiro veem todas (só ver; editar a obra segue o contrato).
 """
 from db.auth_repo import AuthDatabase
@@ -54,6 +55,11 @@ def pode_validar_parceiros(user, obra) -> bool:
     if not user or not user.get('id'):
         return False
     return eh_financeiro(user) or eh_coordenador_da_obra(user, obra)
+
+
+def pode_editar_arquivos(user, obra) -> bool:
+    """Enviar, corrigir e excluir documentos da obra: Financeiro ou coordenador da própria obra."""
+    return pode_validar_parceiros(user, obra)
 
 
 def checar_ver(user, obra, mensagem=MSG_VER):

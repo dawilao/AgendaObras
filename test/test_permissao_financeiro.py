@@ -9,7 +9,8 @@ from pathlib import Path
 
 from db.auth_repo import AuthDatabase
 from services.financeiro_service import (definir_permissao_financeiro, exigir_editar, exigir_ver,
-                                         pode_editar_financeiro, pode_ver_financeiro, ve_todas_as_obras)
+                                         pode_editar_arquivos, pode_editar_financeiro, pode_ver_financeiro,
+                                         ve_todas_as_obras)
 
 OBRA = {'id': 10, 'cliente': 'CAIXA', 'coordenador_id': 7}
 ADMIN = {'id': 1, 'is_admin': True, 'financeiro': 0}
@@ -37,6 +38,13 @@ class PermissaoTest(unittest.TestCase):
         self.assertTrue(ve_todas_as_obras(FINANCEIRO))
         for user in (COORDENADOR, VINCULADO_AO_CONTRATO, None, {}):
             self.assertFalse(ve_todas_as_obras(user))
+
+    def test_documentos_financeiro_e_coordenador_da_obra(self):
+        self.assertTrue(pode_editar_arquivos(FINANCEIRO, OBRA))
+        self.assertTrue(pode_editar_arquivos(COORDENADOR, OBRA))
+        self.assertFalse(pode_editar_arquivos(COORDENADOR, dict(OBRA, coordenador_id=99)))
+        for user in (ADMIN, VINCULADO_AO_CONTRATO, None, {}):
+            self.assertFalse(pode_editar_arquivos(user, OBRA))
 
     def test_so_o_financeiro_altera(self):
         self.assertTrue(pode_editar_financeiro(FINANCEIRO))

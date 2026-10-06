@@ -1,7 +1,8 @@
 """Aba Arquivos da obra: CCT, orçamento e aditivos.
 
 Ver e baixar: administrador, Financeiro e coordenador da própria obra (mesma regra do financeiro).
-Enviar e anexar das Comunicações: só o Financeiro. Sem exclusão pela tela; cada envio é uma versão.
+Enviar, anexar das Comunicações, corrigir nome/tipo e excluir: Financeiro e coordenador da própria
+obra. Cada envio é uma versão; excluir tira da lista, mas registro e conteúdo ficam.
 
 O conteúdo vai para um BlobStore próprio (compactação sem perda das Comunicações), em raiz separada
 da dos e-mails: a limpeza de órfãos das Comunicações só conhece os bancos de e-mail e apagaria
@@ -13,7 +14,7 @@ from pathlib import Path
 
 from comunicacoes.blobs import BlobStore
 from db.obra_arquivos_repo import TIPOS
-from services.financeiro_service import checar_editar, checar_ver
+from services.financeiro_service import checar_ver, pode_editar_arquivos
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 LIMITE_BYTES = 20 * 1024 * 1024
@@ -34,8 +35,9 @@ def _exigir_ver(user, obra):
     checar_ver(user, obra, 'Arquivos restritos ao administrador, ao Financeiro e ao coordenador desta obra.')
 
 
-def _exigir_enviar(user):
-    checar_editar(user, 'Somente o Financeiro envia arquivos da obra.')
+def _exigir_editar(user, obra):
+    if not pode_editar_arquivos(user, obra):
+        raise PermissionError('Somente o Financeiro e o coordenador desta obra alteram os arquivos.')
 
 
 def nome_limpo(nome):
@@ -93,17 +95,49 @@ def _gravar(repo, obra, tipo, nome, conteudo, user, origem, origem_ref=None, sto
 
 
 def enviar(repo, obra, tipo, nome, conteudo, user, store=None):
-    _exigir_enviar(user)
+    _exigir_editar(user, obra)
     return _gravar(repo, obra, tipo, nome, conteudo, user, 'upload', store=store)
+
+
+def _arquivo_da_obra(repo, obra, arquivo_id):
+    arquivo = repo.obter(arquivo_id)
+    if not arquivo or arquivo['obra_id'] != obra['id'] or arquivo.get('excluido_em'):
+        raise ValueError('Arquivo não encontrado nesta obra.')
+    return arquivo
 
 
 def baixar(repo, obra, arquivo_id, user, store=None):
     """(nome, conteúdo) conferindo no servidor quem pode ver e se o arquivo é desta obra."""
     _exigir_ver(user, obra)
-    arquivo = repo.obter(arquivo_id)
-    if not arquivo or arquivo['obra_id'] != obra['id']:
-        raise ValueError('Arquivo não encontrado nesta obra.')
+    arquivo = _arquivo_da_obra(repo, obra, arquivo_id)
     return arquivo['nome'], (store or blob_store()).get(arquivo['sha256'])
+
+
+def corrigir(repo, obra, arquivo_id, nome, tipo, user):
+    """Corrige nome e tipo. A extensão é a do conteúdo (acrescentada se faltar no nome) e precisa
+    servir para o tipo."""
+    _exigir_editar(user, obra)
+    arquivo = _arquivo_da_obra(repo, obra, arquivo_id)
+    if tipo not in FORMATOS:
+        raise ValueError('Tipo de documento inválido.')
+    sufixo = Path(arquivo['nome']).suffix
+    extensao = sufixo.lower()
+    nome = nome_limpo(nome)
+    if nome.lower().endswith(extensao):
+        nome = nome[:-len(extensao)].strip()
+    if not nome:
+        raise ValueError('Informe o nome do arquivo.')
+    nome = nome_limpo(nome + sufixo)
+    if extensao not in FORMATOS[tipo]:
+        aceitos = ', '.join(e.lstrip('.').upper() for e in FORMATOS[tipo])
+        raise ValueError(f'{TIPOS[tipo]} aceita só {aceitos}.')
+    return repo.corrigir(arquivo_id, nome, tipo, user)
+
+
+def excluir(repo, obra, arquivo_id, user):
+    _exigir_editar(user, obra)
+    _arquivo_da_obra(repo, obra, arquivo_id)
+    return repo.excluir(arquivo_id, user)
 
 
 # ---------------------------------------------------------------------------
@@ -131,14 +165,14 @@ def _anexos_da_obra(shared, obra_id):
 
 def anexos_comunicacoes(repo, obra, user, shared=None):
     """Anexos (PDF, planilhas, CSV) dos e-mails vinculados a esta obra no Histórico da equipe."""
-    _exigir_enviar(user)
+    _exigir_editar(user, obra)
     ja_na_obra = {a['sha256'] for a in repo.listar(obra['id'])}
     return [{**a, 'ja_na_obra': a['sha256'] in ja_na_obra}
             for a in _anexos_da_obra(shared or _historico_equipe(), obra['id'])]
 
 
 def anexar_de_comunicacoes(repo, obra, tipo, anexo_id, user, shared=None, store=None):
-    _exigir_enviar(user)
+    _exigir_editar(user, obra)
     shared = shared or _historico_equipe()
     anexo = next((a for a in _anexos_da_obra(shared, obra['id']) if a['id'] == anexo_id), None)
     if anexo is None:

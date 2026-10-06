@@ -108,7 +108,7 @@ Os fornecedores da categoria 2.01.97 (Prestador de Serviço/Parceiro) são valid
 
 ## Arquivos da obra
 
-A aba **Arquivos** do card guarda CCT (só PDF), orçamento e aditivos (PDF, XLSX, XLS ou CSV, até 20 MB). Administrador, Financeiro e coordenador da própria obra veem e baixam; só o Financeiro envia ou anexa um arquivo dos e-mails da obra no Histórico da equipe das Comunicações. Nada é apagado pela tela: cada envio é uma nova versão "A conferir", e o mesmo conteúdo não entra duas vezes na obra. Um aditivo enviado não altera o valor da obra.
+A aba **Arquivos** do card guarda CCT (só PDF), orçamento e aditivos (PDF, XLSX, XLS ou CSV, até 20 MB). Administrador, Financeiro e coordenador da própria obra veem e baixam. Financeiro e coordenador da própria obra também enviam, anexam um arquivo dos e-mails da obra no Histórico da equipe das Comunicações, corrigem nome e tipo e excluem. Cada envio é uma nova versão "A conferir", e o mesmo conteúdo não entra duas vezes na obra. Excluir só tira o arquivo da lista: o conteúdo continua no servidor, a exclusão fica no histórico, e enviar o mesmo arquivo de novo o traz de volta. Um aditivo enviado não altera o valor da obra.
 
 Os arquivos ficam em `AGENDA_OBRAS_ARQUIVOS_ROOT`, com a mesma compactação sem perda dos anexos das Comunicações, mas em pasta própria: os comandos de manutenção abaixo não mexem nela. Inclua essa pasta no backup.
 

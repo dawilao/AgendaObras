@@ -31,7 +31,10 @@ ACOES_HISTORICO = {
     'parceiro_validado': 'Validou fornecedor da 2.01.97', 'parceiro_alterado': 'Alterou a validação de fornecedor',
     'parceiro_desfeito': 'Desfez a validação de fornecedor',
     'conferencia_reaberta': 'Consulta voltou para conferência (houve mudanças)',
+    'arquivo_enviado': 'Enviou arquivo', 'arquivo_anexado': 'Anexou arquivo das Comunicações',
+    'arquivo_corrigido': 'Corrigiu arquivo', 'arquivo_excluido': 'Excluiu arquivo',
 }
+TIPOS_ARQUIVO = {'cct': 'CCT', 'orcamento': 'Orçamento', 'aditivo': 'Aditivo'}
 PAPEIS = {'parceiro': 'Parceiro da obra', 'outro': 'Outro prestador'}
 CORES_COMPARACAO = {'vermelho': ('#ffebee', '#c62828'), 'ambar': ('#fff8e1', '#8d6e00'),
                     'ok': ('#e8f5e9', '#2e7d32')}
@@ -327,6 +330,13 @@ class OmieFinanceiroMixin:
             if 'fornecedor' in detalhe:
                 extra = ' · '.join(t for t in (detalhe.get('nome') or f"código {detalhe['fornecedor']}",
                                                PAPEIS.get(detalhe.get('papel'), '')) if t)
+            if acao['acao'].startswith('arquivo_'):
+                if 'depois' in detalhe:
+                    antes, depois = detalhe.get('antes') or {}, detalhe['depois']
+                    extra = (f"{antes.get('nome')} ({TIPOS_ARQUIVO.get(antes.get('tipo'), '')}) → "
+                             f"{depois.get('nome')} ({TIPOS_ARQUIVO.get(depois.get('tipo'), '')})")
+                else:
+                    extra = f"{detalhe.get('nome', '')} ({TIPOS_ARQUIVO.get(detalhe.get('tipo'), '')})"
             if nomes_obras is not None and acao.get('obra_id') is not None:
                 obra = nomes_obras.get(acao['obra_id']) or f"obra {acao['obra_id']} (excluída)"
                 extra = f'{obra} · {extra}' if extra else obra
