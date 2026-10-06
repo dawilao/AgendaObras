@@ -78,6 +78,7 @@ Ajustes opcionais, lidos do ambiente do processo. Todos têm valor padrão, ent�
 | `AGENDA_OBRAS_BIBLIOTECA_UPLOADS_PATH` | `uploads/biblioteca` | PDFs da Biblioteca |
 | `AGENDA_MAIL_ROOT` | `comunicacoes/usuarios`, ao lado do banco principal | Bancos das Comunicações (um por usuário e o compartilhado) |
 | `AGENDA_MAIL_FILES_ROOT` | `uploads/comunicacoes` | Anexos dos e-mails (uma cópia por conteúdo) |
+| `AGENDA_OBRAS_ARQUIVOS_ROOT` | `uploads/obras` | Arquivos da obra (CCT, orçamento e aditivos). Use uma pasta diferente da dos anexos dos e-mails |
 | `AGENDAOBRAS_ERRO_DIR` | `erros/` | Logs de erro |
 
 ### Limites e comportamento
@@ -102,6 +103,12 @@ Os fornecedores da categoria 2.01.97 (Prestador de Serviço/Parceiro) são valid
 |---|---|
 | `OMIE_APP_KEY` / `OMIE_APP_SECRET` | Chaves do Omie. Se estiverem no ambiente do serviço (ex.: `EnvironmentFile=` no systemd), são usadas direto; senão, o Financeiro as informa na tela e elas ficam só na memória do servidor até ele reiniciar |
 | `OMIE_MODO` | `simulado` usa dados fictícios, para conferir a tela sem acesso ao Omie |
+
+## Arquivos da obra
+
+A aba **Arquivos** do card guarda CCT (só PDF), orçamento e aditivos (PDF, XLSX, XLS ou CSV, até 20 MB). Administrador, Financeiro e coordenador da própria obra veem e baixam; só o Financeiro envia ou anexa um arquivo dos e-mails da obra no Histórico da equipe das Comunicações. Nada é apagado pela tela: cada envio é uma nova versão "A conferir", e o mesmo conteúdo não entra duas vezes na obra. Um aditivo enviado não altera o valor da obra.
+
+Os arquivos ficam em `AGENDA_OBRAS_ARQUIVOS_ROOT`, com a mesma compactação sem perda dos anexos das Comunicações, mas em pasta própria: os comandos de manutenção abaixo não mexem nela. Inclua essa pasta no backup.
 
 ## Manutenção dos anexos das Comunicações
 

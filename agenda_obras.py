@@ -28,6 +28,7 @@ from ui.components.obra_dialogs import ObraDialogsMixin
 from ui.components.admin_dialogs import AdminDialogsMixin
 from ui.components.obra_kanban import ObraKanbanMixin
 from ui.components.omie_financeiro import OmieFinanceiroMixin
+from ui.components.obra_arquivos import ObraArquivosMixin
 
 
 # Múltiplo de 1, 2, 3 e 4 colunas: a última linha da grade fica sempre completa.
@@ -50,7 +51,8 @@ def obter_servicos():
         return _servicos
 
 
-class AgendaObras(ObraCardMixin, ObraDialogsMixin, AdminDialogsMixin, ObraKanbanMixin, OmieFinanceiroMixin):
+class AgendaObras(ObraCardMixin, ObraDialogsMixin, AdminDialogsMixin, ObraKanbanMixin, OmieFinanceiroMixin,
+                  ObraArquivosMixin):
     def __init__(self):
         self.title = "AgendaObras"
         self.description = "Rastreador de Demandas de Engenharia"
@@ -232,6 +234,10 @@ class AgendaObras(ObraCardMixin, ObraDialogsMixin, AdminDialogsMixin, ObraKanban
                 transform: translateY(-3px) !important;
                 border-color: #c5cae9 !important;
             }
+            /* Card com a aba Arquivos (4 abas): rótulos e ícones menores para caber sem rolagem */
+            .ao-card-tabs-4 .q-tab { padding: 0 4px; min-width: 0; }
+            .ao-card-tabs-4 .q-tab__label { font-size: 11px; }
+            .ao-card-tabs-4 .q-tab__icon { font-size: 18px; }
 
             /* ── Grid responsivo ── */
             .obras-grid {

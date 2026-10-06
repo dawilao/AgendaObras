@@ -73,15 +73,20 @@ def _autor(user) -> tuple:
     return user.get('id'), nome
 
 
+def registrar_auditoria(conn, user, acao: str, obra_id: Optional[int] = None, detalhe: Optional[Dict] = None):
+    """Grava uma ação em financeiro_auditoria na transação de conn (o chamador faz o commit)."""
+    uid, nome = _autor(user)
+    conn.execute('INSERT INTO financeiro_auditoria(quando,usuario_id,usuario_nome,acao,obra_id,detalhe_json) '
+                 'VALUES(?,?,?,?,?,?)',
+                 (agora(), uid, nome, acao, obra_id,
+                  json.dumps(detalhe, ensure_ascii=False) if detalhe else None))
+
+
 class OmieRepository(BaseRepository):
 
     # ---------- auditoria ----------
     def _registrar(self, conn, user, acao: str, obra_id: Optional[int] = None, detalhe: Optional[Dict] = None):
-        uid, nome = _autor(user)
-        conn.execute('INSERT INTO financeiro_auditoria(quando,usuario_id,usuario_nome,acao,obra_id,detalhe_json) '
-                     'VALUES(?,?,?,?,?,?)',
-                     (agora(), uid, nome, acao, obra_id,
-                      json.dumps(detalhe, ensure_ascii=False) if detalhe else None))
+        registrar_auditoria(conn, user, acao, obra_id, detalhe)
 
     def registrar_acao(self, user, acao: str, obra_id: Optional[int] = None, detalhe: Optional[Dict] = None):
         conn = self.get_connection()

@@ -1,0 +1,171 @@
+import os
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+import contextlib
+import io
+import sqlite3
+import tempfile
+import unittest
+from email.message import EmailMessage
+from pathlib import Path
+
+from comunicacoes.blobs import BlobStore
+from comunicacoes.store import MailStore
+from core.migrations import run_migrations
+from db import Database
+from db.obra_arquivos_repo import ObraArquivosRepository
+from db.omie_repo import OmieRepository
+from services import obra_arquivos as arquivos
+
+FIN = {'id': 1, 'nome': 'Fin', 'sobrenome': 'Teste', 'financeiro': 1}
+ADMIN = {'id': 2, 'nome': 'Adm', 'is_admin': True, 'financeiro': 0}
+COORDENADOR = {'id': 7, 'nome': 'Coord', 'financeiro': 0}
+OUTRO = {'id': 8, 'nome': 'Outro', 'financeiro': 0}
+PDF = b'%PDF-1.7\n' + b'conteudo de teste ' * 400
+XLSX = b'PK\x03\x04' + b'\x00' * 200
+
+
+class ValidacaoTest(unittest.TestCase):
+    def test_formatos_por_tipo(self):
+        self.assertEqual(arquivos.validar_arquivo('cct', 'CCT 2026.pdf', PDF), 'CCT 2026.pdf')
+        with self.assertRaises(ValueError):
+            arquivos.validar_arquivo('cct', 'cct.xlsx', XLSX)          # CCT só PDF
+        self.assertEqual(arquivos.validar_arquivo('orcamento', 'orc.XLSX', XLSX), 'orc.XLSX')
+        self.assertEqual(arquivos.validar_arquivo('aditivo', 'a.csv', b'item;valor\n1;2\n'), 'a.csv')
+        for tipo, nome, conteudo in (('orcamento', 'orc.docx', XLSX), ('outro', 'a.pdf', PDF),
+                                     ('orcamento', 'falso.pdf', XLSX), ('orcamento', 'falso.xlsx', PDF),
+                                     ('orcamento', 'vazio.pdf', b'')):
+            with self.assertRaises(ValueError):
+                arquivos.validar_arquivo(tipo, nome, conteudo)
+
+    def test_limite_e_nome(self):
+        with self.assertRaises(ValueError):
+            arquivos.validar_arquivo('orcamento', 'grande.pdf', b'%PDF-' + b'0' * arquivos.LIMITE_BYTES)
+        self.assertEqual(arquivos.validar_arquivo('cct', '..\\pasta/../cct.pdf', PDF), 'cct.pdf')
+        self.assertTrue(arquivos.validar_arquivo('cct', 'x' * 300 + '.pdf', PDF).endswith('.pdf'))
+
+
+class ArquivosObraTest(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        raiz = Path(self.tmp.name)
+        self.path = str(raiz / 'obras.db')
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.db = Database(self.path)
+        with sqlite3.connect(self.path) as conn:
+            for i, nome in ((1, 'ALMENARA'), (2, 'MEDINA')):
+                conn.execute('INSERT INTO obras(id,nome_contrato,cliente,valor_contrato,coordenador_id) '
+                             'VALUES(?,?,?,?,?)', (i, nome, 'CAIXA', 1000, 7))
+        conn.close()
+        self.repo = ObraArquivosRepository(self.path)
+        self.store = BlobStore(raiz / 'uploads' / 'obras')
+        self.obra = self.db.obter_obra(1)
+
+    def enviar(self, tipo='orcamento', nome='orc.pdf', conteudo=PDF, user=FIN, obra=None):
+        return arquivos.enviar(self.repo, obra or self.obra, tipo, nome, conteudo, user, store=self.store)
+
+    def test_migracao_20_aplicada_e_idempotente(self):
+        with contextlib.redirect_stdout(io.StringIO()):
+            run_migrations(self.path)
+        with sqlite3.connect(self.path) as conn:
+            versoes = {r[0] for r in conn.execute('SELECT version FROM schema_migrations')}
+        conn.close()
+        self.assertIn(20, versoes)
+
+    def test_versoes_e_sem_duplicar(self):
+        primeiro = self.enviar(nome='orc v1.pdf')
+        segundo = self.enviar(nome='orc v2.pdf', conteudo=PDF + b'revisao')
+        self.assertEqual((primeiro['status'], primeiro['origem']), ('a_conferir', 'upload'))
+        with self.assertRaises(ValueError):
+            self.enviar(tipo='aditivo', nome='copia.pdf')          # mesmo conteúdo, mesmo na outra categoria
+        grupos = arquivos.listar(self.repo, self.obra, COORDENADOR)
+        self.assertEqual([a['id'] for a in grupos['orcamento']], [segundo['id'], primeiro['id']])
+        self.assertEqual(grupos['aditivo'], [])
+        self.assertEqual(sum(1 for _ in self.store.files()), 2)
+        # O mesmo conteúdo pode ir para outra obra (um único arquivo no disco).
+        self.enviar(obra=self.db.obter_obra(2))
+        self.assertEqual(sum(1 for _ in self.store.files()), 2)
+        acoes = [a['acao'] for a in OmieRepository(self.path).auditoria(1)]
+        self.assertEqual(acoes, ['arquivo_enviado', 'arquivo_enviado'])
+
+    def test_so_o_financeiro_envia(self):
+        for user in (ADMIN, COORDENADOR, OUTRO, None):
+            with self.assertRaises(PermissionError):
+                self.enviar(user=user)
+        self.assertEqual(self.repo.listar(1), [])
+
+    def test_baixar_confere_permissao_e_obra(self):
+        arquivo = self.enviar()
+        for user in (ADMIN, COORDENADOR, FIN):
+            self.assertEqual(arquivos.baixar(self.repo, self.obra, arquivo['id'], user, self.store), ('orc.pdf', PDF))
+        for user in (OUTRO, None):
+            with self.assertRaises(PermissionError):
+                arquivos.baixar(self.repo, self.obra, arquivo['id'], user, self.store)
+            with self.assertRaises(PermissionError):
+                arquivos.listar(self.repo, self.obra, user)
+        with self.assertRaises(ValueError):          # arquivo da obra 1 pedido pela obra 2
+            arquivos.baixar(self.repo, self.db.obter_obra(2), arquivo['id'], ADMIN, self.store)
+
+    def test_excluir_obra_remove_registros(self):
+        self.enviar()
+        self.db.deletar_obra(1)
+        self.assertEqual(self.repo.listar(1), [])
+
+    # ----- anexar das Comunicações
+    def historico(self):
+        raiz = Path(self.tmp.name)
+        shared = MailStore(raiz / 'mail' / 'compartilhado' / 'comunicacoes.db', raiz / 'mail_arquivos')
+        for wid, nome in (('1', 'ALMENARA'), ('2', 'MEDINA')):
+            shared.save_work(wid, nome, '', [nome], False, 'teste')
+        ids = {}
+        for n, (obra, nome, conteudo) in enumerate((('1', 'orcamento.pdf', PDF), ('1', 'foto.jpg', b'\xff\xd8\xff' + b'1' * 50),
+                                                    ('2', 'outra.pdf', PDF + b'medina')), 1):
+            msg = EmailMessage()
+            msg['Subject'], msg['From'], msg['To'] = f'Assunto {n}', 'a@x.com', 'b@x.com'
+            msg['Message-ID'] = f'<m{n}@x.com>'
+            msg.set_content('corpo')
+            maintype, subtype = ('application', 'pdf') if nome.endswith('.pdf') else ('image', 'jpeg')
+            msg.add_attachment(conteudo, maintype=maintype, subtype=subtype, filename=nome)
+            mid, _ = shared.import_message(msg.as_bytes(), ('caixa', 'INBOX', '1', str(n)))
+            shared.review(mid, obra, 'teste', 'vínculo de teste')
+            ids[nome] = shared.detail(mid)[1][0]['id']
+        return shared, ids
+
+    def test_anexar_das_comunicacoes(self):
+        shared, ids = self.historico()
+        anexos = arquivos.anexos_comunicacoes(self.repo, self.obra, FIN, shared=shared)
+        self.assertEqual([a['nome'] for a in anexos], ['orcamento.pdf'])          # só desta obra e formatos aceitos
+        self.assertFalse(anexos[0]['ja_na_obra'])
+        arquivo = arquivos.anexar_de_comunicacoes(self.repo, self.obra, 'orcamento', ids['orcamento.pdf'], FIN,
+                                                  shared=shared, store=self.store)
+        self.assertEqual((arquivo['origem'], arquivo['origem_ref']), ('comunicacoes', str(ids['orcamento.pdf'])))
+        self.assertEqual(arquivos.baixar(self.repo, self.obra, arquivo['id'], COORDENADOR, self.store)[1], PDF)
+        self.assertTrue(arquivos.anexos_comunicacoes(self.repo, self.obra, FIN, shared=shared)[0]['ja_na_obra'])
+        with self.assertRaises(ValueError):          # mesmo conteúdo de novo
+            arquivos.anexar_de_comunicacoes(self.repo, self.obra, 'aditivo', ids['orcamento.pdf'], FIN,
+                                            shared=shared, store=self.store)
+        with self.assertRaises(ValueError):          # anexo de e-mail de outra obra
+            arquivos.anexar_de_comunicacoes(self.repo, self.obra, 'orcamento', ids['outra.pdf'], FIN,
+                                            shared=shared, store=self.store)
+        self.assertIn('arquivo_anexado', [a['acao'] for a in OmieRepository(self.path).auditoria(1)])
+
+    def test_anexar_so_pelo_financeiro(self):
+        shared, ids = self.historico()
+        for user in (ADMIN, COORDENADOR):
+            with self.assertRaises(PermissionError):
+                arquivos.anexos_comunicacoes(self.repo, self.obra, user, shared=shared)
+            with self.assertRaises(PermissionError):
+                arquivos.anexar_de_comunicacoes(self.repo, self.obra, 'orcamento', ids['orcamento.pdf'], user,
+                                                shared=shared, store=self.store)
+
+    def test_raiz_separada_das_comunicacoes(self):
+        from comunicacoes.blobs import default_root
+        self.assertNotEqual(arquivos.raiz_arquivos().resolve(), default_root().resolve())
+        self.assertEqual(arquivos.raiz_arquivos().name, 'obras')
+
+
+if __name__ == '__main__':
+    unittest.main()

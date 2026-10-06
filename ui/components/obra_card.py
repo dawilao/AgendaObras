@@ -1,5 +1,5 @@
 """
-Mixin com o componente de card de obra (aba Informações, Checklist, Financeiro).
+Mixin com o componente de card de obra (aba Informações, Checklist, Financeiro e Arquivos).
 """
 
 from nicegui import ui
@@ -57,10 +57,13 @@ class ObraCardMixin:
 
             ui.separator().style('margin: 6px 0 0;')
 
-            with ui.tabs().classes('w-full') as tabs:
+            # Aba Arquivos só para ADM, Financeiro e coordenador da obra; com 4 abas, rótulos compactos.
+            mostrar_arquivos = self.pode_ver_arquivos(obra)
+            with ui.tabs().classes('w-full' + (' ao-card-tabs-4' if mostrar_arquivos else '')) as tabs:
                 tab_info = ui.tab('Informações', icon='info')
                 tab_checklist = ui.tab('Checklist', icon='checklist')
                 tab_financeiro = ui.tab('Financeiro', icon='attach_money')
+                tab_arquivos = ui.tab('Arquivos', icon='folder_open') if mostrar_arquivos else None
 
             with ui.tab_panels(tabs, value=tab_info).classes('w-full').style('background: transparent;'):
                 # Aba de Informações Gerais
@@ -341,6 +344,20 @@ class ObraCardMixin:
                                                     ui.label(data_fmt).style('font-size: 11px; color: #999;')
 
                         tab_financeiro.on('click', _carregar_financeiro)
+
+                if tab_arquivos is not None:
+                    with ui.tab_panel(tab_arquivos).style('max-height: 370px; overflow-y: auto;'):
+                        arquivos_carregados = {'ok': False}
+                        container_arquivos = ui.column().classes('w-full gap-1')
+
+                        def _carregar_arquivos():
+                            if arquivos_carregados['ok']:
+                                return
+                            arquivos_carregados['ok'] = True
+                            with container_arquivos:
+                                self.renderizar_aba_arquivos(obra)
+
+                        tab_arquivos.on('click', _carregar_arquivos)
 
     def _renderizar_itens_checklist(self, checklist):
         """Linhas da aba Checklist do card (montadas quando a aba é aberta)."""

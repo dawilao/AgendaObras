@@ -405,6 +405,9 @@ class ObrasRepository(BaseRepository):
             cursor.execute('DELETE FROM omie_lotes WHERE obra_id = ?', (obra_id,))
             cursor.execute('DELETE FROM omie_vinculos WHERE obra_id = ?', (obra_id,))
             cursor.execute('DELETE FROM obra_parceiros WHERE obra_id = ?', (obra_id,))
+            # Registro dos arquivos sai com a obra (um id reaproveitado não herda documentos);
+            # o conteúdo continua no disco.
+            cursor.execute('DELETE FROM obra_arquivos WHERE obra_id = ?', (obra_id,))
             cursor.execute('DELETE FROM obra_checklist WHERE obra_id = ?', (obra_id,))
             cursor.execute('DELETE FROM obras WHERE id = ?', (obra_id,))
             conn.commit()
