@@ -7,7 +7,7 @@ import time
 import datetime
 import sqlite3
 import calendar
-from typing import Dict, List
+from typing import Dict, List, Tuple
 from zoneinfo import ZoneInfo
 from core.error_logger import log_error
 from db.auth_repo import AuthDatabase
@@ -56,6 +56,7 @@ class GeradorTarefasRecorrentes:
                 WHERE data_inicio IS NOT NULL AND data_inicio != ''
                 AND data_inicio <= ? AND (data_conclusao IS NULL OR data_conclusao >= ?)
                 AND status != 'Concluída'
+                AND COALESCE(status_conclusao_obra, '') NOT IN ('sem_pendencias', 'com_pendencias')
             ''', (hoje.strftime('%Y-%m-%d'), hoje.strftime('%Y-%m-%d')))
 
             obras_ativas = [dict(row) for row in cursor.fetchall()]
@@ -515,7 +516,9 @@ class NotificadorPrazos:
     def _verificar_prazos(self) -> int:
         """Ciclo diário: coleta alertas, envia UM resumo por destinatário e registra resultados.
 
-        Retorna o total de tarefas em alerta no dia.
+        Retorna o total de tarefas em alerta no dia. Se havia resumos e NENHUM foi enviado
+        (ex.: SMTP fora do ar), lança RuntimeError para o ciclo ser registrado como erro e
+        o loop agendar nova tentativa (EMAIL_DISPARO_RETRY_MINUTOS).
         """
         obras, resumos = self.gerar_resumos_do_dia()
         total_tarefas = sum(
@@ -534,6 +537,10 @@ class NotificadorPrazos:
         )
         for email, msg in erros.items():
             print(f"   ❌ {email}: {msg}")
+
+        if resumos and enviados == 0:
+            detalhes = '; '.join(f"{email}: {msg}" for email, msg in erros.items())
+            raise RuntimeError(f"Nenhum resumo diário enviado ({len(resumos)} previsto(s)): {detalhes}")
 
         return total_tarefas
 
@@ -592,6 +599,10 @@ class NotificadorPrazos:
                     LEFT JOIN checklist_templates ct ON oc.template_id = ct.id
                     WHERE oc.concluido = 0 AND oc.bloqueado = 0
                     AND oc.data_limite IS NOT NULL
+                    -- Obra concluída (finalizada ou legada 'Concluída') não gera alerta de tarefa;
+                    -- as pendências de 'com_pendencias' entram pela consulta abaixo.
+                    AND COALESCE(o.status_conclusao_obra, '') NOT IN ('sem_pendencias', 'com_pendencias')
+                    AND COALESCE(o.status, '') != 'Concluída'
                     ORDER BY oc.data_limite
                 ''')
                 tarefas = [dict(row) for row in cursor.fetchall()]
@@ -643,7 +654,7 @@ class NotificadorPrazos:
         return {}
 
     def _enviar_resumos(self, resumos: Dict[str, Dict]):
-        """Envia um e-mail individual por destinatário.
+        """Monta e envia um e-mail individual por destinatário, numa única conexão SMTP.
 
         Returns:
             (entregas_tarefas {tarefa_id: [emails ok]},
@@ -655,21 +666,34 @@ class NotificadorPrazos:
         entregas_pendencias: Dict[int, List[str]] = {}
         erros: Dict[str, str] = {}
 
+        mensagens = []
         for email, resumo in resumos.items():
             try:
                 assunto, corpo_html = self.email_service.criar_email_resumo_diario(
                     resumo['nome'], resumo['obras'], hoje, resumo['resumido']
                 )
-                sucesso, msg = self.email_service.enviar_email(email, assunto, corpo_html)
+                mensagens.append((email, assunto, corpo_html))
             except Exception as e:
-                log_error(e, "notificador_prazos", f"Enviar resumo diário para {email}")
-                sucesso, msg = False, str(e)
+                log_error(e, "notificador_prazos", f"Montar resumo diário para {email}")
+                erros[email] = f"Erro ao montar o resumo: {e}"
 
+        resultados: Dict[str, Tuple[bool, str]] = {}
+        if mensagens:
+            try:
+                # Resultados vêm na mesma ordem das mensagens
+                lista = self.email_service.enviar_emails_em_lote(mensagens)
+                resultados = {email: res for (email, _, _), res in zip(mensagens, lista)}
+            except Exception as e:
+                log_error(e, "notificador_prazos", "Enviar resumos diários em lote")
+                resultados = {email: (False, str(e)) for email, _, _ in mensagens}
+
+        for email, _, _ in mensagens:
+            sucesso, msg = resultados.get(email, (False, 'Sem resultado do envio'))
             if not sucesso:
                 erros[email] = msg or 'Falha no envio'
                 continue
 
-            for obra in resumo['obras']:
+            for obra in resumos[email]['obras']:
                 for lista in obra['tarefas'].values():
                     for alerta in lista:
                         entregas_tarefas.setdefault(alerta['tarefa_id'], []).append(email)
@@ -682,7 +706,7 @@ class NotificadorPrazos:
                               entregas_tarefas: Dict[int, List[str]],
                               entregas_pendencias: Dict[int, List[str]],
                               erros: Dict[str, str]):
-        """Atualiza controle das tarefas e histórico.
+        """Atualiza controle das tarefas e histórico numa única transação.
 
         A tarefa conta como notificada se PELO MENOS UM destinatário recebeu o resumo.
         """
@@ -700,7 +724,14 @@ class NotificadorPrazos:
         def motivo_falha(previstos: List[str]) -> str:
             return '; '.join(f"{e}: {erros.get(e, 'não enviado')}" for e in previstos)
 
+        agora = self._agora_referencia().strftime('%Y-%m-%d %H:%M:%S')
+        atualizacoes_a, atualizacoes_b, historicos = [], [], []
         sem_destinatario = []
+
+        def historico(obra_id, tarefa_id, tipo, destinatarios, sucesso, erro=None):
+            historicos.append((obra_id, tarefa_id, tipo, agora, ', '.join(destinatarios),
+                               1 if sucesso else 0, erro))
+
         for obra_id, obra in obras.items():
             nome_obra = obra['info'].get('nome_contrato')
 
@@ -712,18 +743,16 @@ class NotificadorPrazos:
 
                     if entregues:
                         if 'nova_tentativa' in alerta:
-                            self._atualizar_tarefa_com_retry(
-                                tarefa_id, alerta['nova_tentativa'], alerta['hoje_str'], alerta['status']
+                            # Tipo A (com reiterações)
+                            atualizacoes_a.append(
+                                (alerta['nova_tentativa'], alerta['hoje_str'], alerta['status'], tarefa_id)
                             )
                         else:
-                            self._atualizar_tarefa_tipo_b_com_retry(
-                                tarefa_id, alerta['hoje_str'], alerta['status']
-                            )
-                        self._registrar_historico_com_retry(obra_id, tarefa_id, tipo_alerta, entregues, True)
+                            # Tipo B (prazo fixo)
+                            atualizacoes_b.append((alerta['hoje_str'], alerta['status'], tarefa_id))
+                        historico(obra_id, tarefa_id, tipo_alerta, entregues, True)
                     elif previstos:
-                        self._registrar_historico_com_retry(
-                            obra_id, tarefa_id, tipo_alerta, previstos, False, motivo_falha(previstos)
-                        )
+                        historico(obra_id, tarefa_id, tipo_alerta, previstos, False, motivo_falha(previstos))
                     else:
                         sem_destinatario.append(f"{nome_obra} / {alerta.get('descricao')}")
 
@@ -731,18 +760,72 @@ class NotificadorPrazos:
                 entregues = entregas_pendencias.get(obra_id, [])
                 previstos = previstos_pendencia.get(obra_id, [])
                 if entregues:
-                    self._registrar_historico_com_retry(obra_id, 0, 'obra_pendencias', entregues, True)
+                    historico(obra_id, 0, 'obra_pendencias', entregues, True)
                 elif previstos:
-                    self._registrar_historico_com_retry(
-                        obra_id, 0, 'obra_pendencias', previstos, False, motivo_falha(previstos)
-                    )
+                    historico(obra_id, 0, 'obra_pendencias', previstos, False, motivo_falha(previstos))
                 else:
                     sem_destinatario.append(f"{nome_obra} (pendências)")
+
+        self._gravar_resultados(atualizacoes_a, atualizacoes_b, historicos)
 
         if sem_destinatario:
             print(f"⚠️ {len(sem_destinatario)} alerta(s) sem destinatário:")
             for item in sem_destinatario:
                 print(f"   - {item}")
+
+    def _gravar_resultados(self, atualizacoes_a: List[tuple], atualizacoes_b: List[tuple],
+                           historicos: List[tuple], max_tentativas: int = 5) -> bool:
+        """Grava controle das tarefas e histórico numa conexão e num único commit.
+
+        atualizacoes_a: (tentativas_reiteracao, ultima_notificacao, status_notificacao, id)
+        atualizacoes_b: (ultima_notificacao, status_notificacao, id)
+        historicos: (obra_id, tarefa_id, tipo, data_envio, destinatarios, sucesso, mensagem_erro)
+        """
+        if not (atualizacoes_a or atualizacoes_b or historicos):
+            return True
+
+        for tentativa in range(max_tentativas):
+            conn = None
+            try:
+                conn = self.database.get_connection()
+                cursor = conn.cursor()
+                if atualizacoes_a:
+                    cursor.executemany('''
+                        UPDATE obra_checklist
+                        SET tentativas_reiteracao = ?, ultima_notificacao = ?, status_notificacao = ?
+                        WHERE id = ?
+                    ''', atualizacoes_a)
+                if atualizacoes_b:
+                    cursor.executemany('''
+                        UPDATE obra_checklist
+                        SET ultima_notificacao = ?, status_notificacao = ?
+                        WHERE id = ?
+                    ''', atualizacoes_b)
+                if historicos:
+                    cursor.executemany('''
+                        INSERT INTO historico_notificacoes
+                        (obra_id, tarefa_id, tipo_notificacao, data_envio, destinatarios, sucesso, mensagem_erro)
+                        VALUES (?, ?, ?, ?, ?, ?, ?)
+                    ''', historicos)
+                conn.commit()
+                return True
+            except Exception as e:
+                if conn:
+                    try:
+                        conn.rollback()
+                    except Exception:
+                        pass
+                bloqueado = isinstance(e, sqlite3.OperationalError) and "locked" in str(e).lower()
+                if bloqueado and tentativa < max_tentativas - 1:
+                    time.sleep(0.5)
+                    continue
+                log_error(e, "notificador_prazos", "Gravar resultados do resumo diário")
+                print(f"❌ Falha ao gravar resultados do resumo diário: {e}")
+                return False
+            finally:
+                if conn:
+                    conn.close()
+        return False
 
     def _processar_tipo_a(self, cursor, tarefa: Dict, dias_diff: int):
         """Processa notificação para tarefa Tipo A (com reiterações)
@@ -920,52 +1003,6 @@ class NotificadorPrazos:
         except Exception as e:
             print(f"⚠️ Erro ao registrar execução: {e}")
 
-    def _atualizar_tarefa_com_retry(self, tarefa_id: int, tentativas: int, ultima_notif: str, status: str, max_tentativas: int = 5):
-        """Atualiza tarefa com retry em caso de database locked"""
-        for tentativa in range(max_tentativas):
-            conn = None
-            try:
-                conn = self.database.get_connection()
-                cursor = conn.cursor()
-
-                cursor.execute('''
-                    UPDATE obra_checklist
-                    SET tentativas_reiteracao = ?, ultima_notificacao = ?, status_notificacao = ?
-                    WHERE id = ?
-                ''', (tentativas, ultima_notif, status, tarefa_id))
-
-                conn.commit()
-                conn.close()
-                return True
-
-            except sqlite3.OperationalError as e:
-                if "locked" in str(e).lower():
-                    if conn:
-                        try:
-                            conn.close()
-                        except Exception as e_close:
-                            log_error(e_close, "notificador_prazos", "Fechar conexão após database locked em _atualizar_tarefa_com_retry")
-                            pass
-                    if tentativa < max_tentativas - 1:
-                        time.sleep(0.5)
-                        continue
-                    else:
-                        print(f"❌ Falha ao atualizar tarefa {tarefa_id} após {max_tentativas} tentativas")
-                        return False
-                else:
-                    raise
-            except Exception as e:
-                log_error(e, "notificador_prazos", f"Atualizar tarefa {tarefa_id} com retry")
-                print(f"❌ Erro ao atualizar tarefa {tarefa_id}: {e}")
-                if conn:
-                    try:
-                        conn.close()
-                    except Exception as e_close:
-                        log_error(e_close, "notificador_prazos", "Fechar conexão após erro em _atualizar_tarefa_com_retry")
-                        pass
-                return False
-        return False
-
     def _registrar_historico_com_retry(self, obra_id: int, tarefa_id: int, tipo: str, destinatarios: str, sucesso: bool, erro: str = None, max_tentativas: int = 5):
         """Registra histórico com retry em caso de database locked"""
         for tentativa in range(max_tentativas):
@@ -1016,52 +1053,6 @@ class NotificadorPrazos:
                         conn.close()
                     except Exception as e_close:
                         log_error(e_close, "notificador_prazos", "Fechar conexão após erro em _registrar_historico_com_retry")
-                        pass
-                return False
-        return False
-
-    def _atualizar_tarefa_tipo_b_com_retry(self, tarefa_id: int, ultima_notif: str, status: str, max_tentativas: int = 5):
-        """Atualiza tarefa tipo B com retry em caso de database locked"""
-        for tentativa in range(max_tentativas):
-            conn = None
-            try:
-                conn = self.database.get_connection()
-                cursor = conn.cursor()
-
-                cursor.execute('''
-                    UPDATE obra_checklist
-                    SET ultima_notificacao = ?, status_notificacao = ?
-                    WHERE id = ?
-                ''', (ultima_notif, status, tarefa_id))
-
-                conn.commit()
-                conn.close()
-                return True
-
-            except sqlite3.OperationalError as e:
-                if "locked" in str(e).lower():
-                    if conn:
-                        try:
-                            conn.close()
-                        except Exception as e_close:
-                            log_error(e_close, "notificador_prazos", "Fechar conexão após database locked em _atualizar_tarefa_tipo_b_com_retry")
-                            pass
-                    if tentativa < max_tentativas - 1:
-                        time.sleep(0.5)
-                        continue
-                    else:
-                        print(f"❌ Falha ao atualizar tarefa tipo B {tarefa_id} após {max_tentativas} tentativas")
-                        return False
-                else:
-                    raise
-            except Exception as e:
-                log_error(e, "notificador_prazos", f"Atualizar tarefa tipo B {tarefa_id} com retry")
-                print(f"❌ Erro ao atualizar tarefa tipo B {tarefa_id}: {e}")
-                if conn:
-                    try:
-                        conn.close()
-                    except Exception as e_close:
-                        log_error(e_close, "notificador_prazos", "Fechar conexão após erro em _atualizar_tarefa_tipo_b_com_retry")
                         pass
                 return False
         return False

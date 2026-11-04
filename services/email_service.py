@@ -35,31 +35,62 @@ class EmailService:
         """Recarrega configuração de email"""
         self.config = EmailConfig.carregar()
 
+    # Erros em que vale reconectar e tentar a mesma mensagem de novo (conexão caiu/expirou)
+    _ERROS_RECONECTAVEIS = (
+        smtplib.SMTPServerDisconnected,
+        smtplib.SMTPSenderRefused,
+        ConnectionError,
+        TimeoutError,
+    )
+
+    def _conectar_smtp(self, timeout: int = 30):
+        """Abre a conexão SMTP (TLS ou SSL) já autenticada."""
+        if self.config.usar_tls:
+            server = smtplib.SMTP(self.config.smtp_server, self.config.smtp_port, timeout=timeout)
+        else:
+            server = smtplib.SMTP_SSL(self.config.smtp_server, self.config.smtp_port, timeout=timeout)
+        try:
+            if self.config.usar_tls:
+                server.starttls()
+            server.login(self.config.smtp_user, self.config.smtp_password)
+        except Exception:
+            self._fechar_smtp(server)
+            raise
+        return server
+
+    @staticmethod
+    def _fechar_smtp(server) -> None:
+        """Encerra a conexão sem propagar erro (conexão já caída também é aceita)."""
+        if server is None:
+            return
+        try:
+            server.quit()
+        except Exception:
+            try:
+                server.close()
+            except Exception:
+                pass
+
+    def _montar_mensagem(self, destinatarios: List[str], assunto: str, corpo_html: str) -> MIMEMultipart:
+        msg = MIMEMultipart('alternative')
+        msg['Subject'] = str(Header(assunto or '', 'utf-8'))
+        msg['From'] = self.config.email_remetente
+        msg['To'] = ", ".join(destinatarios)
+        msg.attach(MIMEText(corpo_html, 'html', 'utf-8'))
+        return msg
+
     def enviar_email(self, destinatario, assunto: str, corpo_html: str) -> Tuple[bool, str]:
         """Envia email via SMTP. destinatario pode ser str ou list[str]."""
         if not self.config.is_configured():
             return (False, "Configuração SMTP não encontrada.")
 
+        server = None
         try:
             destinatarios = [destinatario] if isinstance(destinatario, str) else list(destinatario)
-            msg = MIMEMultipart('alternative')
-            msg['Subject'] = str(Header(assunto or '', 'utf-8'))
-            msg['From'] = self.config.email_remetente
-            msg['To'] = ", ".join(destinatarios)
+            msg = self._montar_mensagem(destinatarios, assunto, corpo_html)
 
-            html_part = MIMEText(corpo_html, 'html', 'utf-8')
-            msg.attach(html_part)
-
-            # Conecta ao servidor SMTP
-            if self.config.usar_tls:
-                server = smtplib.SMTP(self.config.smtp_server, self.config.smtp_port, timeout=30)
-                server.starttls()
-            else:
-                server = smtplib.SMTP_SSL(self.config.smtp_server, self.config.smtp_port, timeout=30)
-
-            server.login(self.config.smtp_user, self.config.smtp_password)
+            server = self._conectar_smtp()
             server.send_message(msg, to_addrs=destinatarios)
-            server.quit()
 
             print(f"✅ Email enviado com sucesso para {', '.join(destinatarios)}")
             return (True, "Email enviado com sucesso")
@@ -79,6 +110,78 @@ class EmailService:
             log_error(e, "email_service", f"Enviar email para {destinatario} - assunto: {assunto}")
             print(f"❌ {erro}")
             return (False, erro)
+        finally:
+            self._fechar_smtp(server)
+
+    def enviar_emails_em_lote(self, mensagens: List[Tuple[str, str, str]]) -> List[Tuple[bool, str]]:
+        """Envia várias mensagens individuais reaproveitando UMA conexão SMTP.
+
+        Args:
+            mensagens: lista de (destinatario, assunto, corpo_html).
+
+        Returns:
+            Lista de (sucesso, mensagem) na mesma ordem de `mensagens`.
+
+        Se a conexão cair no meio, reconecta e tenta aquela mensagem mais uma vez.
+        Falha de autenticação ou SMTP não configurado reprova todas as mensagens.
+        """
+        if not mensagens:
+            return []
+        if not self.config.is_configured():
+            return [(False, "Configuração SMTP não encontrada.")] * len(mensagens)
+
+        resultados: List[Tuple[bool, str]] = []
+        server = None
+        try:
+            try:
+                server = self._conectar_smtp()
+            except smtplib.SMTPAuthenticationError as e:
+                erro = "Falha na autenticação SMTP. Verifique usuário e senha."
+                log_error(e, "email_service", "Autenticação SMTP (envio em lote)")
+                print(f"❌ {erro}")
+                return [(False, erro)] * len(mensagens)
+            except Exception as e:
+                erro = f"Erro ao conectar ao SMTP: {e}"
+                log_error(e, "email_service", "Conexão SMTP (envio em lote)")
+                print(f"❌ {erro}")
+                return [(False, erro)] * len(mensagens)
+
+            for destinatario, assunto, corpo_html in mensagens:
+                msg = self._montar_mensagem([destinatario], assunto, corpo_html)
+                tentativas = 2  # envio + 1 nova tentativa após reconectar
+                for tentativa in range(tentativas):
+                    try:
+                        if server is None:
+                            server = self._conectar_smtp()
+                        server.send_message(msg, to_addrs=[destinatario])
+                        print(f"✅ Email enviado com sucesso para {destinatario}")
+                        resultados.append((True, "Email enviado com sucesso"))
+                        break
+                    except self._ERROS_RECONECTAVEIS as e:
+                        self._fechar_smtp(server)
+                        server = None
+                        if tentativa < tentativas - 1:
+                            continue
+                        erro = f"Erro SMTP: {e}"
+                        log_error(e, "email_service", f"Envio em lote para {destinatario} (após reconectar)")
+                        print(f"❌ {erro}")
+                        resultados.append((False, erro))
+                    except smtplib.SMTPException as e:
+                        erro = f"Erro SMTP: {e}"
+                        log_error(e, "email_service", f"Envio em lote para {destinatario}")
+                        print(f"❌ {erro}")
+                        resultados.append((False, erro))
+                        break
+                    except Exception as e:
+                        erro = f"Erro ao enviar email: {e}"
+                        log_error(e, "email_service", f"Envio em lote para {destinatario} - assunto: {assunto}")
+                        print(f"❌ {erro}")
+                        resultados.append((False, erro))
+                        break
+        finally:
+            self._fechar_smtp(server)
+
+        return resultados
 
     def testar_conexao(self) -> Tuple[bool, str]:
         """Testa conexão SMTP sem enviar email"""
@@ -86,14 +189,8 @@ class EmailService:
             return (False, "Configuração incompleta")
 
         try:
-            if self.config.usar_tls:
-                server = smtplib.SMTP(self.config.smtp_server, self.config.smtp_port, timeout=10)
-                server.starttls()
-            else:
-                server = smtplib.SMTP_SSL(self.config.smtp_server, self.config.smtp_port, timeout=10)
-
-            server.login(self.config.smtp_user, self.config.smtp_password)
-            server.quit()
+            server = self._conectar_smtp(timeout=10)
+            self._fechar_smtp(server)
             return (True, "Conexão SMTP bem-sucedida!")
         except Exception as e:
             log_error(e, "email_service", "Teste de conexão SMTP")

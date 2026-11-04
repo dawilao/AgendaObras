@@ -10,6 +10,7 @@ Nenhum e-mail real é enviado: EmailService.enviar_email é substituído.
 
 import datetime
 import os
+import smtplib
 import sys
 import tempfile
 import unittest
@@ -21,7 +22,7 @@ from db import Database
 from db.auth_repo import AuthDatabase
 from db.contratos_repo import ContratosDatabase
 from services.email_service import EmailService
-from services.notificador import NotificadorPrazos
+from services.notificador import GeradorTarefasRecorrentes, NotificadorPrazos
 
 CONTRATO_BA = 'C.E.F BAHIA - 4922.2024'
 CONTRATO_AM = 'C.E.F MANAUS - 4569.2024'
@@ -53,6 +54,7 @@ class _Base(unittest.TestCase):
         self.enviados = []        # (destinatario, assunto, html)
         self.falhar_para = set()  # e-mails cujo envio deve falhar
         self.email_service.enviar_email = self._fake_enviar
+        self.email_service.enviar_emails_em_lote = lambda msgs: [self._fake_enviar(*m) for m in msgs]
 
         self.notificador = NotificadorPrazos(self.db, self.email_service)
         tz = self.notificador.fuso_horario
@@ -329,7 +331,9 @@ class TestDestinatariosSoCriticos(_Base):
         self.falhar_para = {'admin@empresa.com'}
         tarefa = self._tarefa(self._obra('Obra', CONTRATO_BA), 'Critico', dias_atraso=10)
 
-        self.notificador._verificar_prazos()
+        # Único resumo do dia falhou: o ciclo vira erro para o loop tentar de novo
+        with self.assertRaises(RuntimeError):
+            self.notificador._verificar_prazos()
 
         self.assertIsNone(self._linha_tarefa(tarefa)['ultima_notificacao'])
         historico = self._historico(tarefa_id=tarefa)
@@ -360,7 +364,10 @@ class TestResultadosDeEnvio(_Base):
         self.falhar_para = {'falha@empresa.com'}
         tarefa = self._tarefa(self._obra('Obra', CONTRATO_BA), 'Tarefa', dias_atraso=2)
 
-        self.notificador._verificar_prazos()
+        # Nenhum resumo saiu: o ciclo vira erro para o loop tentar de novo
+        with self.assertRaises(RuntimeError) as ctx:
+            self.notificador._verificar_prazos()
+        self.assertIn('SMTP fora do ar', str(ctx.exception))
 
         linha = self._linha_tarefa(tarefa)
         self.assertEqual(linha['tentativas_reiteracao'], 0)
@@ -375,6 +382,204 @@ class TestResultadosDeEnvio(_Base):
         ok = self.notificador._registrar_historico_com_retry(obra, 0, 'teste', 'unico@empresa.com', True)
         self.assertTrue(ok)
         self.assertEqual(self._historico(obra_id=obra)[0]['destinatarios'], 'unico@empresa.com')
+
+
+class TestObraConcluidaSemAlerta(_Base):
+    """Obra concluída não gera alerta de tarefa; 'com pendências' mantém só a faixa de pendências."""
+
+    def _marcar(self, obra_id, status, status_conclusao):
+        conn = self.db.get_connection()
+        conn.execute('UPDATE obras SET status = ?, status_conclusao_obra = ? WHERE id = ?',
+                     (status, status_conclusao, obra_id))
+        conn.commit()
+        conn.close()
+
+    def test_obra_sem_pendencias_fica_fora_do_resumo(self):
+        self._usuario('coord@empresa.com', [CONTRATO_BA])
+        concluida = self._obra('Obra Concluida', CONTRATO_BA)
+        self._tarefa(concluida, 'Tarefa esquecida', dias_atraso=10)
+        self._marcar(concluida, 'Concluída', 'sem_pendencias')
+        self._tarefa(self._obra('Obra Ativa', CONTRATO_BA), 'Tarefa ativa', dias_atraso=2)
+
+        self.notificador._verificar_prazos()
+
+        _, html = self._por_destinatario()['coord@empresa.com']
+        self.assertIn('Tarefa ativa', html)
+        self.assertNotIn('Obra Concluida', html)
+        self.assertNotIn('Tarefa esquecida', html)
+
+    def test_obra_com_pendencias_mostra_so_a_faixa(self):
+        self._usuario('coord@empresa.com', [CONTRATO_BA])
+        obra = self._obra('Obra Pendente', CONTRATO_BA, com_pendencias=True)
+        tarefa = self._tarefa(obra, 'Tarefa esquecida', dias_atraso=10)
+        self._marcar(obra, 'Concluída', 'com_pendencias')
+
+        self.notificador._verificar_prazos()
+
+        _, html = self._por_destinatario()['coord@empresa.com']
+        self.assertIn('Obra Pendente', html)
+        self.assertIn('pend&ecirc;ncias em aberto', html)
+        self.assertNotIn('Tarefa esquecida', html)
+        self.assertEqual(self._historico(tarefa_id=tarefa), [])
+
+    def test_obra_legada_concluida_sem_finalizacao_fica_fora(self):
+        self._usuario('coord@empresa.com', [CONTRATO_BA])
+        obra = self._obra('Obra Legada', CONTRATO_BA)
+        self._tarefa(obra, 'Tarefa legada', dias_atraso=10)
+        self._marcar(obra, 'Concluída', None)
+
+        self.notificador._verificar_prazos()
+
+        self.assertEqual(self.enviados, [])
+
+    def test_gerador_mensal_ignora_obra_com_pendencias(self):
+        conn = self.db.get_connection()
+        cur = conn.execute(
+            "INSERT INTO checklist_templates (nome, ordem, prazo_dias, tipo, recorrencia, dia_referencia_mensal) "
+            "VALUES ('RELATÓRIO MENSAL', 99, 0, 'B', 'mensal', 5)")
+        template_id = cur.lastrowid
+        conn.commit()
+        conn.close()
+        ativa = self._obra('Obra Ativa', CONTRATO_BA)
+        pendente = self._obra('Obra Pendente', CONTRATO_BA)
+        self._marcar(ativa, 'Em Andamento', None)
+        self._marcar(pendente, 'Não Iniciada', 'com_pendencias')  # inconsistência real do banco
+
+        GeradorTarefasRecorrentes(self.db).gerar_tarefas_mensais()
+
+        conn = self.db.get_connection()
+        obras_com_tarefa = {r[0] for r in conn.execute(
+            'SELECT obra_id FROM obra_checklist WHERE template_id = ?', (template_id,))}
+        conn.close()
+        self.assertIn(ativa, obras_com_tarefa)
+        self.assertNotIn(pendente, obras_com_tarefa)
+
+
+class TestGravacaoEmLote(_Base):
+
+    def test_resultados_gravados_numa_unica_transacao(self):
+        self._usuario('coord@empresa.com', [CONTRATO_BA])
+        obra = self._obra('Obra', CONTRATO_BA)
+        reit = self._tarefa(obra, 'Reiteracao', dias_atraso=2)
+        prazo_fixo = self._tarefa(obra, 'Prazo fixo', dias_atraso=0, tipo='B')
+        critica = self._tarefa(obra, 'Critica', dias_atraso=10)
+
+        original = self.notificador._gravar_resultados
+        with patch.object(self.notificador, '_gravar_resultados', side_effect=original) as gravar:
+            self.notificador._verificar_prazos()
+
+        self.assertEqual(gravar.call_count, 1)
+        self.assertEqual(self._linha_tarefa(reit)['tentativas_reiteracao'], 1)
+        self.assertEqual(self._linha_tarefa(reit)['status_notificacao'], 'alerta')
+        self.assertEqual(self._linha_tarefa(prazo_fixo)['status_notificacao'], 'critico')
+        self.assertEqual(self._linha_tarefa(critica)['status_notificacao'], 'atrasado')
+        for tarefa in (reit, prazo_fixo, critica):
+            historico = self._historico(tarefa_id=tarefa)
+            self.assertEqual(len(historico), 1)
+            self.assertEqual(historico[0]['destinatarios'], 'coord@empresa.com')
+            self.assertTrue(historico[0]['data_envio'].startswith(self.HOJE.isoformat()))
+
+    def test_falha_parcial_nao_dispara_nova_tentativa(self):
+        self._usuario('ok@empresa.com', [CONTRATO_BA])
+        self._usuario('falha@empresa.com', [CONTRATO_BA])
+        self.falhar_para = {'falha@empresa.com'}
+        self._tarefa(self._obra('Obra', CONTRATO_BA), 'Tarefa', dias_atraso=2)
+
+        total = self.notificador._verificar_prazos()  # não lança
+
+        self.assertEqual(total, 1)
+
+
+class _SmtpConfig:
+    smtp_server = 'smtp.teste.local'
+    smtp_port = 587
+    usar_tls = True
+    smtp_user = 'robo@empresa.com'
+    smtp_password = 'segredo'
+    email_remetente = 'robo@empresa.com'
+    email_destinatarios = []
+    email_critico = ''
+
+    def __init__(self, configurado=True):
+        self._configurado = configurado
+
+    def is_configured(self):
+        return self._configurado
+
+
+class TestEnvioSmtpEmLote(unittest.TestCase):
+    """Uma conexão SMTP para todos os resumos (smtplib substituído; nada sai de verdade)."""
+
+    MENSAGENS = [(f'p{i}@empresa.com', f'Assunto {i}', '<p>x</p>') for i in range(3)]
+
+    def setUp(self):
+        self.temp_dir = tempfile.TemporaryDirectory(prefix='agenda_smtp_')
+        self.service = EmailService(Database(os.path.join(self.temp_dir.name, 'a.db')))
+        self.service.config = _SmtpConfig()
+        # Falhas simuladas não devem gravar arquivos na pasta real de erros
+        self._patch_log = patch('services.email_service.log_error')
+        self._patch_log.start()
+
+    def tearDown(self):
+        self._patch_log.stop()
+        self.temp_dir.cleanup()
+
+    def test_uma_conexao_e_um_login_para_todas_as_mensagens(self):
+        with patch('services.email_service.smtplib.SMTP') as smtp:
+            servidor = smtp.return_value
+            resultados = self.service.enviar_emails_em_lote(self.MENSAGENS)
+
+        self.assertEqual(resultados, [(True, 'Email enviado com sucesso')] * 3)
+        self.assertEqual(smtp.call_count, 1)
+        self.assertEqual(servidor.login.call_count, 1)
+        self.assertEqual(servidor.send_message.call_count, 3)
+        # Cada mensagem vai só para o seu destinatário
+        destinos = [c.kwargs['to_addrs'] for c in servidor.send_message.call_args_list]
+        self.assertEqual(destinos, [[m[0]] for m in self.MENSAGENS])
+
+    def test_reconecta_quando_a_conexao_cai(self):
+        with patch('services.email_service.smtplib.SMTP') as smtp:
+            servidor = smtp.return_value
+            servidor.send_message.side_effect = [
+                None, smtplib.SMTPServerDisconnected('caiu'), None, None]
+            resultados = self.service.enviar_emails_em_lote(self.MENSAGENS)
+
+        self.assertTrue(all(ok for ok, _ in resultados))
+        self.assertEqual(smtp.call_count, 2)  # conexão inicial + reconexão
+        self.assertEqual(servidor.send_message.call_count, 4)
+
+    def test_queda_persistente_reprova_so_aquela_mensagem(self):
+        with patch('services.email_service.smtplib.SMTP') as smtp:
+            servidor = smtp.return_value
+            servidor.send_message.side_effect = [
+                None, smtplib.SMTPServerDisconnected('caiu'), smtplib.SMTPServerDisconnected('caiu'), None]
+            resultados = self.service.enviar_emails_em_lote(self.MENSAGENS)
+
+        self.assertEqual([ok for ok, _ in resultados], [True, False, True])
+
+    def test_falha_de_autenticacao_reprova_todas(self):
+        with patch('services.email_service.smtplib.SMTP') as smtp:
+            smtp.return_value.login.side_effect = smtplib.SMTPAuthenticationError(535, b'senha errada')
+            resultados = self.service.enviar_emails_em_lote(self.MENSAGENS)
+
+        self.assertEqual(len(resultados), 3)
+        self.assertFalse(any(ok for ok, _ in resultados))
+        self.assertIn('autentica', resultados[0][1])
+
+    def test_smtp_nao_configurado_reprova_todas_sem_conectar(self):
+        self.service.config = _SmtpConfig(configurado=False)
+        with patch('services.email_service.smtplib.SMTP') as smtp:
+            resultados = self.service.enviar_emails_em_lote(self.MENSAGENS)
+
+        smtp.assert_not_called()
+        self.assertFalse(any(ok for ok, _ in resultados))
+
+    def test_enviar_email_avulso_fecha_conexao(self):
+        with patch('services.email_service.smtplib.SMTP') as smtp:
+            ok, _ = self.service.enviar_email('a@empresa.com', 'Assunto', '<p>x</p>')
+
+        self.assertTrue(ok)
+        smtp.return_value.quit.assert_called_once()
 
 
 class TestConteudoDoEmail(_Base):

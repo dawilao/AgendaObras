@@ -179,14 +179,18 @@ def main() -> int:
             else [COORDENADOR_SIMULADO]
     else:
         exemplos = escolher_exemplos(resumos, args.destinatario)
-    print(f"\n🚀 Enviando {len(exemplos)} exemplo(s) SOMENTE para {TESTE_PARA}...")
+    print(f"\n🚀 Enviando {len(exemplos)} exemplo(s) SOMENTE para {TESTE_PARA} (uma conexão SMTP)...")
+    mensagens = []
     for email in exemplos:
         assunto, html = gerados[email]
         if email == COORDENADOR_SIMULADO:
             assunto_teste = f"[TESTE – modelo coordenação] {assunto}"
         else:
             assunto_teste = f"[TESTE – resumo de {email}] {assunto}"
-        sucesso, msg = email_service.enviar_email(TESTE_PARA, assunto_teste, html)
+        # O destinatário é SEMPRE a caixa de teste; o resumo real só aparece no assunto
+        mensagens.append((TESTE_PARA, assunto_teste, html))
+
+    for (_, assunto_teste, _), (sucesso, msg) in zip(mensagens, email_service.enviar_emails_em_lote(mensagens)):
         print(f"   {'✅' if sucesso else '❌'} {assunto_teste} {'' if sucesso else msg}")
 
     return 0
