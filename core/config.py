@@ -456,213 +456,68 @@ TEMPLATE_EMAIL_CRITICO_ATRASADO = """
 </html>
 """
 
-TEMPLATE_EMAIL_OBRA_PENDENCIAS = """
-<!DOCTYPE html>
-<html>
-<head>
-    <meta charset="UTF-8">
-    <style>
-        body {{ font-family: 'Segoe UI', Arial, sans-serif; line-height: 1.6; color: #333; background-color: #f5f5f5; }}
-        .container {{ max-width: 750px; margin: 20px auto; background-color: white; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }}
-        .header {{ background: linear-gradient(135deg, #f57c00 0%, #ff9800 100%); color: white; padding: 25px 30px; }}
-        .header.critico {{ background: linear-gradient(135deg, #c62828 0%, #d32f2f 100%); }}
-        .header h1 {{ margin: 0 0 10px 0; font-size: 24px; font-weight: 600; }}
-        .header p {{ margin: 0; font-size: 15px; opacity: 0.95; }}
-        .resumo-executivo {{ background-color: #fff8e1; border-left: 5px solid #ffa000; padding: 20px 25px; margin: 20px 25px; border-radius: 4px; }}
-        .resumo-executivo.critico {{ background-color: #ffebee; border-left-color: #c62828; }}
-        .resumo-titulo {{ font-size: 18px; font-weight: 600; color: #333; margin: 0 0 15px 0; }}
-        .info-grid {{ display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 15px; }}
-        .info-item {{ display: flex; align-items: center; }}
-        .info-label {{ color: #666; font-size: 13px; margin-right: 8px; }}
-        .info-valor {{ color: #1565c0; font-weight: 600; font-size: 14px; }}
-        .resumo-executivo p {{ margin: 10px 0 0 0; color: #555; }}
-        .content {{ padding: 0 25px 25px 25px; }}
-        .footer {{ background-color: #263238; color: white; padding: 20px; text-align: center; }}
-        .footer-texto {{ margin: 5px 0; font-size: 13px; opacity: 0.9; }}
-        .footer-data {{ margin: 8px 0 0 0; font-size: 12px; opacity: 0.7; }}
-        .observacoes-box {{ background-color: #f7f7f7; border-left: 4px solid #ccc; padding: 12px; margin: 18px 0 6px 0; }}
-        .observacoes-titulo {{ margin: 0 0 6px 0; color: #555; }}
-        .observacoes-texto {{ margin: 12px 0; white-space: normal; font-size: 13px; color: #333; }}
-    </style>
-</head>
-<body>
-    <div class="container">
-        <div class="header{header_class}">
-            <h1>⚠️ AgendaObras - Alertas Diário de Obra Concluída com Pendências</h1>
-        </div>
-        <div class="resumo-executivo{resumo_class}">
-            <div class="resumo-titulo">📋 {nome_contrato}</div>
-            <div class="info-grid">
-                <div class="info-item">
-                    <span class="info-label">👤 Cliente:</span>
-                    <span class="info-valor">{cliente}</span>
-                </div>
-            </div>
-            <p>A obra <strong>{nome_contrato}</strong> foi concluída com pendências em aberto.</p>
-        </div>
-        <div class="content">
-            {secao_observacoes}
-            <p class="observacoes-texto">Este alerta é enviado diariamente até que a obra seja marcada como <strong>sem pendências</strong>.</p>
-        </div>
-        <div class="footer">
-            <div class="footer-texto">AgendaObras - Sistema de Rastreamento de Obras</div>
-            <div class="footer-data">📅 {data_envio}</div>
-        </div>
-    </div>
-</body>
-</html>
-"""
+# ===== Resumo diário (um e-mail por destinatário) =====
+# HTML enxuto: CSS curto, sem degradês/sombras/flex/grid, para caber no limite
+# de ~100 KB do Gmail e renderizar bem no Outlook.
 
-TEMPLATE_EMAIL_AGRUPADO_POR_OBRA = """
-<!DOCTYPE html>
-<html>
-<head>
-    <meta charset="UTF-8">
-    <style>
-        body {{ font-family: 'Segoe UI', Arial, sans-serif; line-height: 1.6; color: #333; background-color: #f5f5f5; }}
-        .container {{ max-width: 750px; margin: 20px auto; background-color: white; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }}
-        .header {{ background: linear-gradient(135deg, #f57c00 0%, #ff9800 100%); color: white; padding: 25px 30px; }}
-        .header.critico {{ background: linear-gradient(135deg, #c62828 0%, #d32f2f 100%); }}
-        .header h1 {{ margin: 0 0 10px 0; font-size: 24px; font-weight: 600; }}
-        .header p {{ margin: 0; font-size: 15px; opacity: 0.95; }}
-        .resumo-executivo {{ background-color: #fff8e1; border-left: 5px solid #ffa000; padding: 20px 25px; margin: 20px 25px; border-radius: 4px; }}
-        .resumo-executivo.critico {{ background-color: #ffebee; border-left-color: #c62828; }}
-        .resumo-titulo {{ font-size: 18px; font-weight: 600; color: #333; margin: 0 0 15px 0; }}
-        .info-grid {{ display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 15px; }}
-        .info-item {{ display: flex; align-items: center; }}
-        .info-label {{ color: #666; font-size: 13px; margin-right: 8px; }}
-        .info-valor {{ color: #1565c0; font-weight: 600; font-size: 14px; }}
-        .content {{ padding: 0 25px 25px 25px; }}
-        .secao {{ margin: 25px 0; border-radius: 6px; overflow: hidden; box-shadow: 0 1px 4px rgba(0,0,0,0.08); }}
-        .secao-header {{ padding: 14px 18px; font-weight: 600; font-size: 15px; color: white; display: flex; align-items: center; justify-content: space-between; }}
-        .secao-header .icone {{ font-size: 20px; margin-right: 8px; }}
-        .secao-header .contador {{ background-color: rgba(255,255,255,0.25); padding: 2px 10px; border-radius: 12px; font-size: 13px; }}
-        .secao-critico .secao-header {{ background: linear-gradient(135deg, #c62828 0%, #d32f2f 100%); }}
-        .secao-tipo-b .secao-header {{ background: linear-gradient(135deg, #d84315 0%, #f4511e 100%); }}
-        .secao-reiteracao .secao-header {{ background: linear-gradient(135deg, #ef6c00 0%, #f57c00 100%); }}
-        table {{ width: 100%; border-collapse: collapse; background-color: white; }}
-        thead {{ background-color: #fafafa; }}
-        th {{ padding: 12px 15px; text-align: left; font-size: 12px; font-weight: 600; color: #555; text-transform: uppercase; letter-spacing: 0.5px; border-bottom: 2px solid #e0e0e0; }}
-        th.center {{ text-align: center; }}
-        td {{ padding: 14px 15px; font-size: 14px; border-bottom: 1px solid #f0f0f0; }}
-        td.center {{ text-align: center; }}
-        tbody tr:last-child td {{ border-bottom: none; }}
-        tbody tr:hover {{ background-color: #f9f9f9; }}
-        .tarefa-nome {{ font-weight: 500; color: #333; }}
-        .prazo-data {{ color: #666; font-size: 13px; }}
-        .badge {{ display: inline-block; padding: 4px 10px; border-radius: 4px; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.3px; }}
-        .badge-critico {{ background-color: #d32f2f; color: white; }}
-        .badge-tipo-b {{ background-color: #f4511e; color: white; }}
-        .badge-reiteracao-1 {{ background-color: #fff59d; color: #f57f17; }}
-        .badge-reiteracao-2 {{ background-color: #ffb74d; color: #e65100; }}
-        .badge-reiteracao-3 {{ background-color: #ff9800; color: white; }}
-        .dias-atraso {{ font-weight: 700; color: #d32f2f; font-size: 15px; }}
-        .dias-atraso.medio {{ color: #f57c00; }}
-        .dias-atraso.leve {{ color: #ffa726; }}
-        .secao-rodape {{ padding: 12px 18px; background-color: #f5f5f5; font-size: 12px; color: #666; border-top: 1px solid #e0e0e0; }}
-        .secao-rodape.urgente {{ background-color: #ffebee; color: #c62828; font-weight: 500; }}
-        .cta-box {{ margin: 25px 0 15px 0; padding: 20px; background: linear-gradient(135deg, #e3f2fd 0%, #bbdefb 100%); border-radius: 6px; border: 1px solid #90caf9; }}
-        .cta-titulo {{ font-size: 16px; font-weight: 600; color: #1565c0; margin: 0 0 10px 0; }}
-        .cta-texto {{ color: #424242; margin: 0; font-size: 14px; line-height: 1.6; }}
-        .observacoes-box {{ background-color: #f7f7f7; border-left: 4px solid #ccc; padding: 12px; margin: 0 0 18px 0; }}
-        .observacoes-titulo {{ margin: 0 0 6px 0; color: #555; }}
-        .observacoes-texto {{ margin: 0; white-space: normal; font-size: 13px; color: #333; }}
-        .footer {{ background-color: #263238; color: white; padding: 20px; text-align: center; }}
-        .footer-texto {{ margin: 5px 0; font-size: 13px; opacity: 0.9; }}
-        .footer-data {{ margin: 8px 0 0 0; font-size: 12px; opacity: 0.7; }}
-    </style>
-</head>
-<body>
-    <div class="container">
-        <div class="header{header_class}">
-            <h1>⚠️ AgendaObras - Alertas de Tarefas Pendentes</h1>
-            <p>{total_tarefas} {texto_tarefas} aguardando providências</p>
-        </div>
-        <div class="resumo-executivo{resumo_class}">
-            <div class="resumo-titulo">📋 {nome_contrato}</div>
-            <div class="info-grid">
-                <div class="info-item">
-                    <span class="info-label">👤 Cliente:</span>
-                    <span class="info-valor">{cliente}</span>
-                </div>
-                <div class="info-item">
-                    <span class="info-label">📌 Total de alertas:</span>
-                    <span class="info-valor">{total_tarefas}</span>
-                </div>
-            </div>
-        </div>
-        <div class="content">
-            {secoes_conteudo}
-        </div>
-        {secao_observacoes}
-        <div class="footer">
-            <div class="footer-texto">AgendaObras - Sistema de Rastreamento de Obras</div>
-            <div class="footer-data">📅 {data_envio}</div>
-        </div>
-    </div>
-</body>
-</html>
-"""
-
-SECAO_REITERACAO = """
-<div class="secao secao-reiteracao">
-    <div class="secao-header">
-        <div><span class="icone">🔔</span>{titulo_secao}</div>
-        <span class="contador">{contador}</span>
-    </div>
-    <table>
-        <thead>
-            <tr>
-                <th>Tarefa</th>
-                <th style="width: 120px;">Prazo Original</th>
-                <th class="center" style="width: 100px;">Reiteração</th>
-                <th class="center" style="width: 100px;">Dias Atraso</th>
-            </tr>
-        </thead>
-        <tbody>{linhas_tarefas}</tbody>
-    </table>
-    {mensagem_rodape}
+TEMPLATE_EMAIL_RESUMO_DIARIO = """<!DOCTYPE html>
+<html><head><meta charset="UTF-8"><style>
+body{{font-family:Arial,sans-serif;color:#333;background:#f5f5f5;margin:0}}
+.c{{max-width:760px;margin:0 auto;background:#fff}}
+.h{{background:#ef6c00;color:#fff;padding:16px 20px}}
+.h.cr{{background:#c62828}}
+.h h1{{margin:0;font-size:20px}}
+.h p{{margin:4px 0 0;font-size:13px}}
+.b{{padding:16px 20px}}
+.k{{font-size:14px;margin:0 0 12px}}
+.nota{{background:#e3f2fd;color:#0d47a1;padding:8px 10px;font-size:12px;margin:0 0 12px}}
+table{{width:100%;border-collapse:collapse;font-size:13px}}
+th{{text-align:left;background:#fafafa;color:#555;font-size:11px;text-transform:uppercase;padding:6px 8px;border-bottom:2px solid #e0e0e0}}
+td{{padding:6px 8px;border-bottom:1px solid #eee}}
+.n{{text-align:center}}
+.o{{margin:22px 0 0}}
+.o h2{{font-size:15px;margin:0 0 6px;padding:6px 8px;background:#eceff1;border-left:4px solid #ef6c00}}
+.o h2.cr{{border-left-color:#c62828}}
+.o h2 small{{color:#666;font-weight:normal}}
+.pend{{background:#ffebee;color:#b71c1c;padding:6px 8px;font-size:12px;font-weight:bold;margin:0 0 6px}}
+.obs{{background:#f7f7f7;border-left:3px solid #ccc;padding:6px 8px;font-size:12px;margin:6px 0 0}}
+.s{{display:inline-block;padding:2px 6px;border-radius:3px;font-size:10px;font-weight:bold;color:#fff;white-space:nowrap}}
+.s1{{background:#c62828}}
+.s2{{background:#d84315}}
+.s3{{background:#f57c00}}
+.s4{{background:#ffb74d;color:#5d4037}}
+.s5{{background:#fff59d;color:#795548}}
+.nv{{background:#1565c0;margin-left:6px}}
+.d{{font-weight:bold;color:#c62828;text-align:center}}
+.f{{background:#263238;color:#cfd8dc;padding:12px;text-align:center;font-size:11px}}
+</style></head><body><div class="c">
+<div class="h{classe_header}"><h1>AgendaObras &ndash; Resumo di&aacute;rio {data}</h1><p>{subtitulo}</p></div>
+<div class="b">
+<p class="k">{saudacao}<br>{contagens}</p>
+{nota_resumida}
+<table><thead><tr><th>Obra</th><th>Contrato</th><th class="n">Cr&iacute;t.</th><th class="n">Prazo fixo</th><th class="n">Reit.</th><th class="n">Pend.</th></tr></thead><tbody>{linhas_obras}</tbody></table>
+{blocos_obras}
 </div>
+<div class="f">AgendaObras - Sistema de Rastreamento de Obras &middot; {data_envio}<br>Este resumo &eacute; enviado em dias &uacute;teis enquanto houver tarefas em alerta.</div>
+</div></body></html>
 """
 
-SECAO_CRITICO_ATRASADO = """
-<div class="secao secao-critico">
-    <div class="secao-header">
-        <div><span class="icone">🆘</span>Tarefas Críticas em Atraso</div>
-        <span class="contador">{contador}</span>
-    </div>
-    <table>
-        <thead>
-            <tr>
-                <th>Tarefa</th>
-                <th style="width: 120px;">Prazo Original</th>
-                <th class="center" style="width: 100px;">Status</th>
-                <th class="center" style="width: 100px;">Dias Atraso</th>
-            </tr>
-        </thead>
-        <tbody>{linhas_tarefas}</tbody>
-    </table>
-    <div class="secao-rodape urgente">⚠️ URGENTE: Essas tarefas requerem ação imediata!</div>
-</div>
-"""
+RESUMO_LINHA_OBRA = (
+    '<tr><td>{obra}</td><td>{contrato}</td><td class="n">{criticas}</td>'
+    '<td class="n">{prazo_fixo}</td><td class="n">{reiteracoes}</td><td class="n">{pendencias}</td></tr>'
+)
 
-SECAO_TIPO_B = """
-<div class="secao secao-tipo-b">
-    <div class="secao-header">
-        <div><span class="icone">🚨</span>Tarefas de Prazo Fixo (Críticas)</div>
-        <span class="contador">{contador}</span>
-    </div>
-    <table>
-        <thead>
-            <tr>
-                <th>Tarefa</th>
-                <th style="width: 120px;">Prazo Limite</th>
-                <th class="center" style="width: 100px;">Status</th>
-                <th class="center" style="width: 100px;">Situação</th>
-            </tr>
-        </thead>
-        <tbody>{linhas_tarefas}</tbody>
-    </table>
-    <div class="secao-rodape urgente">🚨 Atenção: Prazo fixo - Não há prorrogação possível!</div>
-</div>
-"""
+RESUMO_BLOCO_OBRA = (
+    '<div class="o"><h2{classe}>{obra} <small>&middot; {contrato}</small></h2>'
+    '{faixa_pendencias}{tabela}{observacoes}</div>'
+)
+
+RESUMO_TABELA_TAREFAS = (
+    '<table><thead><tr><th>Tarefa</th><th>Prazo</th><th class="n">Situa&ccedil;&atilde;o</th>'
+    '<th class="n">Dias</th></tr></thead><tbody>{linhas}</tbody></table>'
+)
+
+RESUMO_LINHA_TAREFA = (
+    '<tr><td>{tarefa}{novo}</td><td>{prazo}</td>'
+    '<td class="n"><span class="s {classe}">{situacao}</span></td><td class="d">{dias}</td></tr>'
+)

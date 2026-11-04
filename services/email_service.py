@@ -16,11 +16,11 @@ from core.config import (
     TEMPLATE_EMAIL_ALERTA_A,
     TEMPLATE_EMAIL_ALERTA_B,
     TEMPLATE_EMAIL_CRITICO_ATRASADO,
-    TEMPLATE_EMAIL_OBRA_PENDENCIAS,
-    TEMPLATE_EMAIL_AGRUPADO_POR_OBRA,
-    SECAO_REITERACAO,
-    SECAO_CRITICO_ATRASADO,
-    SECAO_TIPO_B
+    TEMPLATE_EMAIL_RESUMO_DIARIO,
+    RESUMO_LINHA_OBRA,
+    RESUMO_BLOCO_OBRA,
+    RESUMO_TABELA_TAREFAS,
+    RESUMO_LINHA_TAREFA,
 )
 
 
@@ -215,208 +215,184 @@ class EmailService:
         conn.commit()
         conn.close()
 
-    def criar_email_agrupado_por_obra(self, obra_info: Dict, tarefas_agrupadas: Dict[str, List[Dict]]) -> Tuple[str, str, bool]:
-        """Cria HTML de email agrupado por obra com múltiplas tarefas
+    # ===== Resumo diário (um e-mail por destinatário) =====
+
+    # Ordem de gravidade das categorias dentro de cada obra (menor = mais grave).
+    _ORDEM_CATEGORIAS = {
+        'critico_atrasado': 0,
+        'tipo_b': 1,
+        'reiteracao_3': 2,
+        'reiteracao_2': 3,
+        'reiteracao_1': 4,
+    }
+    _CATEGORIAS_REITERACAO = ('reiteracao_1', 'reiteracao_2', 'reiteracao_3')
+
+    @staticmethod
+    def _plural(qtd: int, singular: str, plural: str) -> str:
+        return f"{qtd} {singular if qtd == 1 else plural}"
+
+    @staticmethod
+    def _dias_desde_prazo(alerta: Dict, hoje: datetime.date) -> int:
+        if alerta.get('dias_diff') is not None:
+            return int(alerta['dias_diff'])
+        data_limite = datetime.datetime.strptime(alerta['data_limite'], '%Y-%m-%d').date()
+        return (hoje - data_limite).days
+
+    def _linha_tarefa_resumo(self, categoria: str, alerta: Dict, hoje: datetime.date) -> str:
+        dias = self._dias_desde_prazo(alerta, hoje)
+        if categoria == 'critico_atrasado':
+            classe, situacao, dias_txt = 's1', 'CR&Iacute;TICO', str(dias)
+        elif categoria == 'tipo_b':
+            classe = 's2'
+            situacao = '&Uacute;LTIMO DIA' if dias <= 0 else 'PRAZO FIXO'
+            dias_txt = 'HOJE' if dias <= 0 else str(dias)
+        else:
+            num = categoria[-1]
+            classe = {'3': 's3', '2': 's4'}.get(num, 's5')
+            situacao, dias_txt = f'{num}&ordf; REITERA&Ccedil;&Atilde;O', str(dias)
+
+        try:
+            prazo = datetime.datetime.strptime(alerta['data_limite'], '%Y-%m-%d').strftime('%d/%m/%Y')
+        except Exception:
+            prazo = self._texto_html(alerta.get('data_limite'))
+
+        return RESUMO_LINHA_TAREFA.format(
+            tarefa=self._texto_html(alerta.get('descricao')),
+            novo='<span class="s nv">NOVO</span>' if alerta.get('novo') else '',
+            prazo=prazo,
+            classe=classe,
+            situacao=situacao,
+            dias=dias_txt,
+        )
+
+    def criar_email_resumo_diario(self, nome_destinatario: str, obras: List[Dict],
+                                  hoje: datetime.date = None, resumido: bool = False) -> Tuple[str, str]:
+        """Monta o e-mail diário único de um destinatário com todas as suas obras.
 
         Args:
-            obra_info: Dict com 'nome_contrato' e 'cliente'
-            tarefas_agrupadas: Dict com chaves 'reiteracao_1', 'reiteracao_2', 'reiteracao_3', 'critico_atrasado', 'tipo_b'
-                               Cada chave contém lista de dicts com dados da tarefa
+            nome_destinatario: nome para a saudação (vazio -> "Olá,").
+            obras: lista já filtrada e ordenada por gravidade; cada item tem
+                'info' (nome_contrato, cliente, observacoes), 'tarefas' {categoria: [alertas]}
+                e 'com_pendencias' (bool).
+            hoje: data de referência (fuso do notificador).
+            resumido: versão para admins/e-mail crítico (só críticos e pendências).
 
         Returns:
-            Tuple (assunto, corpo_html)
+            (assunto, corpo_html)
         """
-        # Conta total de tarefas
-        total_tarefas = sum(len(tarefas) for tarefas in tarefas_agrupadas.values())
+        hoje = hoje or datetime.date.today()
 
-        # Determina se há tarefas críticas para ajustar estilo
-        tem_critico = len(tarefas_agrupadas.get('critico_atrasado', [])) > 0 or len(tarefas_agrupadas.get('tipo_b', [])) > 0
-        header_class = ' critico' if tem_critico else ''
-        resumo_class = ' critico' if tem_critico else ''
+        tot = {'critico_atrasado': 0, 'tipo_b': 0, 'reiteracao': 0, 'pendencias': 0, 'novos': 0}
+        linhas_obras, blocos = [], []
 
-        # Texto singular/plural
-        texto_tarefas = 'tarefa' if total_tarefas == 1 else 'tarefas'
+        for obra in obras:
+            info = obra.get('info', {})
+            tarefas = obra.get('tarefas', {})
+            com_pendencias = bool(obra.get('com_pendencias'))
 
-        # Gera seções de conteúdo - ORDEM POR CRITICIDADE (mais crítico primeiro)
-        secoes_html = []
+            n_crit = len(tarefas.get('critico_atrasado', []))
+            n_tipo_b = len(tarefas.get('tipo_b', []))
+            n_reit = sum(len(tarefas.get(c, [])) for c in self._CATEGORIAS_REITERACAO)
+            tot['critico_atrasado'] += n_crit
+            tot['tipo_b'] += n_tipo_b
+            tot['reiteracao'] += n_reit
+            tot['pendencias'] += 1 if com_pendencias else 0
 
-        # 1. MAIS CRÍTICO: Tarefas Críticas Atrasadas
-        tarefas_critico = tarefas_agrupadas.get('critico_atrasado', [])
-        if tarefas_critico:
-            # Ordena por dias de atraso (mais atrasadas primeiro)
-            tarefas_critico_ordenadas = sorted(
-                tarefas_critico,
-                key=lambda t: (datetime.date.today() - datetime.datetime.strptime(t['data_limite'], '%Y-%m-%d').date()).days,
-                reverse=True
-            )
+            nome_obra = self._texto_html(info.get('nome_contrato'))
+            contrato = self._texto_html(info.get('cliente'))
+            linhas_obras.append(RESUMO_LINHA_OBRA.format(
+                obra=nome_obra,
+                contrato=contrato,
+                criticas=n_crit or '&ndash;',
+                prazo_fixo=n_tipo_b or '&ndash;',
+                reiteracoes=n_reit or '&ndash;',
+                pendencias='Sim' if com_pendencias else '&ndash;',
+            ))
 
-            linhas = []
-            for tarefa in tarefas_critico_ordenadas:
-                data_limite = datetime.datetime.strptime(tarefa['data_limite'], '%Y-%m-%d')
-                prazo_formatado = data_limite.strftime('%d/%m/%Y')
-                dias_atraso = (datetime.date.today() - data_limite.date()).days
+            itens = []
+            for categoria, lista in tarefas.items():
+                for alerta in lista:
+                    itens.append((categoria, alerta))
+                    if alerta.get('novo'):
+                        tot['novos'] += 1
+            itens.sort(key=lambda par: (
+                self._ORDEM_CATEGORIAS.get(par[0], 9),
+                -self._dias_desde_prazo(par[1], hoje),
+                str(par[1].get('descricao') or ''),
+            ))
 
-                linha = f"""
-                <tr>
-                    <td class="tarefa-nome">{tarefa['descricao']}</td>
-                    <td class="prazo-data">{prazo_formatado}</td>
-                    <td class="center"><span class="badge badge-critico">CRÍTICO</span></td>
-                    <td class="center dias-atraso">{dias_atraso}</td>
-                </tr>
-                """
-                linhas.append(linha)
-
-            secao = SECAO_CRITICO_ATRASADO.format(
-                linhas_tarefas=''.join(linhas),
-                contador=len(tarefas_critico_ordenadas)
-            )
-            secoes_html.append(secao)
-
-        # 2. Tarefas Tipo B (Prazo Fixo) - Último dia ou atrasadas
-        tarefas_tipo_b = tarefas_agrupadas.get('tipo_b', [])
-        if tarefas_tipo_b:
-            # Ordena por dias de atraso (mais atrasadas primeiro)
-            tarefas_tipo_b_ordenadas = sorted(
-                tarefas_tipo_b,
-                key=lambda t: (datetime.date.today() - datetime.datetime.strptime(t['data_limite'], '%Y-%m-%d').date()).days,
-                reverse=True
-            )
-            linhas = []
-            for tarefa in tarefas_tipo_b_ordenadas:
-                data_limite = datetime.datetime.strptime(tarefa['data_limite'], '%Y-%m-%d')
-                prazo_formatado = data_limite.strftime('%d/%m/%Y')
-
-                hoje = datetime.date.today()
-                if data_limite.date() == hoje:
-                    status = "ÚLTIMO DIA"
-                    dias = "HOJE"
-                    classe_dias = "dias-atraso"
-                elif data_limite.date() < hoje:
-                    dias_atraso = (hoje - data_limite.date()).days
-                    status = "ATRASADA"
-                    dias = f"{dias_atraso} dias"
-                    classe_dias = "dias-atraso"
-                else:
-                    status = "No prazo"
-                    dias = "OK"
-                    classe_dias = "dias-atraso leve"
-
-                linha = f"""
-                <tr>
-                    <td class="tarefa-nome">{tarefa['descricao']}</td>
-                    <td class="prazo-data">{prazo_formatado}</td>
-                    <td class="center"><span class="badge badge-tipo-b">{status}</span></td>
-                    <td class="center {classe_dias}">{dias}</td>
-                </tr>
-                """
-                linhas.append(linha)
-
-            secao = SECAO_TIPO_B.format(
-                linhas_tarefas=''.join(linhas),
-                contador=len(tarefas_tipo_b_ordenadas)
-            )
-            secoes_html.append(secao)
-
-        # 3. Reiterações - Ordem decrescente (3ª, 2ª, 1ª) para mostrar mais críticas primeiro
-        for num_reiteracao in [3, 2, 1]:
-            chave = f'reiteracao_{num_reiteracao}'
-            tarefas = tarefas_agrupadas.get(chave, [])
-
-            if tarefas:
-                # Ordena por dias de atraso (mais atrasadas primeiro)
-                tarefas_ordenadas = sorted(
-                    tarefas,
-                    key=lambda t: (datetime.date.today() - datetime.datetime.strptime(t['data_limite'], '%Y-%m-%d').date()).days,
-                    reverse=True
+            tabela = ''
+            if itens:
+                tabela = RESUMO_TABELA_TAREFAS.format(
+                    linhas=''.join(self._linha_tarefa_resumo(c, a, hoje) for c, a in itens)
                 )
+            faixa = ''
+            if com_pendencias:
+                faixa = ('<div class="pend">Obra conclu&iacute;da com pend&ecirc;ncias em aberto &ndash; '
+                         'alerta di&aacute;rio at&eacute; ser marcada como sem pend&ecirc;ncias.</div>')
+            obs = (info.get('observacoes') or '').strip()
+            bloco_obs = ''
+            if obs:
+                obs_html = self._texto_html(obs).replace('\n', '<br>')
+                bloco_obs = f'<div class="obs"><strong>Observa&ccedil;&otilde;es:</strong> {obs_html}</div>'
 
-                linhas = []
-                for tarefa in tarefas_ordenadas:
-                    data_limite = datetime.datetime.strptime(tarefa['data_limite'], '%Y-%m-%d')
-                    prazo_formatado = data_limite.strftime('%d/%m/%Y')
-                    dias_atraso = (datetime.date.today() - data_limite.date()).days
+            obra_critica = bool(n_crit or n_tipo_b or com_pendencias)
+            blocos.append(RESUMO_BLOCO_OBRA.format(
+                classe=' class="cr"' if obra_critica else '',
+                obra=nome_obra,
+                contrato=contrato,
+                faixa_pendencias=faixa,
+                tabela=tabela,
+                observacoes=bloco_obs,
+            ))
 
-                    # Classe CSS baseada nos dias de atraso
-                    if dias_atraso > 7:
-                        classe_dias = "dias-atraso"
-                    elif dias_atraso > 3:
-                        classe_dias = "dias-atraso medio"
-                    else:
-                        classe_dias = "dias-atraso leve"
+        total_tarefas = tot['critico_atrasado'] + tot['tipo_b'] + tot['reiteracao']
+        tem_critico = bool(tot['critico_atrasado'] or tot['tipo_b'] or tot['pendencias'])
 
-                    linha = f"""
-                    <tr>
-                        <td class="tarefa-nome">{tarefa['descricao']}</td>
-                        <td class="prazo-data">{prazo_formatado}</td>
-                        <td class="center"><span class="badge badge-reiteracao-{num_reiteracao}">{num_reiteracao}ª</span></td>
-                        <td class="center {classe_dias}">{dias_atraso}</td>
-                    </tr>
-                    """
-                    linhas.append(linha)
+        partes_contagem = []
+        if tot['critico_atrasado']:
+            partes_contagem.append(f"&#x1F198; Cr&iacute;ticas: <strong>{tot['critico_atrasado']}</strong>")
+        if tot['tipo_b']:
+            partes_contagem.append(f"&#x1F6A8; Prazo fixo: <strong>{tot['tipo_b']}</strong>")
+        if tot['reiteracao']:
+            partes_contagem.append(f"&#x1F514; Reitera&ccedil;&otilde;es: <strong>{tot['reiteracao']}</strong>")
+        if tot['pendencias']:
+            partes_contagem.append(f"&#x26A0;&#xFE0F; Obras com pend&ecirc;ncias: <strong>{tot['pendencias']}</strong>")
+        if tot['novos']:
+            partes_contagem.append(f"&#x1F195; Novos hoje: <strong>{tot['novos']}</strong>")
 
-                # Mensagem especial para 3ª reiteração
-                mensagem_rodape = ""
-                if num_reiteracao == 3:
-                    mensagem_rodape = '<div class="secao-rodape urgente">⚠️ ÚLTIMA REITERAÇÃO: Após esta, os alertas se tornarão CRÍTICOS e DIÁRIOS.</div>'
+        nome = (nome_destinatario or '').strip()
+        saudacao = f"Ol&aacute;, {self._texto_html(nome)}." if nome else "Ol&aacute;,"
+        saudacao += " Este &eacute; o resumo das suas obras com alertas hoje."
 
-                if num_reiteracao == 1:
-                    titulo = "Reiterações - Primeira Notificação"
-                elif num_reiteracao == 2:
-                    titulo = "Reiterações - Segunda Notificação"
-                else:
-                    titulo = "Reiterações - Terceira Notificação (ÚLTIMA)"
+        nota = ''
+        if resumido:
+            nota = ('<div class="nota">Vers&atilde;o resumida: apenas itens cr&iacute;ticos, '
+                    'de prazo fixo e obras com pend&ecirc;ncias.</div>')
 
-                secao = SECAO_REITERACAO.format(
-                    titulo_secao=titulo,
-                    linhas_tarefas=''.join(linhas),
-                    mensagem_rodape=mensagem_rodape,
-                    contador=len(tarefas_ordenadas)
-                )
-                secoes_html.append(secao)
+        n_obras = len(obras)
+        subtitulo = self._plural(n_obras, 'obra', 'obras')
+        if total_tarefas:
+            subtitulo += f" &middot; {self._plural(total_tarefas, 'tarefa', 'tarefas')} em alerta"
 
-        # Monta HTML final
-        secao_observacoes = self._montar_secao_observacoes_html(obra_info.get('observacoes'))
-        nome_contrato_html = self._texto_html(obra_info.get('nome_contrato'))
-        cliente_html = self._texto_html(obra_info.get('cliente'))
-        corpo_html = TEMPLATE_EMAIL_AGRUPADO_POR_OBRA.format(
-            header_class=header_class,
-            resumo_class=resumo_class,
-            total_tarefas=total_tarefas,
-            texto_tarefas=texto_tarefas,
-            nome_contrato=nome_contrato_html,
-            cliente=cliente_html,
-            secoes_conteudo=''.join(secoes_html),
-            secao_observacoes=secao_observacoes,
-            data_envio=datetime.datetime.now().strftime('%d/%m/%Y %H:%M:%S')
+        corpo_html = TEMPLATE_EMAIL_RESUMO_DIARIO.format(
+            classe_header=' cr' if tem_critico else '',
+            data=hoje.strftime('%d/%m/%Y'),
+            subtitulo=subtitulo,
+            saudacao=saudacao,
+            contagens=' &middot; '.join(partes_contagem),
+            nota_resumida=nota,
+            linhas_obras=''.join(linhas_obras),
+            blocos_obras=''.join(blocos),
+            data_envio=datetime.datetime.now().strftime('%d/%m/%Y %H:%M'),
         )
 
-        # Gera assunto
+        resumo_assunto = f"Resumo diário {hoje.strftime('%d/%m')} · {self._plural(n_obras, 'obra', 'obras')}"
+        if total_tarefas:
+            resumo_assunto += f" · {self._plural(total_tarefas, 'tarefa', 'tarefas')}"
         if tem_critico:
-            assunto = f"🆘 [CRÍTICO] Obra {obra_info['nome_contrato']} - {total_tarefas} {texto_tarefas} em alerta"
+            assunto = f"🆘 [CRÍTICO] AgendaObras – {resumo_assunto}"
         else:
-            assunto = f"⚠️ Obra {obra_info['nome_contrato']} - {total_tarefas} {texto_tarefas} precisam de atenção"
+            assunto = f"⚠️ AgendaObras – {resumo_assunto}"
 
-        return (assunto, corpo_html, tem_critico)
-
-    def criar_email_obras_com_pendencias(self, obra_info: Dict) -> Tuple[str, str, bool]:
-        """Cria assunto e corpo HTML para obras marcadas como 'com_pendencias'.
-
-        Retorna (assunto, corpo_html, tem_critico)
-        """
-        nome_contrato = self._texto_html(obra_info.get('nome_contrato'))
-        cliente = self._texto_html(obra_info.get('cliente'))
-        secao_observacoes = self._montar_secao_observacoes_html(obra_info.get('observacoes'))
-
-        assunto = f"🆘 [CRÍTICO] Obra {obra_info.get('nome_contrato')} - Pendências"
-
-        corpo = TEMPLATE_EMAIL_OBRA_PENDENCIAS.format(
-            header_class= ' critico',
-            resumo_class= ' critico',
-            nome_contrato=nome_contrato,
-            cliente=cliente,
-            secao_observacoes=secao_observacoes,
-            data_envio=datetime.datetime.now().strftime('%d/%m/%Y %H:%M:%S')
-        )
-
-        # Sempre considerar crítico para incluir destinatário crítico
-        return (assunto, corpo, True)
+        return (assunto, corpo_html)

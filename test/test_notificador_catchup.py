@@ -44,7 +44,9 @@ class TestCicloDiarioCatchup(unittest.TestCase):
         alerta = {'tipo_alerta': 'critico_atrasado'}
         with patch.object(self.notificador, '_processar_tipo_a', return_value=alerta), \
              patch.object(self.notificador, '_processar_tipo_b', return_value=alerta), \
-             patch.object(self.notificador, '_enviar_email_agrupado_por_obra', return_value=False):
+             patch.object(self.notificador, '_carregar_usuarios_alerta', return_value=[]), \
+             patch.object(self.notificador, '_enviar_resumos', return_value=({}, {}, {})), \
+             patch.object(self.notificador, '_registrar_resultados'):
             total = self.notificador._verificar_prazos()
 
         self.assertEqual(total, total_pendentes)

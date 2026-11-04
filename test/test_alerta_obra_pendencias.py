@@ -59,8 +59,20 @@ def enviar_alerta_teste_direto(
     email_service: EmailService,
     obra: Dict,
 ) -> bool:
-    """Envia um alerta de teste manual para a obra com pendencias."""
-    assunto, corpo_html, _ = email_service.criar_email_obras_com_pendencias(obra)
+    """Envia um resumo diario de teste contendo apenas a obra com pendencias."""
+    obra_resumo = {
+        "obra_id": obra["id"],
+        "info": {
+            "nome_contrato": obra.get("nome_contrato"),
+            "cliente": obra.get("cliente"),
+            "observacoes": obra.get("observacoes"),
+        },
+        "tarefas": {},
+        "com_pendencias": True,
+    }
+    assunto, corpo_html = email_service.criar_email_resumo_diario(
+        "", [obra_resumo], notificador._hoje_referencia(), resumido=False
+    )
     destinatarios = ["dawison@machengenharia.com.br"]
 
     if not destinatarios:

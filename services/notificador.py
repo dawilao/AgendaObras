@@ -25,6 +25,14 @@ from core.config import (
 _notificador_ativo = False
 _notificador_lock = threading.Lock()
 
+# Valores de receber_alerta_critico que significam "não receber"
+_VALORES_FALSOS = (0, False, '0', 'false', 'False', None)
+
+# Categorias de alerta usadas no resumo diário
+CATEGORIAS_REITERACAO = frozenset({'reiteracao_1', 'reiteracao_2', 'reiteracao_3'})
+CATEGORIAS_CRITICAS = frozenset({'critico_atrasado', 'tipo_b', 'pendencias'})
+TODAS_CATEGORIAS = CATEGORIAS_REITERACAO | CATEGORIAS_CRITICAS
+
 
 class GeradorTarefasRecorrentes:
     """Gera tarefas mensais recorrentes dinamicamente"""
@@ -156,67 +164,77 @@ class NotificadorPrazos:
                 "Usando fallback fixo UTC-03:00."
             )
 
-    def _obter_destinatarios_por_contrato(self, contrato_nome: str, tem_critico: bool = False) -> List[str]:
-        """Resolve destinatários por regra de acesso:
-        - Admin recebe alertas de todos os contratos
-        - Não-admin recebe apenas alertas dos contratos vinculados
-        - Se não houver base de usuários disponível, usa fallback da configuração de email
+    def _carregar_usuarios_alerta(self) -> List[Dict]:
+        """Carrega, uma única vez por ciclo, os usuários com e-mail e seus contratos vinculados.
+
+        Retorna lista de dicts: {email, nome, is_admin, recebe_critico, contratos: set}.
         """
-        fallback = list(getattr(self.email_service.config, 'email_destinatarios', []) or [])
+        usuarios = AuthDatabase().listar_usuarios() or []
+        contratos_db = ContratosDatabase()
+
+        resultado = []
+        for usuario in usuarios:
+            email = (usuario.get('email') or '').strip().lower()
+            if not email:
+                continue
+            is_admin = bool(usuario.get('is_admin'))
+            contratos = set()
+            if not is_admin and usuario.get('id'):
+                contratos = {
+                    (c or '').strip()
+                    for c in contratos_db.listar_contratos_usuario(usuario['id'])
+                    if (c or '').strip()
+                }
+            resultado.append({
+                'email': email,
+                'nome': (usuario.get('nome') or '').strip(),
+                'is_admin': is_admin,
+                'recebe_critico': usuario.get('receber_alerta_critico', 1) not in _VALORES_FALSOS,
+                'contratos': contratos,
+            })
+        return resultado
+
+    def _config_email(self, chave: str, padrao):
+        valor = getattr(self.email_service.config, chave, padrao)
+        return valor if isinstance(valor, type(padrao)) else padrao
+
+    def _obter_destinatarios_por_contrato(self, contrato_nome: str, tem_critico: bool = False,
+                                          usuarios: List[Dict] = None) -> List[str]:
+        """Resolve destinatários de um contrato (visão por obra, sem filtro por item):
+        - Admin recebe apenas quando há alerta crítico (e não desativou alertas críticos)
+        - Não-admin recebe apenas alertas dos contratos vinculados
+        - Se ninguém se qualificar, usa fallback da configuração de email
+        """
+        fallback = list(self._config_email('email_destinatarios', []))
         destinatarios = []
 
         try:
-            auth_db = AuthDatabase()
-            contratos_db = ContratosDatabase()
-
-            usuarios = auth_db.listar_usuarios()
+            if usuarios is None:
+                usuarios = self._carregar_usuarios_alerta()
             contrato_normalizado = (contrato_nome or '').strip()
 
-            if usuarios:
-                emails = set()
-                for usuario in usuarios:
-                    email = (usuario.get('email') or '').strip().lower()
-                    if not email:
+            emails = set()
+            for usuario in usuarios:
+                if usuario['is_admin']:
+                    if tem_critico and usuario['recebe_critico']:
+                        emails.add(usuario['email'])
+                    continue
+                if contrato_normalizado in usuario['contratos']:
+                    if tem_critico and not usuario['recebe_critico']:
                         continue
-
-                    receber_alerta_critico = usuario.get('receber_alerta_critico', 1)
-
-                    if usuario.get('is_admin'):
-                        if not tem_critico:
-                            continue
-                        if tem_critico and receber_alerta_critico in (0, False, '0', 'false', 'False', None):
-                            continue
-                        emails.add(email)
-                        continue
-
-                    user_id = usuario.get('id')
-                    if not user_id:
-                        continue
-
-                    contratos_usuario = {
-                        (c or '').strip()
-                        for c in contratos_db.listar_contratos_usuario(user_id)
-                        if (c or '').strip()
-                    }
-                    if contrato_normalizado in contratos_usuario:
-                        if tem_critico and receber_alerta_critico in (0, False, '0', 'false', 'False', None):
-                            continue
-                        emails.add(email)
-
-                destinatarios = sorted(emails)
+                    emails.add(usuario['email'])
 
             # Fallback: mantém compatibilidade quando users.db estiver ausente/incompleto
-            if not destinatarios:
-                destinatarios = fallback
+            destinatarios = sorted(emails) or fallback
 
         except Exception as e:
             log_error(e, "notificador_prazos", "Resolver destinatários por contrato")
             destinatarios = fallback
 
         if tem_critico:
-            email_critico = (getattr(self.email_service.config, 'email_critico', '') or '').strip().lower()
-            if email_critico and email_critico not in set(destinatarios):
-                destinatarios.append(email_critico)
+            email_critico = self._config_email('email_critico', '').strip().lower()
+            if email_critico:
+                destinatarios = list(destinatarios) + [email_critico]
 
         # Remove vazios e deduplica preservando ordem
         deduplicados = []
@@ -228,6 +246,105 @@ class NotificadorPrazos:
                 deduplicados.append(email_limpo)
 
         return deduplicados
+
+    def _mapear_permissoes(self, obras: Dict[int, Dict], usuarios: List[Dict]) -> Dict[str, Dict]:
+        """Define, por destinatário, quais categorias de alerta ele recebe em cada obra.
+
+        Regras (por item):
+        - Coordenador (não-admin vinculado ao contrato): reiterações + críticos/pendências
+          (sem críticos/pendências se desativou alertas críticos).
+        - Admin com alertas críticos ativos e e-mail crítico da config: só críticos/pendências, todas as obras.
+        - Fallback da config: categorias de uma obra que nenhum usuário cobre.
+
+        Retorna {email: {'nome', 'resumido', 'obras': {obra_id: set(categorias)}}}.
+        """
+        permissoes: Dict[str, Dict] = {}
+
+        def conceder(email: str, nome: str, obra_id: int, categorias, coordenador: bool):
+            email = (email or '').strip().lower()
+            if not email or not categorias:
+                return
+            perm = permissoes.setdefault(email, {'nome': '', 'coordena': False, 'obras': {}})
+            if nome and not perm['nome']:
+                perm['nome'] = nome
+            perm['obras'].setdefault(obra_id, set()).update(categorias)
+            perm['coordena'] = perm['coordena'] or coordenador
+
+        email_critico = self._config_email('email_critico', '').strip().lower()
+        fallback = self._config_email('email_destinatarios', [])
+
+        for obra_id, obra in obras.items():
+            contrato = (obra['info'].get('cliente') or '').strip()
+            presentes = self._categorias_presentes(obra)
+            cobertas = set()
+
+            for usuario in usuarios:
+                if usuario['is_admin']:
+                    if usuario['recebe_critico']:
+                        conceder(usuario['email'], usuario['nome'], obra_id, CATEGORIAS_CRITICAS, False)
+                        cobertas |= CATEGORIAS_CRITICAS
+                    continue
+                if contrato and contrato in usuario['contratos']:
+                    categorias = TODAS_CATEGORIAS if usuario['recebe_critico'] else CATEGORIAS_REITERACAO
+                    conceder(usuario['email'], usuario['nome'], obra_id, categorias, True)
+                    cobertas |= categorias
+
+            if email_critico:
+                conceder(email_critico, '', obra_id, CATEGORIAS_CRITICAS, False)
+
+            descobertas = presentes - cobertas
+            for email in fallback:
+                conceder(email, '', obra_id, descobertas, True)
+
+        return {
+            email: {'nome': perm['nome'], 'resumido': not perm['coordena'], 'obras': perm['obras']}
+            for email, perm in permissoes.items()
+        }
+
+    @staticmethod
+    def _categorias_presentes(obra: Dict) -> set:
+        presentes = {cat for cat, lista in obra['tarefas'].items() if lista}
+        if obra.get('com_pendencias'):
+            presentes.add('pendencias')
+        return presentes
+
+    @staticmethod
+    def _gravidade_obra(obra: Dict):
+        """Chave de ordenação: obras com crítico/pendência primeiro, depois mais tarefas."""
+        tarefas = obra['tarefas']
+        critica = bool(tarefas.get('critico_atrasado') or tarefas.get('tipo_b') or obra.get('com_pendencias'))
+        total = sum(len(lista) for lista in tarefas.values())
+        return (0 if critica else 1, -total, str(obra['info'].get('nome_contrato') or ''))
+
+    def _montar_resumos(self, obras: Dict[int, Dict], permissoes: Dict[str, Dict]) -> Dict[str, Dict]:
+        """Filtra as obras/tarefas de cada destinatário conforme as permissões.
+
+        Retorna {email: {'nome', 'resumido', 'obras': [obra filtrada, ordenada por gravidade]}}.
+        Destinatários sem nenhum item ficam de fora.
+        """
+        resumos = {}
+        for email, perm in permissoes.items():
+            obras_email = []
+            for obra_id, categorias in perm['obras'].items():
+                obra = obras[obra_id]
+                tarefas = {
+                    cat: list(lista)
+                    for cat, lista in obra['tarefas'].items()
+                    if lista and cat in categorias
+                }
+                com_pendencias = bool(obra.get('com_pendencias')) and 'pendencias' in categorias
+                if not tarefas and not com_pendencias:
+                    continue
+                obras_email.append({
+                    'obra_id': obra_id,
+                    'info': obra['info'],
+                    'tarefas': tarefas,
+                    'com_pendencias': com_pendencias,
+                })
+            if obras_email:
+                obras_email.sort(key=self._gravidade_obra)
+                resumos[email] = {'nome': perm['nome'], 'resumido': perm['resumido'], 'obras': obras_email}
+        return resumos
 
     def _nome_fuso_horario(self) -> str:
         """Retorna nome amigável da timezone atual."""
@@ -396,18 +513,78 @@ class NotificadorPrazos:
                 self._aguardar_ate(proximo_horario)
 
     def _verificar_prazos(self) -> int:
-        """Verifica tarefas atrasadas e envia alertas agrupados por obra. Retorna total de alertas enviados."""
-        # Retry mechanism para lidar com database locked
+        """Ciclo diário: coleta alertas, envia UM resumo por destinatário e registra resultados.
+
+        Retorna o total de tarefas em alerta no dia.
+        """
+        obras, resumos = self.gerar_resumos_do_dia()
+        total_tarefas = sum(
+            len(lista) for obra in obras.values() for lista in obra['tarefas'].values()
+        )
+        if not obras:
+            return 0
+
+        entregas_tarefas, entregas_pendencias, erros = self._enviar_resumos(resumos)
+        self._registrar_resultados(obras, resumos, entregas_tarefas, entregas_pendencias, erros)
+
+        enviados = len(resumos) - len(erros)
+        print(
+            f"\n📧 {enviados}/{len(resumos)} resumo(s) diário(s) enviado(s) — "
+            f"{len(obras)} obra(s), {total_tarefas} tarefa(s) em alerta\n"
+        )
+        for email, msg in erros.items():
+            print(f"   ❌ {email}: {msg}")
+
+        return total_tarefas
+
+    def gerar_resumos_do_dia(self):
+        """Monta os resumos do dia SEM enviar nem gravar nada no banco.
+
+        Returns:
+            (obras, resumos) — obras: {obra_id: {info, tarefas, com_pendencias}};
+            resumos: {email: {nome, resumido, obras: [...]}}.
+        """
+        obras = self._coletar_alertas()
+        if not obras:
+            return obras, {}
+
+        try:
+            usuarios = self._carregar_usuarios_alerta()
+        except Exception as e:
+            log_error(e, "notificador_prazos", "Carregar usuários para o resumo diário")
+            usuarios = []
+
+        permissoes = self._mapear_permissoes(obras, usuarios)
+        return obras, self._montar_resumos(obras, permissoes)
+
+    @staticmethod
+    def _nova_obra(info: Dict) -> Dict:
+        return {
+            'info': {
+                'nome_contrato': info.get('nome_contrato'),
+                'cliente': info.get('cliente'),
+                'observacoes': info.get('observacoes'),
+            },
+            'tarefas': {
+                'reiteracao_1': [],
+                'reiteracao_2': [],
+                'reiteracao_3': [],
+                'critico_atrasado': [],
+                'tipo_b': [],
+            },
+            'com_pendencias': False,
+        }
+
+    def _coletar_alertas(self) -> Dict[int, Dict]:
+        """Lê tarefas em alerta e obras com pendências (somente leitura, com retry de 'locked')."""
         max_tentativas = 3
         for tentativa in range(max_tentativas):
             conn = None
             try:
                 conn = self.database.get_connection()
                 cursor = conn.cursor()
+                hoje = self._hoje_referencia()
 
-                hoje = self._hoje_referencia().strftime('%Y-%m-%d')
-
-                # Busca tarefas não concluídas e não bloqueadas
                 cursor.execute('''
                     SELECT oc.*, o.nome_contrato, o.cliente, o.observacoes, ct.possui_reiteracao, ct.tipo_recorrencia
                     FROM obra_checklist oc
@@ -417,121 +594,155 @@ class NotificadorPrazos:
                     AND oc.data_limite IS NOT NULL
                     ORDER BY oc.data_limite
                 ''')
-
                 tarefas = [dict(row) for row in cursor.fetchall()]
 
-                # Dicionário para agrupar alertas por obra
-                alertas_por_obra = {}
-
+                obras: Dict[int, Dict] = {}
                 for tarefa in tarefas:
-                    data_limite = datetime.datetime.strptime(tarefa['data_limite'], '%Y-%m-%d').date()
-                    dias_diff = (datetime.datetime.strptime(hoje, '%Y-%m-%d').date() - data_limite).days
-
                     try:
-                        # Processa tarefa e obtém dados de alerta (se aplicável)
+                        data_limite = datetime.datetime.strptime(tarefa['data_limite'], '%Y-%m-%d').date()
+                        dias_diff = (hoje - data_limite).days
+
                         if tarefa['tipo'] == 'A':
-                            # Tipo A: Com reiterações (dias 2, 4, 6, depois diário)
-                            alerta_data = self._processar_tipo_a(cursor, tarefa, dias_diff)
+                            # Tipo A: com reiterações (2, 4, 6 dias, depois crítico diário)
+                            alerta = self._processar_tipo_a(cursor, tarefa, dias_diff)
                         else:
-                            # Tipo B: Prazo fixo (último dia crítico, depois diário)
-                            alerta_data = self._processar_tipo_b(cursor, tarefa, dias_diff)
+                            # Tipo B: prazo fixo (último dia e atrasada: crítico diário)
+                            alerta = self._processar_tipo_b(cursor, tarefa, dias_diff)
 
-                        # Se deve enviar alerta, adiciona ao agrupamento por obra
-                        if alerta_data:
-                            obra_id = tarefa['obra_id']
-
-                            # Inicializa estrutura da obra se não existir
-                            if obra_id not in alertas_por_obra:
-                                alertas_por_obra[obra_id] = {
-                                    'info': {
-                                        'nome_contrato': tarefa['nome_contrato'],
-                                        'cliente': tarefa['cliente'],
-                                        'observacoes': tarefa.get('observacoes')
-                                    },
-                                    'tarefas': {
-                                        'reiteracao_1': [],
-                                        'reiteracao_2': [],
-                                        'reiteracao_3': [],
-                                        'critico_atrasado': [],
-                                        'tipo_b': []
-                                    }
-                                }
-
-                            # Adiciona tarefa no tipo de alerta correspondente
-                            tipo_alerta = alerta_data['tipo_alerta']
-                            alertas_por_obra[obra_id]['tarefas'][tipo_alerta].append(alerta_data)
-
+                        if alerta:
+                            alerta['novo'] = (tarefa.get('status_notificacao') or 'pendente') == 'pendente'
+                            obra = obras.setdefault(tarefa['obra_id'], self._nova_obra(tarefa))
+                            obra['tarefas'][alerta['tipo_alerta']].append(alerta)
                     except Exception as e:
-                        print(f"⚠️ Erro ao processar tarefa {tarefa['id']}: {e}")
+                        print(f"⚠️ Erro ao processar tarefa {tarefa.get('id')}: {e}")
                         continue
 
-                # Envia emails agrupados por obra
-                total_emails_enviados = 0
-                for obra_id, dados_obra in alertas_por_obra.items():
-                    if self._enviar_email_agrupado_por_obra(obra_id, dados_obra):
-                        total_emails_enviados += 1
-
-                total_tarefas = sum(
-                    len(tarefas)
-                    for obra in alertas_por_obra.values()
-                    for tarefas in obra['tarefas'].values()
+                # Obras concluídas com pendências entram no mesmo resumo (alerta diário)
+                cursor.execute(
+                    'SELECT id, nome_contrato, cliente, observacoes FROM obras WHERE status_conclusao_obra = ?',
+                    ('com_pendencias',),
                 )
+                for row in cursor.fetchall():
+                    obra_pend = dict(row)
+                    obra = obras.setdefault(obra_pend['id'], self._nova_obra(obra_pend))
+                    obra['com_pendencias'] = True
 
-                if total_emails_enviados > 0:
-                    print(f"\n📧 {total_emails_enviados} email(s) enviado(s) para {total_tarefas} tarefa(s)\n")
-                    obras_com_emails = [dados['info']['nome_contrato'] for obra_id, dados in alertas_por_obra.items() if any(dados['tarefas'].values())]
-
-                    print(f"Obra(s) com e-mails enviados:")
-                    for nome in obras_com_emails:
-                        print(f"   - {nome}\n")
-
-                # Envia alertas diários críticos para obras marcadas como 'com_pendencias'
-                try:
-                    conn2 = self.database.get_connection()
-                    cur2 = conn2.cursor()
-                    cur2.execute('SELECT id, nome_contrato, cliente, observacoes FROM obras WHERE status_conclusao_obra = ?', ('com_pendencias',))
-                    obras_pend = [dict(row) for row in cur2.fetchall()]
-                    conn2.close()
-
-                    for obra in obras_pend:
-                        try:
-                            assunto, corpo_html, tem_critico = self.email_service.criar_email_obras_com_pendencias(obra)
-                            destinatarios = self._obter_destinatarios_por_contrato(obra.get('cliente'), tem_critico=True)
-                            if not destinatarios:
-                                print(f"⚠️ Sem destinatários para obra pendente {obra.get('nome_contrato')}")
-                                continue
-
-                            sucesso, msg = self.email_service.enviar_email(destinatarios, assunto, corpo_html)
-                            # Registra histórico (tarefa_id = 0 para indicar email de obra)
-                            self._registrar_historico_com_retry(obra['id'], 0, 'obra_pendencias', destinatarios, sucesso, None if sucesso else msg)
-                            if sucesso:
-                                print(f"📧 Alerta diário enviado para obra com pendências: {obra.get('nome_contrato')}")
-                            else:
-                                print(f"❌ Falha ao enviar alerta para obra {obra.get('nome_contrato')}: {msg}")
-                        except Exception as e:
-                            print(f"❌ Erro ao processar obra pendente {obra.get('id')}: {e}")
-                            continue
-                except Exception as e:
-                    log_error(e, 'notificador_prazos', 'Buscar obras com pendencias')
-
-                return total_tarefas if alertas_por_obra else 0
+                return obras
 
             except sqlite3.OperationalError as e:
-                if "locked" in str(e).lower():
-                    if tentativa < max_tentativas - 1:
-                        print(f"⚠️ Banco de dados temporariamente bloqueado, tentando novamente em 5 segundos... (tentativa {tentativa + 1}/{max_tentativas})")
-                        time.sleep(5)
-                        continue
-                    else:
-                        print(f"❌ Banco de dados permanece bloqueado após {max_tentativas} tentativas")
-                        return 0
-                else:
-                    raise
+                if "locked" in str(e).lower() and tentativa < max_tentativas - 1:
+                    print(f"⚠️ Banco de dados temporariamente bloqueado, tentando novamente em 5 segundos... (tentativa {tentativa + 1}/{max_tentativas})")
+                    time.sleep(5)
+                    continue
+                # Propaga: o ciclo registra erro e o loop agenda nova tentativa
+                raise
             finally:
                 if conn:
                     conn.close()
 
-        return 0
+        return {}
+
+    def _enviar_resumos(self, resumos: Dict[str, Dict]):
+        """Envia um e-mail individual por destinatário.
+
+        Returns:
+            (entregas_tarefas {tarefa_id: [emails ok]},
+             entregas_pendencias {obra_id: [emails ok]},
+             erros {email: mensagem})
+        """
+        hoje = self._hoje_referencia()
+        entregas_tarefas: Dict[int, List[str]] = {}
+        entregas_pendencias: Dict[int, List[str]] = {}
+        erros: Dict[str, str] = {}
+
+        for email, resumo in resumos.items():
+            try:
+                assunto, corpo_html = self.email_service.criar_email_resumo_diario(
+                    resumo['nome'], resumo['obras'], hoje, resumo['resumido']
+                )
+                sucesso, msg = self.email_service.enviar_email(email, assunto, corpo_html)
+            except Exception as e:
+                log_error(e, "notificador_prazos", f"Enviar resumo diário para {email}")
+                sucesso, msg = False, str(e)
+
+            if not sucesso:
+                erros[email] = msg or 'Falha no envio'
+                continue
+
+            for obra in resumo['obras']:
+                for lista in obra['tarefas'].values():
+                    for alerta in lista:
+                        entregas_tarefas.setdefault(alerta['tarefa_id'], []).append(email)
+                if obra['com_pendencias']:
+                    entregas_pendencias.setdefault(obra['obra_id'], []).append(email)
+
+        return entregas_tarefas, entregas_pendencias, erros
+
+    def _registrar_resultados(self, obras: Dict[int, Dict], resumos: Dict[str, Dict],
+                              entregas_tarefas: Dict[int, List[str]],
+                              entregas_pendencias: Dict[int, List[str]],
+                              erros: Dict[str, str]):
+        """Atualiza controle das tarefas e histórico.
+
+        A tarefa conta como notificada se PELO MENOS UM destinatário recebeu o resumo.
+        """
+        # Quem deveria receber cada item (para registrar falhas com destinatários e motivo)
+        previstos_tarefa: Dict[int, List[str]] = {}
+        previstos_pendencia: Dict[int, List[str]] = {}
+        for email, resumo in resumos.items():
+            for obra in resumo['obras']:
+                for lista in obra['tarefas'].values():
+                    for alerta in lista:
+                        previstos_tarefa.setdefault(alerta['tarefa_id'], []).append(email)
+                if obra['com_pendencias']:
+                    previstos_pendencia.setdefault(obra['obra_id'], []).append(email)
+
+        def motivo_falha(previstos: List[str]) -> str:
+            return '; '.join(f"{e}: {erros.get(e, 'não enviado')}" for e in previstos)
+
+        sem_destinatario = []
+        for obra_id, obra in obras.items():
+            nome_obra = obra['info'].get('nome_contrato')
+
+            for tipo_alerta, lista in obra['tarefas'].items():
+                for alerta in lista:
+                    tarefa_id = alerta['tarefa_id']
+                    entregues = entregas_tarefas.get(tarefa_id, [])
+                    previstos = previstos_tarefa.get(tarefa_id, [])
+
+                    if entregues:
+                        if 'nova_tentativa' in alerta:
+                            self._atualizar_tarefa_com_retry(
+                                tarefa_id, alerta['nova_tentativa'], alerta['hoje_str'], alerta['status']
+                            )
+                        else:
+                            self._atualizar_tarefa_tipo_b_com_retry(
+                                tarefa_id, alerta['hoje_str'], alerta['status']
+                            )
+                        self._registrar_historico_com_retry(obra_id, tarefa_id, tipo_alerta, entregues, True)
+                    elif previstos:
+                        self._registrar_historico_com_retry(
+                            obra_id, tarefa_id, tipo_alerta, previstos, False, motivo_falha(previstos)
+                        )
+                    else:
+                        sem_destinatario.append(f"{nome_obra} / {alerta.get('descricao')}")
+
+            if obra.get('com_pendencias'):
+                entregues = entregas_pendencias.get(obra_id, [])
+                previstos = previstos_pendencia.get(obra_id, [])
+                if entregues:
+                    self._registrar_historico_com_retry(obra_id, 0, 'obra_pendencias', entregues, True)
+                elif previstos:
+                    self._registrar_historico_com_retry(
+                        obra_id, 0, 'obra_pendencias', previstos, False, motivo_falha(previstos)
+                    )
+                else:
+                    sem_destinatario.append(f"{nome_obra} (pendências)")
+
+        if sem_destinatario:
+            print(f"⚠️ {len(sem_destinatario)} alerta(s) sem destinatário:")
+            for item in sem_destinatario:
+                print(f"   - {item}")
 
     def _processar_tipo_a(self, cursor, tarefa: Dict, dias_diff: int):
         """Processa notificação para tarefa Tipo A (com reiterações)
@@ -539,7 +750,7 @@ class NotificadorPrazos:
         Returns:
             Dict com dados do alerta se deve enviar, None caso contrário
         """
-        tentativas = tarefa['tentativas_reiteracao']
+        tentativas = tarefa['tentativas_reiteracao'] or 0
         ultima_notif = tarefa['ultima_notificacao']
         tipo_recorrencia = tarefa.get('tipo_recorrencia', 'padrao')
 
@@ -550,7 +761,6 @@ class NotificadorPrazos:
         agora = self._agora_referencia()
         hoje_str = agora.strftime('%Y-%m-%d %H:%M:%S')
         hoje_data_str = agora.strftime('%Y-%m-%d')
-        hoje_obj = agora.date()
 
         # Verifica se já enviou hoje (compara apenas a data)
         if ultima_notif:
@@ -563,44 +773,36 @@ class NotificadorPrazos:
         tipo_alerta = None
         nova_tentativa = tentativas
 
-        # Lógica especial para CONFIRMAÇÃO DE MEDIÇÃO (dias do mês 11, 12, 13+)
+        # Reiterações por LIMITE (não por dia exato): se o ciclo não rodou no dia
+        # certo (fim de semana, falha de envio), a reiteração sai no próximo dia útil,
+        # já no estágio correto. Tarefas muito atrasadas seguem como crítico diário.
         if tipo_recorrencia == 'confirmacao':
-            dia_mes = hoje_obj.day
-
-            # Dia 10: Criação da tarefa (sem alerta)
-            # Dia 11: Reiteração 1
-            if dia_mes == 11 and tentativas == 0:
-                deve_enviar = True
-                nova_tentativa = 1
-                tipo_alerta = 'reiteracao_1'
-            # Dia 12: Reiteração 2
-            elif dia_mes == 12 and tentativas <= 1:
-                deve_enviar = True
-                nova_tentativa = 2
-                tipo_alerta = 'reiteracao_2'
-            # Dia 13+: Crítico diário
-            elif dia_mes >= 13:
+            # CONFIRMAÇÃO DE MEDIÇÃO vence no dia 10: reitera em +1 e +2 dias, crítico a partir de +3.
+            # Usa dias desde o vencimento (e não o dia do mês) para não silenciar
+            # confirmações de meses anteriores ainda em aberto.
+            if dias_diff >= 3:
                 deve_enviar = True
                 nova_tentativa = 3
                 tipo_alerta = 'critico_atrasado'
+            elif dias_diff >= 2 and tentativas <= 1:
+                deve_enviar = True
+                nova_tentativa = 2
+                tipo_alerta = 'reiteracao_2'
+            elif dias_diff >= 1 and tentativas == 0:
+                deve_enviar = True
+                nova_tentativa = 1
+                tipo_alerta = 'reiteracao_1'
         else:
-            # Lógica padrão de reiterações: dias 2, 4, 6 após o prazo
-            if dias_diff == 2 and tentativas == 0:
-                deve_enviar = True
-                nova_tentativa = 1
-                tipo_alerta = 'reiteracao_1'
-            elif dias_diff == 4 and tentativas == 1:
-                deve_enviar = True
-                nova_tentativa = 2
-                tipo_alerta = 'reiteracao_2'
-            elif dias_diff == 6 and tentativas == 2:
-                deve_enviar = True
-                nova_tentativa = 3
-                tipo_alerta = 'reiteracao_3'
-            elif dias_diff > 6:
-                # Após 3ª reiteração: alerta crítico diário
+            # Padrão: reiterações 2, 4 e 6 dias após o prazo; depois crítico diário
+            if dias_diff > 6:
                 deve_enviar = True
                 tipo_alerta = 'critico_atrasado'
+            else:
+                estagio = 3 if dias_diff >= 6 else 2 if dias_diff >= 4 else 1 if dias_diff >= 2 else 0
+                if estagio > (tentativas or 0):
+                    deve_enviar = True
+                    nova_tentativa = estagio
+                    tipo_alerta = f'reiteracao_{estagio}'
 
         if deve_enviar:
             # Retorna dados do alerta para processamento posterior
@@ -662,81 +864,6 @@ class NotificadorPrazos:
             }
 
         return None
-
-    def _enviar_email_agrupado_por_obra(self, obra_id: int, dados_obra: Dict) -> bool:
-        """Envia email agrupado com todas as tarefas de uma obra e atualiza banco"""
-        obra_info = dados_obra['info']
-        tarefas_agrupadas = dados_obra['tarefas']
-
-        # Filtra apenas tipos que têm tarefas
-        tarefas_com_conteudo = {
-            tipo: tarefas
-            for tipo, tarefas in tarefas_agrupadas.items()
-            if len(tarefas) > 0
-        }
-
-        if not tarefas_com_conteudo:
-            return False
-
-        # Gera email agrupado
-        try:
-            assunto, corpo_html, tem_critico = self.email_service.criar_email_agrupado_por_obra(
-                obra_info,
-                tarefas_com_conteudo
-            )
-
-            # Monta lista de destinatários por vínculo de contrato.
-            destinatario = self._obter_destinatarios_por_contrato(obra_info.get('cliente'), tem_critico)
-            if not destinatario:
-                print(f"⚠️ Sem destinatários para obra {obra_info['nome_contrato']} (contrato: {obra_info.get('cliente')})")
-                return False
-
-            sucesso, msg = self.email_service.enviar_email(destinatario, assunto, corpo_html)
-
-            if not sucesso:
-                print(f"❌ Falha ao enviar email para obra {obra_info['nome_contrato']}: {msg}")
-                return False
-
-            # Atualiza banco para todas as tarefas
-            for tipo_alerta, lista_tarefas in tarefas_com_conteudo.items():
-                for tarefa_data in lista_tarefas:
-                    tarefa_id = tarefa_data['tarefa_id']
-
-                    # Atualiza campos de controle da tarefa
-                    if 'nova_tentativa' in tarefa_data:
-                        # Tipo A (com reiterações)
-                        self._atualizar_tarefa_com_retry(
-                            tarefa_id,
-                            tarefa_data['nova_tentativa'],
-                            tarefa_data['hoje_str'],
-                            tarefa_data['status']
-                        )
-                    else:
-                        # Tipo B (sem reiterações)
-                        self._atualizar_tarefa_tipo_b_com_retry(
-                            tarefa_id,
-                            tarefa_data['hoje_str'],
-                            tarefa_data['status']
-                        )
-
-                    # Registra histórico individual para cada tarefa
-                    self._registrar_historico_com_retry(
-                        obra_id,
-                        tarefa_id,
-                        tipo_alerta,
-                        destinatario,
-                        sucesso,
-                        None if sucesso else msg
-                    )
-
-            # Log de sucesso
-            total_tarefas = sum(len(tarefas) for tarefas in tarefas_com_conteudo.values())
-            print(f"📧 Email agrupado enviado: {obra_info['nome_contrato']} ({total_tarefas} tarefa(s))")
-            return True
-
-        except Exception as e:
-            print(f"❌ Erro ao enviar email agrupado para obra {obra_info['nome_contrato']}: {e}")
-            return False
 
     def _ja_executou_hoje(self, data_referencia: datetime.date = None) -> bool:
         """Verifica se a verificação de prazos já foi executada na data de referência."""
@@ -849,9 +976,11 @@ class NotificadorPrazos:
 
                 data_envio = self._agora_referencia().strftime('%Y-%m-%d %H:%M:%S')
 
-                # Converte a lista de destinatários em string para armazenamento (se for lista)
-                if isinstance(destinatarios, list):
+                # Converte a lista de destinatários em string para armazenamento
+                if isinstance(destinatarios, (list, tuple, set)):
                     destinatarios_str = ", ".join(destinatarios)
+                else:
+                    destinatarios_str = str(destinatarios or '')
 
                 cursor.execute('''
                     INSERT INTO historico_notificacoes
