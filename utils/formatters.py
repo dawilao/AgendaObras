@@ -19,6 +19,9 @@ STATUS_VISUAL_EDICAO_OPTIONS = [
     'Concluída com Pendências',
 ]
 
+# Valores do select de edição que representam obra finalizada
+STATUS_EDICAO_CONCLUIDOS = {'Concluído', 'Concluída com Pendências'}
+
 
 # ========== Conversores de Data ========== #
 
@@ -205,8 +208,14 @@ def rotulo_alterar_medicoes(quantidade: int, habilitado: bool = True) -> str:
 
 
 def status_edicao_para_banco(status: str) -> str:
-    """Normaliza o valor do select de edição para o formato persistido no banco."""
+    """Normaliza o valor do select de edição para o formato persistido no banco.
+
+    "Pronta para concluir" ainda não é conclusão: a obra só fica 'Concluída' quando
+    a finalização é registrada (status_conclusao_obra preenchido).
+    """
     status_normalizado = (status or '').strip()
-    if status_normalizado in {'Concluído', 'Pronta para concluir', 'Concluída com Pendências'}:
+    if status_normalizado in STATUS_EDICAO_CONCLUIDOS:
         return 'Concluída'
+    if status_normalizado == 'Pronta para concluir':
+        return 'Em Andamento'
     return status_normalizado

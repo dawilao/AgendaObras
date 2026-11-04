@@ -330,17 +330,22 @@ class ObrasRepository(BaseRepository):
 
             data_inicio = data_inicio or None
 
-            cursor.execute('''
+            # data_conclusao só é sobrescrita quando vem explicitamente do chamador;
+            # o card de edição não envia o campo e não pode apagar a data da finalização.
+            atualiza_data_conclusao = 'data_conclusao' in kwargs
+            cursor.execute(f'''
                 UPDATE obras
                 SET nome_contrato = ?, cliente = ?, valor_contrato = ?,
                     data_inicio = ?, status = ?, contrato_ic = ?, pedido_sap = ?, prefixo_agencia = ?,
                     servico = ?, valor_parceiro = ?, valor_percentual = ?, valor_aditivo = ?, total_obra = ?,
-                    mes_execucao = ?, ano_execucao = ?, data_conclusao = ?,
+                    mes_execucao = ?, ano_execucao = ?,{' data_conclusao = ?,' if atualiza_data_conclusao else ''}
                     data_assinatura = ?, data_aio = ?, data_acionamento = ?
                 WHERE id = ?
             ''', (nome_contrato, cliente, valor_contrato, data_inicio, status,
                   contrato_ic, pedido_sap, prefixo_agencia, servico, valor_parceiro, valor_percentual, valor_aditivo, total_obra,
-                  mes_execucao, ano_execucao, data_conclusao, data_assinatura, data_aio, data_acionamento, obra_id))
+                  mes_execucao, ano_execucao,
+                  *((data_conclusao,) if atualiza_data_conclusao else ()),
+                  data_assinatura, data_aio, data_acionamento, obra_id))
 
             if obra_antiga and round(float(obra_antiga['valor_percentual'] or 0), 2) != (valor_percentual or 0):
                 self._recalcular_split_medicoes(cursor, obra_id, valor_percentual or 0)

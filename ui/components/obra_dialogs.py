@@ -20,7 +20,13 @@ from utils.formatters import (
     converter_data_para_iso,
     formatar_data_exibicao,
 )
-from services.obra_service import status_visual_para_edicao, obra_tem_medicoes_concluidas
+from services.obra_service import (
+    status_visual_para_edicao,
+    obra_tem_medicoes_concluidas,
+    acao_status_edicao,
+    estado_conclusao,
+    deve_oferecer_conclusao,
+)
 from services.medicao_service import eh_tarefa_medicao, PREFIXO_CONFIRMACAO
 
 TAREFA_SOLICITACAO_ACESSO = 'SOLICITAÇÃO DE ACESSO'
@@ -235,7 +241,9 @@ class ObraDialogsMixin:
             for item in checklist
         )
 
-        with ui.dialog() as dialog, ui.card().classes('responsive-dialog-lg').style('padding: 20px; max-height: 90vh; overflow-y: auto;'):
+        with ui.dialog() as dialog, ui.card().classes('responsive-dialog-lg').style('padding: 20px; max-height: 90vh; overflow-y: auto;') as card_obra:
+            # Contexto estável para timers/pop-ups: o refresh do checklist só limpa o checklist_container
+            self._card_obra_atual = card_obra
             with ui.row().classes('w-full items-center justify-between'):
                 ui.label(f'{obra["nome_contrato"]}').style('font-size: 22px; font-weight: bold;')
                 ui.button(icon='close', on_click=lambda: fechar_dialog_com_autosalvamento()).props('flat round')
@@ -452,7 +460,7 @@ class ObraDialogsMixin:
             checklist_container = ui.column().classes('w-full gap-2')
 
             autosave_em_execucao = {'ativo': False}
-            estado_dialog = {'modificado': False}
+            estado_dialog = {'modificado': False, 'estado_conclusao': estado_conclusao(self.db, obra_id)}
 
             def autosalvar_ao_sair():
                 """Salva observações pendentes ao sair do diálogo de edição."""
@@ -520,6 +528,16 @@ class ObraDialogsMixin:
                 except Exception:
                     pass
 
+                # Oferece a finalização quando esta mudança fechou as medições ou levou a obra a 100%,
+                # qualquer que tenha sido a última tarefa concluída.
+                try:
+                    estado_novo = estado_conclusao(self.db, obra_id)
+                    if deve_oferecer_conclusao(estado_dialog['estado_conclusao'], estado_novo):
+                        self._agendar_dialog_conclusao(obra_id, atualizar_checklist)
+                    estado_dialog['estado_conclusao'] = estado_novo
+                except Exception as e:
+                    log_error(e, 'agenda_obras', f'Verificar oferta de conclusão - ID: {obra_id}')
+
             with checklist_container:
                 self.renderizar_checklist_editavel(checklist, checklist_estados, obra_id, atualizar_checklist)
 
@@ -548,7 +566,8 @@ class ObraDialogsMixin:
                     data_assinatura=data_assinatura_input.value if data_assinatura_input.value else None,
                     data_aio=data_aio_input.value if data_aio_input.value else None,
                     data_acionamento=data_acionamento_input.value if data_acionamento_input.value else None,
-                    observacoes=observacoes_input.value
+                    observacoes=observacoes_input.value,
+                    atualizar_checklist_fn=atualizar_checklist,
                 )
                 if sucesso:
                     estado_dialog['modificado'] = True
@@ -797,10 +816,7 @@ class ObraDialogsMixin:
                                 return
 
                             trigger_ui = self.db.marcar_item_checklist(item_id, novo_valor)
-
-                            if novo_valor and not trigger_ui and item_descricao.startswith('MEDIÇÃO ') and obra_tem_medicoes_concluidas(self.db, obra_id):
-                                ui.timer(0.1, lambda: self.abrir_dialog_conclusao_obra(obra_id, atualizar_checklist_fn, getattr(self, '_observacoes_input_atual', None)), once=True)
-                                return
+                            # A oferta de finalização é feita pelo refresh do checklist (atualizar_checklist_fn)
 
                             if trigger_ui and novo_valor and obra_id:
                                 self.abrir_dialog_data_critica(obra_id, trigger_ui, atualizar_checklist_fn)
@@ -1134,7 +1150,7 @@ class ObraDialogsMixin:
                             dialog_med.close()
                             if atualizar_checklist_fn:
                                 ui.timer(0.05, atualizar_checklist_fn, once=True)
-                            ui.timer(0.1, lambda: self.abrir_dialog_conclusao_obra(obra_id, atualizar_checklist_fn, self._observacoes_input_atual), once=True)
+                            self._agendar_dialog_conclusao(obra_id, atualizar_checklist_fn)
                             return
 
                         if atualizar_checklist_fn:
@@ -1197,29 +1213,58 @@ class ObraDialogsMixin:
 
         dialog_reset.open()
 
-    def abrir_dialog_conclusao_obra(self, obra_id: int, atualizar_checklist_fn=None, observacoes_input_ref=None):
-        """Abre diálogo para confirmar a conclusão da obra após finalizar as medições."""
+    def _agendar_dialog_conclusao(self, obra_id: int, atualizar_checklist_fn=None, modo_pendencias: bool = False):
+        """Agenda o pop-up "Finalizar Obra" num contexto que sobrevive ao refresh do checklist.
+
+        Um ui.timer criado dentro do checklist_container (ou de um diálogo filho dele) é apagado
+        pelo checklist_container.clear() antes de disparar, e o pop-up nunca abre.
+        """
+        def abrir():
+            self.abrir_dialog_conclusao_obra(
+                obra_id, atualizar_checklist_fn,
+                getattr(self, '_observacoes_input_atual', None),
+                modo_pendencias=modo_pendencias,
+            )
+
+        contexto = getattr(self, '_card_obra_atual', None)
+        if contexto is not None and not contexto.is_deleted:
+            with contexto:
+                ui.timer(0.1, abrir, once=True)
+        else:
+            ui.timer(0.1, abrir, once=True)
+
+    def abrir_dialog_conclusao_obra(self, obra_id: int, atualizar_checklist_fn=None, observacoes_input_ref=None,
+                                    modo_pendencias: bool = False):
+        """Abre diálogo para confirmar a conclusão da obra.
+
+        modo_pendencias=True (escolha "Concluída com Pendências" no select) já abre com o campo
+        de pendências visível e também vale para obra concluída sem pendências.
+        """
+        dialog_aberto = getattr(self, '_dialog_conclusao_atual', None)
+        if dialog_aberto is not None and not dialog_aberto.is_deleted and dialog_aberto.value:
+            return
+
         obra = self.db.obter_obra(obra_id)
         if not obra:
             self.notificar('Obra não encontrada.', tipo='warning')
             return
 
         status_atual = (obra.get('status_conclusao_obra') or '').strip().lower()
-        if status_atual in {'sem_pendencias', 'com_pendencias'}:
+        if status_atual == 'com_pendencias' or (status_atual == 'sem_pendencias' and not modo_pendencias):
             return
 
         observacoes = (obra.get('observacoes') or '').strip()
 
         with ui.dialog() as dialog_finalizacao, ui.card().classes('responsive-dialog-sm').style('padding: 20px;'):
             ui.label('Finalizar Obra').style('font-size: 18px; font-weight: bold; margin-bottom: 8px;')
-            ui.label('Todas as medições foram concluídas. Confirme como deseja encerrar este card.').style('color: #666; margin-bottom: 10px;')
+            ui.label('Confirme como deseja encerrar este card.').style('color: #666; margin-bottom: 10px;')
 
             if observacoes:
                 ui.label('Observações registradas:').style('font-size: 12px; color: #888; margin-top: 8px;')
                 ui.label(observacoes).style('white-space: pre-wrap; font-size: 13px; background: #f8f9fa; padding: 10px; border-radius: 6px;')
 
             pendencias_input = ui.textarea('Pendências da obra (opcional)', value='', placeholder='Descreva aqui as pendências para manter o alerta crítico diário').classes('w-full mt-2').props('outlined autogrow')
-            pendencias_input.visible = False
+            pendencias_input.visible = modo_pendencias
 
             ui.separator()
 
@@ -1304,6 +1349,8 @@ class ObraDialogsMixin:
                 ui.button('OBRA CONCLUÍDA COM PENDÊNCIAS', on_click=mostrar_pendencias).props('color=negative')
                 ui.button('Confirmar pendências', on_click=concluir_com_pendencias).props('color=negative flat')
 
+        # Evita dois pop-ups de finalização empilhados (ex.: refresh + seleção de medições)
+        self._dialog_conclusao_atual = dialog_finalizacao
         dialog_finalizacao.open()
 
     def confirmar_desmarcar_medicao(self, obra_id: int, tarefa: dict, checkbox_obj, atualizar_checklist_fn):
@@ -1431,14 +1478,15 @@ class ObraDialogsMixin:
 
                     self.notificar('✅ Valor medido salvo com sucesso!', tipo='positive')
 
-                    # O checklist do dialog marca a obra como modificada e re-renderiza os cards ao fechar
+                    # O checklist do dialog marca a obra como modificada e re-renderiza os cards ao fechar.
+                    # A oferta de finalização sai desse refresh; um timer criado aqui seria apagado
+                    # junto com o checklist_container antes de disparar.
                     if atualizar_checklist_fn:
                         ui.timer(0.05, atualizar_checklist_fn, once=True)
                     else:
                         self.renderizar_obras()
-
-                    if not editar and self.db.verificar_todas_medicoes_concluidas(obra_id):
-                        ui.timer(0.1, lambda: self.abrir_dialog_conclusao_obra(obra_id, atualizar_checklist_fn, getattr(self, '_observacoes_input_atual', None)), once=True)
+                        if not editar and obra_tem_medicoes_concluidas(self.db, obra_id):
+                            self._agendar_dialog_conclusao(obra_id, None)
 
                 except Exception as e:
                     log_error(e, 'agenda_obras', f'Confirmar valor de medição - item {item_id}')
@@ -1623,10 +1671,19 @@ class ObraDialogsMixin:
             observacoes_nova = (kwargs.pop('observacoes', '') or '').strip()
             salvar_coordenador = 'coordenador_id' in kwargs
             coordenador_id = kwargs.pop('coordenador_id', None)
+            atualizar_checklist_fn = kwargs.pop('atualizar_checklist_fn', None)
 
             obra_antiga = self.db.obter_obra(obra_id)
 
-            status = status_edicao_para_banco(status)
+            # O select de Status também conclui/reabre a obra (status_conclusao_obra é o que o card lê)
+            conclusao_atual = ((obra_antiga or {}).get('status_conclusao_obra') or '').strip().lower()
+            acao_conclusao = acao_status_edicao(status, conclusao_atual)
+            if acao_conclusao == 'concluir_com' and not conclusao_atual:
+                # Só vira 'Concluída' quando o pop-up de pendências for confirmado
+                status_anterior = ((obra_antiga or {}).get('status') or '').strip()
+                status = status_anterior if status_anterior and status_anterior != 'Concluída' else 'Em Andamento'
+            else:
+                status = status_edicao_para_banco(status)
             requer_recalculo = self.db.atualizar_obra(obra_id, nome, cliente, valor, data_inicio, status, **kwargs)
             if salvar_coordenador and coordenador_id != (obra_antiga or {}).get('coordenador_id'):
                 self.db.atualizar_coordenador_obra(obra_id, coordenador_id)
@@ -1651,6 +1708,15 @@ class ObraDialogsMixin:
 
                 if not sucesso_obs:
                     self.notificar('Obra salva, mas houve erro ao atualizar observações.', tipo='warning')
+
+            if acao_conclusao == 'concluir_sem':
+                self.db.registrar_finalizacao_obra(obra_id, 'sem_pendencias')
+                self.notificar('✅ Obra concluída sem pendências.', tipo='positive')
+            elif acao_conclusao == 'reabrir':
+                self.db.reabrir_obra(obra_id)
+                self.notificar('🔄 Obra reaberta: voltou para Em Andamento.', tipo='info')
+            elif acao_conclusao == 'concluir_com':
+                self._agendar_dialog_conclusao(obra_id, atualizar_checklist_fn, modo_pendencias=True)
 
             recalculou = False
             datas_recalculadas = []
@@ -1713,16 +1779,21 @@ class ObraDialogsMixin:
                     except Exception:
                         pass
 
-                atualizar_checklist_local()
+                # O refresh do diálogo principal também oferece a finalização; o local fica de reserva
+                atualizar_checklist_recalculo = atualizar_checklist_fn or atualizar_checklist_local
+                atualizar_checklist_recalculo()
                 try:
                     if not (data_inicio and str(data_inicio).strip()):
                         return
 
                     med = self.db.obter_medicoes_obra(obra_id)
                     if not med or (med and (med.get('quantidade') is None or int(med.get('quantidade')) == 0)):
-                        ui.timer(0.05, lambda: self.abrir_dialog_selecionar_medicoes(obra_id, atualizar_checklist_local), once=True)
+                        ui.timer(0.05, lambda: self.abrir_dialog_selecionar_medicoes(obra_id, atualizar_checklist_recalculo), once=True)
                 except Exception:
                     pass
+            elif acao_conclusao and atualizar_checklist_fn:
+                # Atualiza o select e o estado de conclusão guardado no diálogo
+                atualizar_checklist_fn()
 
             self.notificar('✅ Obra atualizada!', tipo='positive', timeout=3)
             return True

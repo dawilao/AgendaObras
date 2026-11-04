@@ -3,10 +3,19 @@ Serviço de obras — funções de orquestração com dependências de DB e Obra
 Extraídas de agenda_obras.py.
 """
 
-from typing import Dict, List
+from typing import Dict, List, NamedTuple, Optional
 
 from utils.obras_helper import ObrasHelper
 from utils.formatters import STATUS_VISUAL_EDICAO_OPTIONS
+
+STATUS_CONCLUSAO_VALIDOS = {'sem_pendencias', 'com_pendencias'}
+
+
+class EstadoConclusao(NamedTuple):
+    """Retrato da obra usado para decidir quando oferecer o pop-up de finalização."""
+    concluida: bool
+    medicoes_ok: bool
+    tarefas_100: bool
 
 
 def status_visual_para_edicao(obra: Dict, checklist: List[Dict]) -> str:
@@ -29,6 +38,46 @@ def obra_tem_medicoes_concluidas(db, obra_id: int) -> bool:
     if status_conclusao in {'sem_pendencias', 'com_pendencias'}:
         return False
     return db.verificar_todas_medicoes_concluidas(obra_id)
+
+
+def acao_status_edicao(status_select: str, status_conclusao_atual: Optional[str]) -> Optional[str]:
+    """Traduz a escolha do select de Status (card de edição) na ação sobre a conclusão da obra.
+
+    Retorna 'concluir_sem', 'concluir_com', 'reabrir' ou None (nada a fazer).
+    """
+    escolha = (status_select or '').strip()
+    atual = (status_conclusao_atual or '').strip().lower()
+    if escolha == 'Concluído':
+        return None if atual == 'sem_pendencias' else 'concluir_sem'
+    if escolha == 'Concluída com Pendências':
+        return None if atual == 'com_pendencias' else 'concluir_com'
+    if escolha and atual in STATUS_CONCLUSAO_VALIDOS:
+        return 'reabrir'
+    return None
+
+
+def estado_conclusao(db, obra_id: int) -> EstadoConclusao:
+    """Lê do banco se a obra está concluída, se as medições acabaram e se todas as tarefas acabaram."""
+    obra = db.obter_obra(obra_id) or {}
+    checklist = db.obter_checklist(obra_id) or []
+    concluida = (obra.get('status_conclusao_obra') or '').strip().lower() in STATUS_CONCLUSAO_VALIDOS
+    return EstadoConclusao(
+        concluida=concluida,
+        medicoes_ok=db.verificar_todas_medicoes_concluidas(obra_id),
+        tarefas_100=bool(checklist) and ObrasHelper.calcular_progresso(checklist) == 100,
+    )
+
+
+def deve_oferecer_conclusao(antes: Optional[EstadoConclusao], depois: EstadoConclusao) -> bool:
+    """Oferece a finalização quando a obra (não concluída) acaba de fechar as medições
+    ou acaba de chegar a 100% das tarefas, qualquer que tenha sido a última tarefa."""
+    if depois.concluida or not depois.medicoes_ok:
+        return False
+    if antes is None:
+        return False
+    fechou_medicoes = not antes.medicoes_ok
+    fechou_tarefas = depois.tarefas_100 and not antes.tarefas_100
+    return fechou_medicoes or fechou_tarefas
 
 
 def usuario_pode_acessar_contrato(contratos_db, usuario: Dict, contrato_nome: str) -> bool:

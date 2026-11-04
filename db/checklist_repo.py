@@ -229,13 +229,7 @@ class ChecklistRepository(BaseRepository):
             ''', (item_id,))
 
             if obra_id and (item_descricao.startswith('MEDIÇÃO ') or item_descricao.startswith('CONFIRMAÇÃO DE MEDIÇÃO')):
-                cursor.execute('''
-                    UPDATE obras
-                    SET status = 'Em Andamento',
-                        status_conclusao_obra = NULL,
-                        data_conclusao = NULL
-                    WHERE id = ?
-                ''', (obra_id,))
+                self._reabrir_obra(cursor, obra_id)
 
             # Desmarcar a confirmação exclui o valor medido do Financeiro
             if item_descricao.startswith('CONFIRMAÇÃO DE MEDIÇÃO'):
@@ -463,9 +457,7 @@ class ChecklistRepository(BaseRepository):
         status_row = cursor.fetchone()
         status_atual = (status_row['status_conclusao_obra'] or '').strip() if status_row else ''
         if status_atual and prev_qtd != quantidade:
-            cursor.execute(
-                "UPDATE obras SET status_conclusao_obra = NULL, data_conclusao = NULL, status = 'Em Andamento' WHERE id = ?",
-                (obra_id,))
+            self._reabrir_obra(cursor, obra_id)
 
         conn.commit()
         conn.close()
@@ -544,6 +536,27 @@ class ChecklistRepository(BaseRepository):
         conn.commit()
         conn.close()
         return True
+
+    @staticmethod
+    def _reabrir_obra(cursor, obra_id: int) -> None:
+        """Desfaz a finalização no cursor informado, sem commit."""
+        cursor.execute('''
+            UPDATE obras
+            SET status = 'Em Andamento',
+                status_conclusao_obra = NULL,
+                data_conclusao = NULL
+            WHERE id = ?
+        ''', (obra_id,))
+
+    def reabrir_obra(self, obra_id: int) -> bool:
+        """Volta uma obra finalizada para Em Andamento (limpa status_conclusao_obra e data_conclusao)."""
+        conn = self.get_connection()
+        try:
+            self._reabrir_obra(conn.cursor(), obra_id)
+            conn.commit()
+            return True
+        finally:
+            conn.close()
 
     # ========== FASE 3 - VALORES MEDIDOS ========== #
 
