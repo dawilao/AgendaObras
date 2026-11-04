@@ -78,7 +78,6 @@ Ajustes opcionais, lidos do ambiente do processo. Todos têm valor padrão, ent�
 | `AGENDA_OBRAS_BIBLIOTECA_UPLOADS_PATH` | `uploads/biblioteca` | PDFs da Biblioteca |
 | `AGENDA_MAIL_ROOT` | `comunicacoes/usuarios`, ao lado do banco principal | Bancos das Comunicações (um por usuário e o compartilhado) |
 | `AGENDA_MAIL_FILES_ROOT` | `uploads/comunicacoes` | Anexos dos e-mails (uma cópia por conteúdo) |
-| `AGENDA_OBRAS_ARQUIVOS_ROOT` | `uploads/obras` | Arquivos da obra (CCT, orçamento e aditivos). Use uma pasta diferente da dos anexos dos e-mails |
 | `AGENDAOBRAS_ERRO_DIR` | `erros/` | Logs de erro |
 
 ### Limites e comportamento
@@ -90,27 +89,6 @@ Ajustes opcionais, lidos do ambiente do processo. Todos têm valor padrão, ent�
 | `AGENDA_MAIL_COMPACTAR` | `1` | Compactação sem perda dos anexos novos. Use `0` para gravar os anexos como chegaram. Com `0`, os anexos já compactados continuam legíveis |
 | `AGENDA_OBRAS_TIMEZONE` | `America/Sao_Paulo` | Fuso do processo (servidores Linux costumam rodar em UTC) |
 | `NICEGUI_STORAGE_SECRET` | — | Chave das sessões. Também pode ficar no `email_config.env` |
-| `OMIE_LOTES_MANTIDOS` | `10` | Consultas do Omie guardadas por obra (a última válida nunca é apagada) |
-| `OMIE_INTERVALO_MIN_S` | `0.3` | Intervalo mínimo entre chamadas do mesmo método do Omie (limite: 240 por minuto) |
-
-## Financeiro Omie
-
-Na aba Financeiro do card, administrador, Financeiro e coordenador da própria obra veem o resumo do Omie (custos, recebido líquido e saldo de caixa) e abrem o detalhamento: Custo, Recebimento, Saldo bruto, o que mudou desde a consulta anterior, histórico de ações e exportação em CSV. Só quem tem a permissão **Financeiro** (marcada em Usuários) atualiza, liga obras a projetos e informa as chaves. A ligação usa o projeto do Omie com o número do IC no nome, nunca a cidade. As consultas são somente leitura.
-
-Administrador e Financeiro veem todas as obras na tela de Obras (só ver: abrir e editar a obra continua pelo contrato vinculado). Uma consulta marcada como **Conferido** volta para **Em conferência** quando uma atualização traz alguma mudança (pagamento novo, NF nova ou recebida, título vencido, variação de pago ou recebido); a mudança fica no histórico. Com `OMIE_MODO=simulado`, as consultas aparecem marcadas como **dados simulados** e não são comparadas com consultas reais.
-
-Os fornecedores da categoria 2.01.97 (Prestador de Serviço/Parceiro) são validados por obra, pelo código do fornecedor no Omie: o Financeiro e o coordenador da obra marcam quem é o parceiro contratado, e só esses pagamentos são comparados com o "Parceiro medido" e o total previsto. O documento do fornecedor é guardado apenas mascarado.
-
-| Variável | Para que serve |
-|---|---|
-| `OMIE_APP_KEY` / `OMIE_APP_SECRET` | Chaves do Omie. Se estiverem no ambiente do serviço (ex.: `EnvironmentFile=` no systemd), são usadas direto; senão, o Financeiro as informa na tela e elas ficam só na memória do servidor até ele reiniciar |
-| `OMIE_MODO` | `simulado` usa dados fictícios, para conferir a tela sem acesso ao Omie |
-
-## Arquivos da obra
-
-A aba **Arquivos** do card guarda CCT (só PDF), orçamento e aditivos (PDF, XLSX, XLS ou CSV, até 20 MB). Administrador, Financeiro e coordenador da própria obra veem e baixam. Financeiro e coordenador da própria obra também enviam, anexam um arquivo dos e-mails da obra no Histórico da equipe das Comunicações, corrigem nome e tipo e excluem. Cada envio é uma nova versão "A conferir", e o mesmo conteúdo não entra duas vezes na obra. Excluir só tira o arquivo da lista: o conteúdo continua no servidor, a exclusão fica no histórico, e enviar o mesmo arquivo de novo o traz de volta. Um aditivo enviado não altera o valor da obra.
-
-Os arquivos ficam em `AGENDA_OBRAS_ARQUIVOS_ROOT`, com a mesma compactação sem perda dos anexos das Comunicações, mas em pasta própria: os comandos de manutenção abaixo não mexem nela. Inclua essa pasta no backup.
 
 ## Manutenção dos anexos das Comunicações
 

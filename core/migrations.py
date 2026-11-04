@@ -66,34 +66,10 @@ class MigrationManager:
         self.migrations.append(Migration(version=15, description="Adicionar índices de performance em obra_checklist e medicoes_valores", upgrade=self._migration_015_add_performance_indexes))
         self.migrations.append(Migration(version=16, description="Controle de seguro (garantia e seguro da obra) com rodadas e auditoria", upgrade=self._migration_016_seguro))
         self.migrations.append(Migration(version=17, description="Adicionar coordenador_id (responsável da obra) à tabela obras", upgrade=self._migration_017_add_coordenador))
-        self.migrations.append(Migration(version=18, description="Financeiro Omie: vínculos obra-projeto, consultas e auditoria", upgrade=self._migration_018_financeiro_omie))
-        self.migrations.append(Migration(version=19, description="Financeiro Omie: fornecedores e parceiros validados por obra", upgrade=self._migration_019_parceiros_omie))
-        self.migrations.append(Migration(version=20, description="Arquivos da obra: CCT, orçamento e aditivos", upgrade=self._migration_020_arquivos_obra))
-        self.migrations.append(Migration(version=21, description="Arquivos da obra: exclusão pela tela", upgrade=self._migration_021_exclusao_arquivos))
 
     def _migration_016_seguro(self, conn: sqlite3.Connection):
         from db.seguro_repo import criar_schema
         criar_schema(conn)
-
-    def _migration_018_financeiro_omie(self, conn: sqlite3.Connection):
-        from db.omie_repo import criar_schema
-        criar_schema(conn)
-        conn.commit()
-
-    def _migration_019_parceiros_omie(self, conn: sqlite3.Connection):
-        from db.omie_repo import criar_schema_parceiros
-        criar_schema_parceiros(conn)
-        conn.commit()
-
-    def _migration_020_arquivos_obra(self, conn: sqlite3.Connection):
-        from db.obra_arquivos_repo import criar_schema
-        criar_schema(conn)
-        conn.commit()
-
-    def _migration_021_exclusao_arquivos(self, conn: sqlite3.Connection):
-        from db.obra_arquivos_repo import criar_colunas_exclusao
-        criar_colunas_exclusao(conn)
-        conn.commit()
 
     def _migration_001_add_tipo_recorrencia(self, conn: sqlite3.Connection):
         cursor = conn.cursor()

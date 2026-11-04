@@ -21,15 +21,12 @@ from core.version_checker import VersionChecker
 from core.config import VERSION
 from core.error_logger import log_error
 from services.auth_service import obter_usuario_logado, atualizar_usuario_sessao
-from services.financeiro_service import ve_todas_as_obras
 from db.auth_repo import AuthDatabase
 from db.contratos_repo import ContratosDatabase
 from ui.components.obra_card import ObraCardMixin
 from ui.components.obra_dialogs import ObraDialogsMixin
 from ui.components.admin_dialogs import AdminDialogsMixin
 from ui.components.obra_kanban import ObraKanbanMixin
-from ui.components.omie_financeiro import OmieFinanceiroMixin
-from ui.components.obra_arquivos import ObraArquivosMixin
 
 
 # Múltiplo de 1, 2, 3 e 4 colunas: a última linha da grade fica sempre completa.
@@ -52,8 +49,7 @@ def obter_servicos():
         return _servicos
 
 
-class AgendaObras(ObraCardMixin, ObraDialogsMixin, AdminDialogsMixin, ObraKanbanMixin, OmieFinanceiroMixin,
-                  ObraArquivosMixin):
+class AgendaObras(ObraCardMixin, ObraDialogsMixin, AdminDialogsMixin, ObraKanbanMixin):
     def __init__(self):
         self.title = "AgendaObras"
         self.description = "Rastreador de Demandas de Engenharia"
@@ -235,10 +231,6 @@ class AgendaObras(ObraCardMixin, ObraDialogsMixin, AdminDialogsMixin, ObraKanban
                 transform: translateY(-3px) !important;
                 border-color: #c5cae9 !important;
             }
-            /* Card com a aba Arquivos (4 abas): rótulos e ícones menores para caber sem rolagem */
-            .ao-card-tabs-4 .q-tab { padding: 0 4px; min-width: 0; }
-            .ao-card-tabs-4 .q-tab__label { font-size: 11px; }
-            .ao-card-tabs-4 .q-tab__icon { font-size: 18px; }
 
             /* ── Grid responsivo ── */
             .obras-grid {
@@ -419,8 +411,6 @@ class AgendaObras(ObraCardMixin, ObraDialogsMixin, AdminDialogsMixin, ObraKanban
             'is_admin': is_admin,
             'user_id': user_id,
             'contratos_vinculados': contratos_vinculados,
-            # ADM e Financeiro veem todas as obras; editar continua pelo contrato vinculado.
-            've_todas_obras': ve_todas_as_obras(usuario),
         }
 
     def _usuario_pode_acessar_contrato(self, contrato_nome: str) -> bool:
@@ -1043,9 +1033,6 @@ class AgendaObras(ObraCardMixin, ObraDialogsMixin, AdminDialogsMixin, ObraKanban
 
                 ui.space()
 
-                # Financeiro: atualizar do Omie, ligar obras e chaves (só para o Financeiro)
-                self.montar_acoes_omie_topbar()
-
                 with ui.element('div').classes('ao-view-toggle'):
                     self.btn_view_grid = ui.button(
                         icon='grid_view', on_click=lambda: self.set_view_mode('grid')
@@ -1113,7 +1100,7 @@ class AgendaObras(ObraCardMixin, ObraDialogsMixin, AdminDialogsMixin, ObraKanban
 
             permissoes = self._obter_permissoes_usuario()
 
-            if permissoes['ve_todas_obras']:
+            if permissoes['is_admin']:
                 obras = self.db.listar_obras(self.filtro_pesquisa if self.filtro_pesquisa else None)
             else:
                 obras = self.db.listar_obras_por_contratos(
@@ -1126,9 +1113,6 @@ class AgendaObras(ObraCardMixin, ObraDialogsMixin, AdminDialogsMixin, ObraKanban
                 return
 
             self._coordenadores_ctx = self._contexto_coordenadores()
-            # Usuário com a permissão Financeiro, lido uma vez para os cards desta renderização
-            self._usuario_fin = self._usuario_omie()
-            self._blocos_omie = {}
 
             # Checklist e status calculados uma única vez por obra,
             # reaproveitados tanto no agrupamento quanto na renderização do card.
@@ -1159,7 +1143,7 @@ class AgendaObras(ObraCardMixin, ObraDialogsMixin, AdminDialogsMixin, ObraKanban
                 ui.label(f'Não há obras que correspondam a "{self.filtro_pesquisa}"').style('font-size: 14px; color: #bbb;')
                 ui.button('Limpar pesquisa', on_click=self.atualizar_dados).props('outlined').style('margin-top: 15px;')
             else:
-                if not permissoes['ve_todas_obras'] and not permissoes['contratos_vinculados']:
+                if not permissoes['is_admin'] and not permissoes['contratos_vinculados']:
                     ui.label('Nenhum contrato vinculado ao seu usuário').style('font-size: 18px; color: #999;')
                     ui.label('Solicite a um administrador o vínculo com um contrato.').style('font-size: 14px; color: #bbb;')
                 else:
