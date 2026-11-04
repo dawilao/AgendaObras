@@ -538,21 +538,22 @@ class ChecklistRepository(BaseRepository):
         return True
 
     @staticmethod
-    def _reabrir_obra(cursor, obra_id: int) -> None:
+    def _reabrir_obra(cursor, obra_id: int, status: str = 'Em Andamento') -> None:
         """Desfaz a finalização no cursor informado, sem commit."""
         cursor.execute('''
             UPDATE obras
-            SET status = 'Em Andamento',
+            SET status = ?,
                 status_conclusao_obra = NULL,
                 data_conclusao = NULL
             WHERE id = ?
-        ''', (obra_id,))
+        ''', (status or 'Em Andamento', obra_id))
 
-    def reabrir_obra(self, obra_id: int) -> bool:
-        """Volta uma obra finalizada para Em Andamento (limpa status_conclusao_obra e data_conclusao)."""
+    def reabrir_obra(self, obra_id: int, status: str = 'Em Andamento') -> bool:
+        """Desfaz a finalização (limpa status_conclusao_obra e data_conclusao) e grava o status
+        escolhido; o padrão é 'Em Andamento'."""
         conn = self.get_connection()
         try:
-            self._reabrir_obra(conn.cursor(), obra_id)
+            self._reabrir_obra(conn.cursor(), obra_id, status)
             conn.commit()
             return True
         finally:

@@ -3,10 +3,10 @@ Serviço de obras — funções de orquestração com dependências de DB e Obra
 Extraídas de agenda_obras.py.
 """
 
-from typing import Dict, List, NamedTuple, Optional
+from typing import Dict, List, NamedTuple, Optional, Tuple
 
 from utils.obras_helper import ObrasHelper
-from utils.formatters import STATUS_VISUAL_EDICAO_OPTIONS
+from utils.formatters import STATUS_VISUAL_EDICAO_OPTIONS, status_edicao_para_banco
 
 STATUS_CONCLUSAO_VALIDOS = {'sem_pendencias', 'com_pendencias'}
 
@@ -54,6 +54,33 @@ def acao_status_edicao(status_select: str, status_conclusao_atual: Optional[str]
     if escolha and atual in STATUS_CONCLUSAO_VALIDOS:
         return 'reabrir'
     return None
+
+
+def resolver_status_edicao(status_select: str, obra_antiga: Optional[Dict],
+                           checklist: List[Dict]) -> Tuple[str, Optional[str]]:
+    """Decide o status a gravar e a ação de conclusão ao salvar o card de edição.
+
+    Se o select ainda mostra o valor derivado do banco (o usuário não mexeu nele),
+    o status do banco é mantido e nada é concluído/reaberto. Isso evita que uma obra
+    legada 'Concluída' (sem finalização registrada), exibida como "Pronta para concluir",
+    seja reaberta só por salvar outro campo.
+
+    Retorna (status_banco, acao) com acao em 'concluir_sem', 'concluir_com', 'reabrir' ou None.
+    """
+    obra_antiga = obra_antiga or {}
+    escolha = (status_select or '').strip()
+    status_banco_atual = (obra_antiga.get('status') or '').strip()
+
+    if escolha == status_visual_para_edicao(obra_antiga, checklist or []):
+        return (status_banco_atual or status_edicao_para_banco(escolha), None)
+
+    conclusao_atual = (obra_antiga.get('status_conclusao_obra') or '').strip().lower()
+    acao = acao_status_edicao(escolha, conclusao_atual)
+    if acao == 'concluir_com' and not conclusao_atual:
+        # Só vira 'Concluída' quando o pop-up de pendências for confirmado
+        status = status_banco_atual if status_banco_atual and status_banco_atual != 'Concluída' else 'Em Andamento'
+        return (status, acao)
+    return (status_edicao_para_banco(escolha), acao)
 
 
 def estado_conclusao(db, obra_id: int) -> EstadoConclusao:

@@ -14,6 +14,7 @@ from services.obra_service import (
     acao_status_edicao,
     deve_oferecer_conclusao,
     estado_conclusao,
+    resolver_status_edicao,
 )
 from utils.formatters import status_edicao_para_banco
 from utils.obras_helper import ObrasHelper
@@ -61,6 +62,49 @@ class TestStatusEdicaoParaBanco(unittest.TestCase):
 
     def test_demais_passam_direto(self):
         self.assertEqual(status_edicao_para_banco('Atrasada'), 'Atrasada')
+
+
+class TestResolverStatusEdicao(unittest.TestCase):
+    """O select do card só altera o status/conclusão se o usuário mexeu nele."""
+
+    CHECKLIST_100 = [{'concluido': 1, 'data_limite': '2026-01-01'}]
+    CHECKLIST_PARCIAL = [{'concluido': 1, 'data_limite': '2099-01-01'},
+                         {'concluido': 0, 'data_limite': '2099-01-01'}]
+
+    def test_legada_concluida_sem_mexer_no_select_continua_concluida(self):
+        obra = {'status': 'Concluída', 'status_conclusao_obra': None}
+        # O select mostra "Pronta para concluir" para essa obra
+        self.assertEqual(resolver_status_edicao('Pronta para concluir', obra, self.CHECKLIST_100),
+                         ('Concluída', None))
+
+    def test_select_inalterado_em_obra_aberta_mantem_status_do_banco(self):
+        obra = {'status': 'Em Andamento', 'status_conclusao_obra': None}
+        # Visual "Em Andamento" (tarefas em dia, progresso > 0): mantém o banco
+        self.assertEqual(resolver_status_edicao('Em Andamento', obra, self.CHECKLIST_PARCIAL),
+                         ('Em Andamento', None))
+
+    def test_select_inalterado_em_obra_concluida_nao_reconclui(self):
+        obra = {'status': 'Concluída', 'status_conclusao_obra': 'sem_pendencias'}
+        self.assertEqual(resolver_status_edicao('Concluído', obra, self.CHECKLIST_100), ('Concluída', None))
+
+    def test_escolher_concluido_conclui(self):
+        obra = {'status': 'Concluída', 'status_conclusao_obra': None}
+        self.assertEqual(resolver_status_edicao('Concluído', obra, self.CHECKLIST_100),
+                         ('Concluída', 'concluir_sem'))
+
+    def test_escolher_com_pendencias_em_obra_aberta_espera_pop_up(self):
+        obra = {'status': 'Em Andamento', 'status_conclusao_obra': None}
+        self.assertEqual(resolver_status_edicao('Concluída com Pendências', obra, self.CHECKLIST_PARCIAL),
+                         ('Em Andamento', 'concluir_com'))
+
+    def test_reabrir_respeita_status_escolhido(self):
+        obra = {'status': 'Concluída', 'status_conclusao_obra': 'sem_pendencias'}
+        self.assertEqual(resolver_status_edicao('Não Iniciada', obra, self.CHECKLIST_100),
+                         ('Não Iniciada', 'reabrir'))
+        self.assertEqual(resolver_status_edicao('Atrasada', obra, self.CHECKLIST_100),
+                         ('Atrasada', 'reabrir'))
+        self.assertEqual(resolver_status_edicao('Pronta para concluir', obra, self.CHECKLIST_100),
+                         ('Em Andamento', 'reabrir'))
 
 
 class TestDeveOferecerConclusao(unittest.TestCase):
@@ -159,6 +203,17 @@ class TestConclusaoNoBanco(unittest.TestCase):
         self.assertIsNone(obra['data_conclusao'])
         self.assertEqual(obra['status'], 'Em Andamento')
         self.assertEqual(self._status_visual(), 'Pronta para concluir')
+
+    def test_reabrir_obra_com_status_escolhido(self):
+        self._concluir()
+        self.db.registrar_finalizacao_obra(self.obra_id, 'sem_pendencias')
+
+        self.db.reabrir_obra(self.obra_id, 'Atrasada')
+
+        obra = self.db.obter_obra(self.obra_id)
+        self.assertEqual(obra['status'], 'Atrasada')
+        self.assertIsNone(obra['status_conclusao_obra'])
+        self.assertIsNone(obra['data_conclusao'])
 
     def test_salvar_card_preserva_data_conclusao(self):
         self._concluir()

@@ -15,7 +15,6 @@ from utils.formatters import (
     calcular_valor_parceiro,
     previa_medicoes,
     resumo_valor_medicao,
-    status_edicao_para_banco,
     datas_iguais_normalizadas,
     converter_data_para_iso,
     formatar_data_exibicao,
@@ -23,7 +22,7 @@ from utils.formatters import (
 from services.obra_service import (
     status_visual_para_edicao,
     obra_tem_medicoes_concluidas,
-    acao_status_edicao,
+    resolver_status_edicao,
     estado_conclusao,
     deve_oferecer_conclusao,
 )
@@ -1675,15 +1674,9 @@ class ObraDialogsMixin:
 
             obra_antiga = self.db.obter_obra(obra_id)
 
-            # O select de Status também conclui/reabre a obra (status_conclusao_obra é o que o card lê)
-            conclusao_atual = ((obra_antiga or {}).get('status_conclusao_obra') or '').strip().lower()
-            acao_conclusao = acao_status_edicao(status, conclusao_atual)
-            if acao_conclusao == 'concluir_com' and not conclusao_atual:
-                # Só vira 'Concluída' quando o pop-up de pendências for confirmado
-                status_anterior = ((obra_antiga or {}).get('status') or '').strip()
-                status = status_anterior if status_anterior and status_anterior != 'Concluída' else 'Em Andamento'
-            else:
-                status = status_edicao_para_banco(status)
+            # O select de Status também conclui/reabre a obra (status_conclusao_obra é o que o card lê).
+            # Sem mexer no select, o status do banco é mantido.
+            status, acao_conclusao = resolver_status_edicao(status, obra_antiga, self.db.obter_checklist(obra_id))
             requer_recalculo = self.db.atualizar_obra(obra_id, nome, cliente, valor, data_inicio, status, **kwargs)
             if salvar_coordenador and coordenador_id != (obra_antiga or {}).get('coordenador_id'):
                 self.db.atualizar_coordenador_obra(obra_id, coordenador_id)
@@ -1713,8 +1706,8 @@ class ObraDialogsMixin:
                 self.db.registrar_finalizacao_obra(obra_id, 'sem_pendencias')
                 self.notificar('✅ Obra concluída sem pendências.', tipo='positive')
             elif acao_conclusao == 'reabrir':
-                self.db.reabrir_obra(obra_id)
-                self.notificar('🔄 Obra reaberta: voltou para Em Andamento.', tipo='info')
+                self.db.reabrir_obra(obra_id, status)
+                self.notificar(f'🔄 Obra reaberta: status {status}.', tipo='info')
             elif acao_conclusao == 'concluir_com':
                 self._agendar_dialog_conclusao(obra_id, atualizar_checklist_fn, modo_pendencias=True)
 
